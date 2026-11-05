@@ -8,6 +8,14 @@ const KIND_LABEL: Record<Alert["kind"], string> = {
   notice: "Notice",
   "exam-update": "Calendar change",
   reminder: "Reminder",
+  report: "Progress report",
+};
+
+const KIND_TONE: Record<Alert["kind"], "amber" | "blue" | "red" | "green"> = {
+  notice: "red",
+  "exam-update": "blue",
+  reminder: "amber",
+  report: "green",
 };
 
 // Alerts for one audience (student or parent) of one child, newest first.
@@ -32,7 +40,7 @@ export function AlertsPanel({ audience, childId }: { audience: Alert["audience"]
                   <div className="font-medium">{a.title}</div>
                   <div className="mt-0.5 text-slate-600">{a.body}</div>
                 </div>
-                <Badge tone={a.kind === "reminder" ? "amber" : a.kind === "exam-update" ? "blue" : "red"}>{KIND_LABEL[a.kind]}</Badge>
+                <Badge tone={KIND_TONE[a.kind]}>{KIND_LABEL[a.kind]}</Badge>
               </div>
               <div className="mt-1 text-xs text-slate-500">
                 {new Date(a.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}

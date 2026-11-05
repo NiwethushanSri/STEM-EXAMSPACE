@@ -23,7 +23,7 @@ export type Alert = {
   id: string;
   childId: string;
   audience: "student" | "parent";
-  kind: "notice" | "exam-update" | "reminder";
+  kind: "notice" | "exam-update" | "reminder" | "report";
   title: string;
   body: string;
   createdAt: string;
@@ -126,6 +126,30 @@ export function updateExam(subject: string, date: string, time: string): number 
     : [...current, exam];
   write(KEYS.timetable, next);
   return notifyEveryone("exam-update", `exam-${subject}-${Date.now()}`, `${subject} exam calendar updated`, `${subject} is now on ${date} at ${time}.`);
+}
+
+function reportId(childId: string, termName: string): string {
+  return `report-${termName.replace(/\s+/g, "-")}-${childId}`;
+}
+
+export function hasReportSent(childId: string, termName: string): boolean {
+  return getAlerts().some((a) => a.id === reportId(childId, termName));
+}
+
+// Student sends a term report: the parent gets one alert. Returns false if it was already sent.
+export function sendReportToParent(childId: string, termName: string, body: string): boolean {
+  if (hasReportSent(childId, termName)) return false;
+  const alert: Alert = {
+    id: reportId(childId, termName),
+    childId,
+    audience: "parent",
+    kind: "report",
+    title: `${termName} progress report`,
+    body,
+    createdAt: new Date().toISOString(),
+  };
+  write(KEYS.alerts, [alert, ...getAlerts()]);
+  return true;
 }
 
 // Sends a reminder once for each exam that is 0 to 3 days away.

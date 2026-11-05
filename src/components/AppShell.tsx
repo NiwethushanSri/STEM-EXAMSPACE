@@ -14,6 +14,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/student", label: "Dashboard" },
       { href: "/student/results", label: "Results" },
       { href: "/student/analysis", label: "Analysis & forecast" },
+      { href: "/student/report", label: "Progress report" },
       { href: "/student/papers", label: "My papers" },
       { href: "/student/timetable", label: "Timetable" },
       { href: "/student/notices", label: "Notices" },
@@ -24,6 +25,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
     items: [
       { href: "/parent", label: "Dashboard" },
       { href: "/parent/results", label: "Child's results" },
+      { href: "/parent/report", label: "Progress report" },
       { href: "/parent/attendance", label: "Attendance" },
       { href: "/parent/notices", label: "Special notices" },
     ],

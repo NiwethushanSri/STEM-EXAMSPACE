@@ -53,7 +53,7 @@ export const markHistory: Record<string, { label: string; mark: number }[]> = {
   Chemistry: [
     { label: "Jun", mark: 49 },
     { label: "Jul", mark: 54 },
-    { label: "Aug", mark: 57 },
+    { label: "Jul", mark: 57 },
     { label: "Sep", mark: 58 },
   ],
   Biology: [
@@ -62,6 +62,33 @@ export const markHistory: Record<string, { label: string; mark: number }[]> = {
     { label: "Sep", mark: 77 },
   ],
 };
+
+// Teacher for each subject, shown on the report card. Placeholders until the school adds names.
+export const subjectTeachers: Record<string, string> = {
+  Physics: "To be assigned",
+  Maths: "To be assigned",
+  Chemistry: "To be assigned",
+  Biology: "To be assigned",
+};
+
+// Every test Amara has sat, oldest first. The last four match `results` and the marks in `markHistory`.
+export const testHistory: TestResult[] = [
+  { subject: "Physics", test: "Summer mock 1 · Forces", mark: 52, classAverage: 54, highest: 85, lowest: 28, date: "15 Jun 2026", weakAreas: ["Forces"] },
+  { subject: "Physics", test: "Summer mock 2 · Waves", mark: 55, classAverage: 56, highest: 86, lowest: 30, date: "9 Jul 2026", weakAreas: ["Waves"] },
+  { subject: "Physics", test: "Mock 1 · Mechanics", mark: 61, classAverage: 60, highest: 90, lowest: 35, date: "16 Sep 2026", weakAreas: ["Circular motion"] },
+  { subject: "Physics", test: "Mock 2 · Mechanics", mark: 71, classAverage: 62, highest: 94, lowest: 38, date: "12 Oct 2026", weakAreas: ["Circular motion", "Energy transfer"] },
+  { subject: "Maths", test: "Summer mock 1 · Algebra", mark: 66, classAverage: 66, highest: 92, lowest: 36, date: "17 Jun 2026", weakAreas: [] },
+  { subject: "Maths", test: "Summer mock 2 · Trigonometry", mark: 72, classAverage: 67, highest: 93, lowest: 38, date: "8 Jul 2026", weakAreas: ["Identities"] },
+  { subject: "Maths", test: "Mock 1 · Functions", mark: 78, classAverage: 67, highest: 95, lowest: 40, date: "15 Sep 2026", weakAreas: ["Integration by parts"] },
+  { subject: "Maths", test: "Mock 2 · Calculus", mark: 84, classAverage: 68, highest: 98, lowest: 41, date: "13 Oct 2026", weakAreas: ["Integration by parts"] },
+  { subject: "Chemistry", test: "Summer mock 1 · Atoms", mark: 49, classAverage: 60, highest: 88, lowest: 30, date: "18 Jun 2026", weakAreas: ["Bonding"] },
+  { subject: "Chemistry", test: "Summer mock 2 · Equilibria", mark: 54, classAverage: 61, highest: 89, lowest: 31, date: "9 Jul 2026", weakAreas: ["Equilibria"] },
+  { subject: "Chemistry", test: "Summer mock 3 · Acids", mark: 57, classAverage: 62, highest: 90, lowest: 32, date: "20 Jul 2026", weakAreas: ["Isomerism"] },
+  { subject: "Chemistry", test: "Mock 1 · Organic", mark: 58, classAverage: 65, highest: 91, lowest: 33, date: "20 Sep 2026", weakAreas: ["Reaction mechanisms", "Isomerism"] },
+  { subject: "Biology", test: "Summer mock 1 · Cells", mark: 70, classAverage: 63, highest: 88, lowest: 36, date: "16 Jun 2026", weakAreas: [] },
+  { subject: "Biology", test: "Summer mock 2 · Plants", mark: 74, classAverage: 64, highest: 89, lowest: 38, date: "7 Jul 2026", weakAreas: ["Photosynthesis"] },
+  { subject: "Biology", test: "Mock 1 · Cells", mark: 77, classAverage: 64, highest: 89, lowest: 40, date: "22 Sep 2026", weakAreas: [] },
+];
 
 // Children linked to parents. The sheet label (son or daughter) comes from gender.
 export type Child = {
