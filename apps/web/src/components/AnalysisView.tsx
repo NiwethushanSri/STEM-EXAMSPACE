@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { markHistory, results } from "@/lib/site-data";
-import { linearForecast } from "@/lib/forecast";
+import { linearForecast } from "@stem/shared";
 import { TrendChart, ComparisonBars } from "@/components/Charts";
 import { Card, Stat } from "@/components/AppShell";
 

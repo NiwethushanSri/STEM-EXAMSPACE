@@ -1,6 +1,6 @@
 // The school year has three terms. Each term's marks feed the tracker, and the tracker predicts the next terms.
-import { linearForecast } from "@/lib/forecast";
-import type { TestResult } from "@/lib/site-data";
+import { linearForecast } from "./forecast";
+import type { TestResult } from "./types";
 
 export type TermName = "Autumn" | "Spring" | "Summer";
 export type Term = { name: TermName; year: number };

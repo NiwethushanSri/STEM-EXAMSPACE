@@ -6,7 +6,7 @@ import { TrendChart } from "@/components/Charts";
 import { gradeFor } from "@/components/ResultSheetPaper";
 import { DEMO_CHILD_ID, hasReportSent, sendReportToParent } from "@/lib/alerts";
 import { ReportCard } from "@/components/ReportCard";
-import { buildTracker, feedbackFor, inTerm, inTermRows, schoolYearOf, termLabel } from "@/lib/progress";
+import { buildTracker, feedbackFor, inTerm, inTermRows, schoolYearOf, termLabel } from "@stem/shared";
 import { attendance, student, subjectTeachers, testHistory } from "@/lib/site-data";
 
 // Prints only the report: the site header and navigation are left out of the page.

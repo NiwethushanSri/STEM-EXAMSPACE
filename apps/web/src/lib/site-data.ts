@@ -9,16 +9,9 @@ export const subjects = [
 
 export const entranceExams = ["TMUA", "FSAT", "UCAT"];
 
-export type TestResult = {
-  subject: string;
-  test: string;
-  mark: number;
-  classAverage: number;
-  highest: number;
-  lowest: number;
-  date: string;
-  weakAreas: string[];
-};
+import type { TestResult } from "@stem/shared";
+
+export type { TestResult };
 
 export const student = {
   name: "Amara Perera",
