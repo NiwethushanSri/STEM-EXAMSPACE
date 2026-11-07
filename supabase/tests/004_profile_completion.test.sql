@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(29);
+select plan(34);
 
 create temp table u (name text primary key, id uuid not null);
 insert into u values
@@ -23,7 +23,8 @@ grant select on s to public;
 -- Privileges.
 select is(has_function_privilege('anon', 'public.complete_profile(text,text,bigint[],text,text)', 'execute'), false, 'anon cannot execute complete_profile');
 select is(has_function_privilege('authenticated', 'public.complete_profile(text,text,bigint[],text,text)', 'execute'), true, 'authenticated can execute complete_profile');
-select is((select public from storage.buckets where id = 'student-photos'), false, 'student-photos bucket exists and is private');
+select results_eq($q$select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'student-photos'$q$,
+  $q$values (false, 5242880::bigint, array['image/jpeg']::text[])$q$, 'bucket is private with 5MB and jpeg-only limits');
 
 -- Happy path (student a).
 select tests.as_postgres(); select tests.as_user((select id from u where name = 'a'));
@@ -59,28 +60,28 @@ select is((select photo_path from public.student_details where profile_id = (sel
 -- Rejections (student c, profile_incomplete).
 select tests.as_postgres(); select tests.as_user((select id from u where name = 'c'));
 select throws_ok($q$select public.complete_profile('Female', 'Year 11', array[]::bigint[], '0700', null)$q$,
-  'P0001', null, 'complete_profile_rejects_empty_subjects');
+  'P0001', 'Choose at least one subject', 'complete_profile_rejects_empty_subjects');
 select throws_ok($q$select public.complete_profile('Female', 'Year 11', null, '0700', null)$q$,
-  'P0001', null, 'null subjects rejected');
+  'P0001', 'Choose at least one subject', 'null subjects rejected');
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 9', array[%s]::bigint[], '0700', null)$q$, (select id from s where name = 'Maths')),
-  'P0001', null, 'complete_profile_rejects_unknown_year_group');
+  'P0001', 'Invalid year group', 'complete_profile_rejects_unknown_year_group');
 select throws_ok(
   format($q$select public.complete_profile('Robot', 'Year 11', array[%s]::bigint[], '0700', null)$q$, (select id from s where name = 'Maths')),
-  'P0001', null, 'unknown gender rejected');
+  'P0001', 'Invalid gender', 'unknown gender rejected');
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 11', array[%s]::bigint[], '   ', null)$q$, (select id from s where name = 'Maths')),
-  'P0001', null, 'blank phone rejected');
+  'P0001', 'Parent phone is required', 'blank phone rejected');
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 11', array[%s]::bigint[], '0700', null)$q$, (select id from s where name = 'Retired Subject')),
-  'P0001', null, 'complete_profile_rejects_inactive_subject');
+  'P0001', 'Every subject must exist and be active', 'complete_profile_rejects_inactive_subject');
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 11', array[%s, -5]::bigint[], '0700', null)$q$, (select id from s where name = 'Maths')),
-  'P0001', null, 'unknown subject id rejected');
+  'P0001', 'Every subject must exist and be active', 'unknown subject id rejected');
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 11', array[%s]::bigint[], '0700', %L)$q$,
     (select id from s where name = 'Maths'), (select id from u where name = 'a') || '/photo.jpg'),
-  'P0001', null, 'complete_profile_rejects_wrong_photo_path');
+  'P0001', 'Invalid photo path', 'complete_profile_rejects_wrong_photo_path');
 select tests.as_postgres();
 select is((select status::text from public.profiles where id = (select id from u where name = 'c')), 'profile_incomplete', 'rejections leave status unchanged');
 
@@ -88,15 +89,15 @@ select is((select status::text from public.profiles where id = (select id from u
 select tests.as_postgres(); select tests.as_user((select id from u where name = 'pending'));
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 11', array[%s]::bigint[], '0700', null)$q$, (select id from s where name = 'Maths')),
-  'P0001', null, 'complete_profile_rejects_when_pending');
+  'P0001', 'Profile can only be completed by a student with an incomplete profile', 'complete_profile_rejects_when_pending');
 select tests.as_postgres(); select tests.as_user((select id from u where name = 'active'));
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 11', array[%s]::bigint[], '0700', null)$q$, (select id from s where name = 'Maths')),
-  'P0001', null, 'already-active student cannot re-run');
+  'P0001', 'Profile can only be completed by a student with an incomplete profile', 'already-active student cannot re-run');
 select tests.as_postgres(); select tests.as_user((select id from u where name = 'parent'));
 select throws_ok(
   format($q$select public.complete_profile('Female', 'Year 11', array[%s]::bigint[], '0700', null)$q$, (select id from s where name = 'Maths')),
-  'P0001', null, 'parent_cannot_complete_profile');
+  'P0001', 'Profile can only be completed by a student with an incomplete profile', 'parent_cannot_complete_profile');
 select tests.as_postgres();
 
 -- Storage policies.
@@ -115,9 +116,25 @@ select throws_ok(
 select is((select count(*)::int from storage.objects where bucket_id = 'student-photos' and name = (select id from u where name = 'd') || '/photo.jpg'), 0, 'student_cannot_read_other_photo');
 select is((select count(*)::int from storage.objects where bucket_id = 'student-photos' and name = (select id from u where name = 'c') || '/photo.jpg'), 1, 'student reads own photo');
 select tests.as_postgres(); select tests.as_user((select id from u where name = 'tutor'));
-select is((select count(*)::int from storage.objects where bucket_id = 'student-photos'), 0, 'tutor cannot read photos');
+select is((select count(*)::int from storage.objects where bucket_id = 'student-photos' and name in (select id || '/photo.jpg' from u where name in ('c','d'))), 0, 'tutor cannot read photos');
 select tests.as_postgres(); select tests.as_user((select id from u where name = 'admin'));
-select is((select count(*)::int from storage.objects where bucket_id = 'student-photos'), 2, 'admin_can_read_any_photo_object');
+select is((select count(*)::int from storage.objects where bucket_id = 'student-photos' and name in (select id || '/photo.jpg' from u where name in ('c','d'))), 2, 'admin_can_read_any_photo_object');
+-- Update / delete policies (c owns c/photo.jpg, d owns d/photo.jpg).
+select tests.as_postgres(); select tests.as_user((select id from u where name = 'c'));
+select throws_ok(
+  format($q$update storage.objects set name = %L where bucket_id = 'student-photos' and name = %L$q$,
+    (select id from u where name = 'd') || '/photo.jpg', (select id from u where name = 'c') || '/photo.jpg'),
+  '42501', null, 'student cannot rename own object into another folder');
+select lives_ok(
+  format($q$update storage.objects set metadata = '{"x":1}' where bucket_id = 'student-photos' and name = %L$q$, (select id from u where name = 'd') || '/photo.jpg'),
+  'update of other student object runs but matches nothing');
+select tests.as_postgres();
+select is((select count(*)::int from storage.objects where bucket_id = 'student-photos' and name = (select id from u where name = 'c') || '/photo.jpg'), 1, 'own object not renamed');
+select is((select count(*)::int from storage.objects where bucket_id = 'student-photos' and name = (select id from u where name = 'd') || '/photo.jpg' and metadata is null), 1, 'other object still exists and unchanged');
+select tests.as_user((select id from u where name = 'c'));
+select lives_ok(
+  format($q$update storage.objects set metadata = '{"x":1}' where bucket_id = 'student-photos' and name = %L$q$, (select id from u where name = 'c') || '/photo.jpg'),
+  'student can update own object');
 select tests.as_postgres();
 
 select * from finish();

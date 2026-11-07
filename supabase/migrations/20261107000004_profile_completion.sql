@@ -18,10 +18,10 @@ declare
   v_phone text := btrim(coalesce(p_parent_phone, ''));
   v_ids bigint[];
 begin
-  if v_uid is null
-     or not exists (
-       select 1 from public.profiles p
-       where p.id = v_uid and p.role = 'student' and p.status = 'profile_incomplete') then
+  perform 1 from public.profiles p
+  where p.id = v_uid and p.role = 'student' and p.status = 'profile_incomplete'
+  for update;
+  if not found then
     raise exception 'Profile can only be completed by a student with an incomplete profile'
       using errcode = 'P0001';
   end if;
@@ -56,6 +56,9 @@ begin
   update public.student_details
   set gender = p_gender, year_group = p_year_group, parent_phone = v_phone, photo_path = p_photo_path
   where profile_id = v_uid;
+  if not found then
+    raise exception 'Student details not found' using errcode = 'P0001';
+  end if;
 
   update public.profiles set status = 'active' where id = v_uid;
 end;
@@ -65,9 +68,12 @@ revoke execute on function public.complete_profile(text, text, bigint[], text, t
 grant execute on function public.complete_profile(text, text, bigint[], text, text) to authenticated;
 
 -- Private photo bucket. One object per student: <uid>/photo.jpg. Staff admins can read all.
-insert into storage.buckets (id, name, public)
-values ('student-photos', 'student-photos', false)
-on conflict (id) do nothing;
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('student-photos', 'student-photos', false, 5242880, array['image/jpeg'])
+on conflict (id) do update set
+  public = false,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
 
 create policy student_photos_insert on storage.objects for insert to authenticated
 with check (bucket_id = 'student-photos' and name = (select auth.uid())::text || '/photo.jpg');
