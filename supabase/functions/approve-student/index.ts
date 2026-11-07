@@ -74,10 +74,18 @@ Deno.serve(handle(async (req) => {
     const { error: e } = await svc.auth.admin.deleteUser(id);
     if (e) console.error("orphan user cleanup failed for", id, e.status ?? "unknown");
   };
-  const claim = async (id: string, token: string): Promise<boolean> => {
-    const { data: ok, error: e } = await svc.rpc("claim_parent_invite", { p_user: id, p_token: token });
-    if (e) console.error("claim rpc failed:", e.code ?? "unknown");
-    return ok === true;
+  type ClaimResult = "claimed" | "already" | "refused" | "error";
+  const claim = async (id: string, token: string): Promise<ClaimResult> => {
+    const { data: r, error: e } = await svc.rpc("claim_parent_invite", {
+      p_user: id,
+      p_token: token,
+      p_email: parentEmail,
+    });
+    if (e) {
+      console.error("claim rpc failed:", e.code ?? "unknown");
+      return "error";
+    }
+    return r === "claimed" || r === "already" ? r : "refused";
   };
 
   if (row.invite_token) {
@@ -98,12 +106,19 @@ Deno.serve(handle(async (req) => {
 
     if (!cErr && created.user) {
       // GoTrue writes app_metadata after the insert, so the sign-up trigger cannot apply the invite.
-      if (await claim(created.user.id, token)) {
-        parentId = created.user.id;
-        parentInvited = true;
+      const uid = created.user.id;
+      let r = await claim(uid, token);
+      if (r === "error") {
+        // Transport failure: never delete a user that is now a parent.
+        const { data: now } = await svc.from("profiles").select("role").eq("id", uid).maybeSingle();
+        if (now?.role === "parent") r = "claimed";
+      }
+      if (r === "claimed" || r === "already") {
+        parentId = uid;
+        parentInvited = r === "claimed";
       } else {
         console.error("parent invite claim failed");
-        await dropUser(created.user.id);
+        await dropUser(uid);
         await dropInvite();
         parentId = null;
       }
@@ -122,15 +137,16 @@ Deno.serve(handle(async (req) => {
         mine = tok === token || (tok === undefined && age < 60_000 && existing.role === "student");
       }
       if (existing && mine) {
-        const wasShell = existing.role !== "parent";
-        let ok = false;
-        for (let i = 0; i < 5 && !ok; i++) {
-          ok = await claim(existing.id, token);
-          if (!ok) await new Promise((r) => setTimeout(r, 200));
+        let r: ClaimResult = "refused";
+        for (let i = 0; i < 5; i++) {
+          r = await claim(existing.id, token);
+          if (r === "claimed" || r === "already") break;
+          await new Promise((res) => setTimeout(res, 200));
         }
-        if (ok) {
+        if (r === "claimed" || r === "already") {
           parentId = existing.id;
-          parentInvited = wasShell; // healed orphan never got its invite email
+          // Only the request whose claim changed the role sends the invite email.
+          parentInvited = r === "claimed";
         } else {
           console.error("could not claim existing parent account");
           parentId = null;
@@ -142,6 +158,7 @@ Deno.serve(handle(async (req) => {
         parentId = null;
       }
     }
+
 
     if (parentId) {
       const { error: lErr } = await svc.from("parent_children")

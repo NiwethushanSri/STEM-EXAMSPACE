@@ -174,3 +174,36 @@ Deno.test("approve-student: blank parent email -> 400 invalid_input", async () =
     assertEquals(r.json.error.code, "invalid_input");
   });
 });
+
+Deno.test("approve-student: crash-orphan parent shell is healed by the next sibling approval", async () => {
+  await withScenario(async ({ svc, admin, track, parentEmail }) => {
+    // Student A is approved in the database but the function "crashed" before claiming the parent.
+    const a = track(await pendingStudent(svc, parentEmail));
+    const { data: tx, error: txErr } = await svc.rpc("approve_student_tx", { p_student: a.id, p_actor: admin.id });
+    if (txErr) throw new Error(`tx failed: ${txErr.code}`);
+    const token = (Array.isArray(tx) ? tx[0] : tx).invite_token as string;
+    assert(token);
+    const { data: shell, error: sErr } = await svc.auth.admin.createUser({
+      email: parentEmail,
+      email_confirm: true,
+      app_metadata: { invite_token: token },
+    });
+    if (sErr || !shell.user) throw new Error(`shell create failed: ${sErr?.message}`);
+
+    const b = track(await pendingStudent(svc, parentEmail));
+    const r = await call(admin.token, { studentId: b.id });
+    assertEquals(r.status, 200);
+    assertEquals(r.json.parentLinked, true);
+    assertEquals(r.json.parentInvited, true); // the healing request sends the invite
+
+    const { data: parents } = await svc.from("profiles").select("id, role, status").eq("email", parentEmail);
+    assertEquals(parents!.length, 1);
+    assertEquals(parents![0].id, shell.user.id);
+    assertEquals(parents![0].role, "parent");
+    assertEquals(parents![0].status, "active");
+    const { data: links } = await svc.from("parent_children").select("student_id").eq("parent_id", shell.user.id);
+    assertEquals(links!.map((l: { student_id: string }) => l.student_id), [b.id]);
+    const { count } = await svc.from("pending_invites").select("*", { count: "exact", head: true }).eq("email", parentEmail);
+    assertEquals(count, 0);
+  });
+});

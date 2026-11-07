@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(41);
+select plan(46);
 
 -- The dev project's counters persist between function-test runs; clear them inside this transaction (rolled back).
 delete from public.index_counters;
@@ -120,8 +120,8 @@ select tests.as_postgres();
 select is((select count(*)::int from public.index_counters), 2, 'counters rows for 2026 and 2027 only');
 
 -- claim_parent_invite is bound to the user created for that invite (token in app_metadata, fresh, bare shell).
-select is(has_function_privilege('authenticated', 'public.claim_parent_invite(uuid,uuid)', 'execute'), false, 'claim_parent_invite not executable by authenticated');
-select is(has_function_privilege('service_role', 'public.claim_parent_invite(uuid,uuid)', 'execute'), true, 'claim_parent_invite executable by service_role');
+select is(has_function_privilege('authenticated', 'public.claim_parent_invite(uuid,uuid,text)', 'execute'), false, 'claim_parent_invite not executable by authenticated');
+select is(has_function_privilege('service_role', 'public.claim_parent_invite(uuid,uuid,text)', 'execute'), true, 'claim_parent_invite executable by service_role');
 insert into public.pending_invites (email, role) values
   ('claim.me@example.com', 'parent'), ('claim.g@example.com', 'parent'),
   ('claim.o@example.com', 'parent'), ('claim.tutor@example.com', 'tutor');
@@ -143,20 +143,47 @@ update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', (se
 update public.student_details set signup_parent_email = 'x@example.com', signup_parent_name = 'X' where profile_id = (select id from c where name = 'g');
 
 select is(public.claim_parent_invite((select id from c where name = 'g'),
-  (select token from public.pending_invites where email = 'claim.g@example.com')), false,
+  (select token from public.pending_invites where email = 'claim.g@example.com'), 'claim.g@example.com'), 'refused',
   'genuine pending student (signup data) is refused even with the correct token');
-select is(public.claim_parent_invite((select id from c where name = 'p'), gen_random_uuid()), false, 'claim with wrong token refused');
+select is(public.claim_parent_invite((select id from c where name = 'p'), gen_random_uuid(), 'claim.me@example.com'), 'refused', 'claim with wrong token refused');
 select is(public.claim_parent_invite((select id from c where name = 'o'),
-  (select token from public.pending_invites where email = 'claim.o@example.com')), false, 'claim for a user older than 24 hours refused');
+  (select token from public.pending_invites where email = 'claim.o@example.com'), 'claim.o@example.com'), 'refused', 'claim for a user older than 24 hours refused');
 select is(public.claim_parent_invite((select id from c where name = 't'),
-  (select token from public.pending_invites where email = 'claim.tutor@example.com')), false, 'claim of a non-parent invite refused');
+  (select token from public.pending_invites where email = 'claim.tutor@example.com'), 'claim.tutor@example.com'), 'refused', 'claim of a non-parent invite refused');
 select is(public.claim_parent_invite((select id from u where name = 's1'),
-  (select token from public.pending_invites where email = 'new.parent@example.com')), false, 'approved student cannot be claimed as parent');
+  (select token from public.pending_invites where email = 'new.parent@example.com'), 'x@example.com'), 'refused', 'approved student cannot be claimed as parent');
 select is(public.claim_parent_invite((select id from c where name = 'p'),
-  (select token from public.pending_invites where email = 'claim.me@example.com')), true, 'user with matching app_metadata token is claimed');
+  (select token from public.pending_invites where email = 'claim.me@example.com'), 'Claim.Me@example.com '), 'claimed', 'user with matching app_metadata token is claimed');
 select results_eq(format($q$select role::text, status::text from public.profiles where id = %L$q$, (select id from c where name = 'p')),
   $q$values ('parent', 'active')$q$, 'claimed profile is an active parent');
-select is(public.claim_parent_invite((select id from c where name = 'p'), gen_random_uuid()), true, 'second claim on an already-claimed parent returns true');
+select is(public.claim_parent_invite((select id from c where name = 'p'), gen_random_uuid(), 'claim.me@example.com'), 'already', 'second claim on an already-claimed parent returns already');
+
+select is(public.claim_parent_invite((select id from c where name = 'p'), gen_random_uuid(), 'other@example.com'), 'refused',
+  'already-parent with a different email is refused');
+
+-- Crash-orphan shell: tx reuses the existing invite token; genuine students still raise.
+insert into public.pending_invites (email, role) values ('orphan.parent@example.com', 'parent');
+create temp table o (name text primary key, id uuid not null);
+grant select on o to public;
+insert into o select 'shell', tests.create_user('student', 'pending');
+insert into o select 'real', tests.create_user('student', 'pending');
+update public.profiles set email = 'orphan.parent@example.com' where id = (select id from o where name = 'shell');
+update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', (select token::text from public.pending_invites where email = 'orphan.parent@example.com'))
+  where id = (select id from o where name = 'shell');
+insert into u values ('s10', tests.create_user('student', 'pending')), ('s11', tests.create_user('student', 'pending'));
+update public.student_details set signup_parent_email = 'orphan.parent@example.com' where profile_id = (select id from u where name = 's10');
+select results_eq(
+  format($q$select parent_id is null, invite_token = (select token from public.pending_invites where email = 'orphan.parent@example.com') from public.approve_student_tx(%L, %L, 2026)$q$,
+    (select id from u where name = 's10'), (select id from u where name = 'admin')),
+  $q$values (true, true)$q$, 'tx returns the existing token for a token-bearing shell');
+select is((select count(*)::int from public.pending_invites where email = 'orphan.parent@example.com'), 1, 'no second invite for the shell');
+select is(public.claim_parent_invite((select id from o where name = 'shell'),
+  (select token from public.pending_invites where email = 'orphan.parent@example.com'), 'orphan.parent@example.com'), 'claimed', 'shell is then claimed');
+update public.profiles set email = 'real.student@example.com' where id = (select id from o where name = 'real');
+update public.student_details set signup_parent_email = 'real.student@example.com' where profile_id = (select id from u where name = 's11');
+select throws_ok(
+  format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's11'), (select id from u where name = 'admin')),
+  'P0001', 'parent_email_is_staff', 'genuine student with that email still raises parent_email_is_staff');
 
 -- Index numbers pad to at least 4 digits and never truncate.
 insert into public.index_counters values (2030, 9999);
