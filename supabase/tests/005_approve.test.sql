@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(46);
+select plan(50);
 
 -- The dev project's counters persist between function-test runs; clear them inside this transaction (rolled back).
 delete from public.index_counters;
@@ -199,6 +199,22 @@ update public.student_details set signup_parent_email = (select email::text from
 select throws_ok(
   format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's9'), (select id from u where name = 'admin')),
   'P0001', 'parent_email_is_staff', 'student account as parent email is rejected');
+
+
+-- Existing parent that is suspended, or a deliberately unlinked pair: approval does not link.
+insert into u values ('sp1', tests.create_user('parent', 'suspended')), ('bp1', tests.create_user('parent', 'active')),
+  ('s12', tests.create_user('student', 'pending')), ('s13', tests.create_user('student', 'pending'));
+update public.profiles set email = 'susp.parent@example.com' where id = (select id from u where name = 'sp1');
+update public.profiles set email = 'blocked.parent@example.com' where id = (select id from u where name = 'bp1');
+update public.student_details set signup_parent_email = 'susp.parent@example.com' where profile_id = (select id from u where name = 's12');
+update public.student_details set signup_parent_email = 'blocked.parent@example.com' where profile_id = (select id from u where name = 's13');
+insert into public.parent_link_blocks (parent_id, student_id) values ((select id from u where name = 'bp1'), (select id from u where name = 's13'));
+select lives_ok(format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's12'), (select id from u where name = 'admin')),
+  'approval with a suspended existing parent succeeds');
+select is((select count(*)::int from public.parent_children where student_id = (select id from u where name = 's12')), 0, 'suspended parent is not linked');
+select lives_ok(format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's13'), (select id from u where name = 'admin')),
+  'approval with a blocked pair succeeds');
+select is((select count(*)::int from public.parent_children where student_id = (select id from u where name = 's13')), 0, 'blocked pair is not linked');
 
 select * from finish();
 rollback;

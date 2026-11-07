@@ -43,7 +43,7 @@ export async function claimInvite(
   email: string,
   role: AppRole,
 ): Promise<ClaimResult> {
-  const { data, error } = await svc.rpc("claim_invite", { p_user: userId, p_token: token, p_email: email });
+  const { data, error } = await svc.rpc("claim_invite", { p_user: userId, p_token: token, p_email: email, p_role: role });
   if (error) {
     console.error("claim rpc failed:", error.code ?? "unknown");
     return "error";
@@ -151,19 +151,46 @@ export async function sendInviteEmail(svc: SupabaseClient, userId: string, email
   return sent;
 }
 
-/** Links a parent to a student, then to every other approved, unlinked student sharing the parent email. */
-export async function linkParent(svc: SupabaseClient, parentId: string, studentId: string): Promise<boolean> {
-  const { error } = await svc.from("parent_children")
-    .upsert({ parent_id: parentId, student_id: studentId }, { onConflict: "parent_id,student_id", ignoreDuplicates: true });
+export type LinkResult = "linked" | "exists" | "blocked" | "parent_inactive" | "error";
+
+/**
+ * Automatic parent link: never to a non-active parent, never over a deliberate unlink. On success it
+ * also links every other approved, unlinked student sharing the parent email.
+ */
+export async function linkParent(svc: SupabaseClient, parentId: string, studentId: string): Promise<LinkResult> {
+  const { data, error } = await svc.rpc("link_student_to_parent", { p_parent: parentId, p_student: studentId });
   if (error) {
     console.error("parent link failed:", error.code ?? "unknown");
-    return false;
+    return "error";
   }
+  if (data !== "linked" && data !== "exists") return data === "blocked" || data === "parent_inactive" ? data : "error";
   await reconcileParent(svc, parentId);
-  return true;
+  return data;
 }
 
 export async function reconcileParent(svc: SupabaseClient, parentId: string): Promise<void> {
   const { error } = await svc.rpc("link_children_to_parent", { p_parent: parentId });
   if (error) console.error("sibling link failed:", error.code ?? "unknown");
+}
+
+/**
+ * Atomic invite reservation: insert … on conflict do nothing, then re-read. An existing row of the
+ * same role is reused (idempotent); a different role is reported so the caller can refuse.
+ */
+export async function reserveInvite(
+  svc: SupabaseClient,
+  email: string,
+  role: AppRole,
+  invitedBy: string | null,
+): Promise<{ token: string } | "role_conflict" | "error"> {
+  const { error } = await svc.from("pending_invites")
+    .upsert({ email, role, invited_by: invitedBy }, { onConflict: "email", ignoreDuplicates: true });
+  if (error) {
+    console.error("invite insert failed:", error.code ?? "unknown");
+    return "error";
+  }
+  const { data, error: rErr } = await svc.from("pending_invites").select("token, role").eq("email", email).maybeSingle();
+  if (rErr) return "error";
+  if (!data) return "error"; // consumed by a concurrent claim: the caller retries or heals
+  return data.role === role ? { token: data.token as string } : "role_conflict";
 }

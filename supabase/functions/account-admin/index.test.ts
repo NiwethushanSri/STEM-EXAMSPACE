@@ -223,3 +223,133 @@ Deno.test("account-admin: resend (c) two siblings, both unlinked -> resend for o
     assertEquals(after!.length, 1);
   });
 });
+
+const approvedIndex = () => `SE-2098-${String(Math.floor(Math.random() * 9000) + 1000)}`;
+
+Deno.test("account-admin: resend (b) audits invite_resent for the student", async () => {
+  await withScenario(async ({ svc, track, parentEmail }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const s = track(await pendingStudent(svc, parentEmail));
+    await markApproved(svc, s.id, approvedIndex());
+    assertEquals((await resend(admin.token, s.id)).status, 200);
+    const { count } = await svc.from("audit_log").select("*", { count: "exact", head: true })
+      .eq("action", "invite_resent").eq("target_id", s.id).eq("actor_id", admin.id);
+    assertEquals(count, 1);
+  });
+});
+
+Deno.test("account-admin: resend (b) with a pending non-parent invite for the email -> 409, nothing created", async () => {
+  await withScenario(async ({ svc, track, parentEmail }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const s = track(await pendingStudent(svc, parentEmail));
+    await markApproved(svc, s.id, approvedIndex());
+    const { error } = await svc.from("pending_invites").insert({ email: parentEmail, role: "admin" });
+    assert(!error);
+    const r = await resend(admin.token, s.id);
+    assertEquals(r.status, 409);
+    assertEquals(r.json.error.code, "parent_email_is_staff");
+    const { data: inv } = await svc.from("pending_invites").select("role").eq("email", parentEmail).single();
+    assertEquals(inv!.role, "admin");
+    const { data: ps } = await svc.from("profiles").select("id").eq("email", parentEmail);
+    assertEquals(ps!.length, 0);
+    const { count: audits } = await svc.from("audit_log").select("*", { count: "exact", head: true })
+      .eq("action", "invite_resent").eq("target_id", s.id);
+    assertEquals(audits, 0);
+  });
+});
+
+Deno.test("account-admin: resend (b) refuses a student shell whose token does not match the invite", async () => {
+  await withScenario(async ({ svc, track, parentEmail }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const s = track(await pendingStudent(svc, parentEmail));
+    await markApproved(svc, s.id, approvedIndex());
+    const { error } = await svc.from("pending_invites").insert({ email: parentEmail, role: "parent" });
+    assert(!error);
+    // A student sign-up with the parent email whose app_metadata token is NOT the invite's.
+    const { data: shell, error: cErr } = await svc.auth.admin.createUser({
+      email: parentEmail,
+      email_confirm: true,
+      app_metadata: { invite_token: crypto.randomUUID() },
+    });
+    assert(!cErr && shell.user);
+    const r = await resend(admin.token, s.id);
+    assertEquals(r.status, 409);
+    assertEquals(r.json.error.code, "parent_email_is_staff");
+    const { data: p } = await svc.from("profiles").select("role").eq("id", shell.user!.id).single();
+    assertEquals(p!.role, "student");
+  });
+});
+
+Deno.test("account-admin: resend (b) with an empty parent email -> 409 conflict", async () => {
+  await withScenario(async ({ svc, track, parentEmail }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const s = track(await pendingStudent(svc, parentEmail));
+    await markApproved(svc, s.id, approvedIndex());
+    await svc.from("student_details").update({ signup_parent_email: "  " }).eq("profile_id", s.id);
+    const r = await resend(admin.token, s.id);
+    assertEquals(r.status, 409);
+    assertEquals(r.json.error.code, "conflict");
+  });
+});
+
+Deno.test("account-admin: resend (b) with a suspended parent -> not linked, warning, not audited", async () => {
+  await withScenario(async ({ svc, track, parentEmail }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const s = track(await pendingStudent(svc, parentEmail));
+    await markApproved(svc, s.id, approvedIndex());
+    const { data: u, error } = await svc.auth.admin.createUser({ email: parentEmail, email_confirm: true });
+    assert(!error && u.user);
+    await svc.from("profiles").update({ role: "parent", status: "suspended" }).eq("id", u.user!.id);
+    await svc.from("student_details").delete().eq("profile_id", u.user!.id);
+    const r = await resend(admin.token, s.id);
+    assertEquals(r.status, 200);
+    assertEquals(r.json.parentLinked, false);
+    assertEquals(r.json.warning, "parent_suspended");
+    const { count } = await svc.from("parent_children").select("*", { count: "exact", head: true }).eq("student_id", s.id);
+    assertEquals(count, 0);
+    const { count: audits } = await svc.from("audit_log").select("*", { count: "exact", head: true })
+      .eq("action", "invite_resent").eq("target_id", s.id);
+    assertEquals(audits, 0);
+  });
+});
+
+Deno.test("account-admin: resend (a) on a parent target works; suspended target -> 409", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const parent = track(await createTestUser(svc, { role: "parent", status: "active" }));
+    const r = await resend(admin.token, parent.id);
+    assertEquals(r.status, 200);
+    assertEquals(r.json.emailSent, true);
+    const { data: p } = await svc.from("profiles").select("invite_sent_at").eq("id", parent.id).single();
+    assert(p!.invite_sent_at);
+    const sus = track(await createTestUser(svc, { role: "tutor", status: "suspended" }));
+    const r2 = await resend(admin.token, sus.id);
+    assertEquals(r2.status, 409);
+    assertEquals(r2.json.error.code, "conflict");
+  });
+});
+
+Deno.test("account-admin: owner admin-invite racing resend (b) for the same email never yields a parent from the admin invite", async () => {
+  await withScenario(async ({ svc, track, parentEmail }) => {
+    const owner = track(await createTestUser(svc, { role: "owner", status: "active" }));
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const s = track(await pendingStudent(svc, parentEmail));
+    await markApproved(svc, s.id, approvedIndex());
+    const [inv, rs] = await Promise.all([
+      post("invite-user", owner.token, { email: parentEmail, firstName: "Ada", lastName: "Admin", role: "admin" }),
+      resend(admin.token, s.id),
+    ]);
+    assert(inv.status !== 500 && rs.status !== 500, `no 500s (got ${inv.status}, ${rs.status})`);
+    const { data: ps } = await svc.from("profiles").select("role").eq("email", parentEmail);
+    assert(ps!.length <= 1, "never two accounts for one email");
+    if (inv.status === 200) {
+      // The admin invite won: the account must be the admin, and the resend must not have created a parent.
+      assertEquals(ps![0].role, "admin");
+      assert(rs.status === 409, `resend lost the race (${rs.status})`);
+    } else {
+      // The parent invite won: the staff invite is refused and the account is a parent.
+      assertEquals(inv.status, 409);
+      assertEquals(ps![0].role, "parent");
+    }
+  });
+});

@@ -1,7 +1,7 @@
 import { type AppRole, requireCaller, serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 import { writeAudit } from "../_shared/audit.ts";
-import { clearInviteToken, provisionInvitedUser, sendInviteEmail } from "../_shared/invite.ts";
+import { clearInviteToken, provisionInvitedUser, reserveInvite, sendInviteEmail } from "../_shared/invite.ts";
 
 const ROLES: AppRole[] = ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"];
 const MAY_INVITE: Record<string, AppRole[]> = {
@@ -48,26 +48,32 @@ Deno.serve(handle(async (req) => {
   if (eErr) throw new Error(`email lookup failed: ${eErr.code ?? "unknown"}`);
   if (existing) throw IN_USE();
 
-  // A fresh token every time: a stale invite for this email must not stay claimable.
-  const { data: invite, error: iErr } = await svc.from("pending_invites")
-    .upsert({ email, role, invited_by: caller.id, token: crypto.randomUUID() }, { onConflict: "email" })
-    .select("token").single();
-  if (iErr || !invite) {
-    console.error("invite insert failed:", iErr?.code ?? "unknown");
+  // Atomic reservation: concurrent or repeated requests share one invite row (and token).
+  const reserved = await reserveInvite(svc, email, role, caller.id);
+  if (reserved === "role_conflict") throw IN_USE();
+  if (reserved === "error") {
+    // A concurrent request may have just finished creating this very account.
+    const { data: now } = await svc.from("profiles").select("id").eq("email", email).maybeSingle();
+    if (now) throw IN_USE();
     throw new HttpError("internal", 500, "Something went wrong. Please try again.");
   }
 
-  const res = await provisionInvitedUser(svc, { email, token: invite.token, role, firstName, lastName });
+  const res = await provisionInvitedUser(svc, { email, token: reserved.token, role, firstName, lastName });
   if (!res.userId) {
     if (res.warning === "email_in_use") throw IN_USE();
+    const { data: made } = await svc.from("profiles").select("id").eq("email", email).maybeSingle();
+    if (made) throw IN_USE(); // a concurrent request owns the account
     throw new HttpError("internal", 500, "Could not create the invitation. Please try again.");
   }
-
-  let emailSent = false;
-  if (res.invited) {
-    await clearInviteToken(svc, res.userId);
-    emailSent = await sendInviteEmail(svc, res.userId, email);
+  if (!res.invited) {
+    // Another request created and claimed this account first; drop any invite row we re-created.
+    const { error: dErr } = await svc.from("pending_invites").delete().eq("email", email);
+    if (dErr) console.error("invite cleanup failed:", dErr.code ?? "unknown");
+    throw IN_USE();
   }
+
+  await clearInviteToken(svc, res.userId);
+  const emailSent = await sendInviteEmail(svc, res.userId, email);
   await writeAudit(caller.id, "staff_invited", "profile", res.userId);
   return jsonResponse({ invited: true, emailSent });
 }));

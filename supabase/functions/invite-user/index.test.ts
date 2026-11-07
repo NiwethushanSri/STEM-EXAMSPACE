@@ -166,3 +166,38 @@ Deno.test("invite-user: bad bodies -> 400 invalid_input", async () => {
     assertEquals(data!.length, 0);
   });
 });
+
+Deno.test("invite-user: parallel double-submit -> one active tutor, never a 500", async () => {
+  await withScenario(async ({ svc, track, newEmail }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const email = newEmail();
+    const body = { email, firstName: "Tina", lastName: "Tutor", role: "tutor" };
+    const rs = await Promise.all([call(admin.token, body), call(admin.token, body), call(admin.token, body)]);
+    for (const r of rs) assert([200, 409].includes(r.status), `unexpected status ${r.status}`);
+    assert(rs.some((r) => r.status === 200), "one request must win");
+    assertEquals(rs.filter((r) => r.status === 200).length, 1);
+    for (const r of rs.filter((r) => r.status === 409)) assertEquals(r.json.error.code, "email_in_use");
+    const { data: ps } = await svc.from("profiles").select("role, status").eq("email", email);
+    assertEquals(ps!.length, 1);
+    assertEquals(ps![0].role, "tutor");
+    assertEquals(ps![0].status, "active");
+    const { count } = await svc.from("pending_invites").select("*", { count: "exact", head: true }).eq("email", email);
+    assertEquals(count, 0);
+  });
+});
+
+Deno.test("invite-user: a pending invite of another role for the email -> 409, invite untouched", async () => {
+  await withScenario(async ({ svc, track, newEmail }) => {
+    const owner = track(await createTestUser(svc, { role: "owner", status: "active" }));
+    const email = newEmail();
+    const { error } = await svc.from("pending_invites").insert({ email, role: "parent" });
+    assert(!error);
+    const r = await call(owner.token, { email, firstName: "A", lastName: "B", role: "admin" });
+    assertEquals(r.status, 409);
+    assertEquals(r.json.error.code, "email_in_use");
+    const { data: inv } = await svc.from("pending_invites").select("role").eq("email", email).single();
+    assertEquals(inv!.role, "parent");
+    const { data: ps } = await svc.from("profiles").select("id").eq("email", email);
+    assertEquals(ps!.length, 0);
+  });
+});

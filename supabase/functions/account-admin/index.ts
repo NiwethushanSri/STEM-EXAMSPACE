@@ -5,6 +5,7 @@ import {
   clearInviteToken,
   linkParent,
   provisionInvitedUser,
+  reserveInvite,
   sendInviteEmail,
 } from "../_shared/invite.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -17,6 +18,12 @@ interface Target {
   status: string;
   email: string;
   invite_sent_at: string | null;
+}
+
+/** A response plus whether a committed effect happened (only then is it audited). */
+interface Outcome {
+  response: Response;
+  audit: boolean;
 }
 
 const CONFLICT = (m: string) => new HttpError("conflict", 409, m);
@@ -32,17 +39,18 @@ function parentEmailIsStaff(detail: "student" | "staff"): HttpError {
 }
 
 /** (a) Re-sends the invite to an invited staff or parent account that never received it. */
-async function resendStaffInvite(svc: SupabaseClient, callerRole: AppRole, t: Target): Promise<Response> {
+async function resendStaffInvite(svc: SupabaseClient, callerRole: AppRole, t: Target): Promise<Outcome> {
   if (callerRole !== "owner" && (t.role === "owner" || t.role === "admin")) {
     throw new HttpError("forbidden", 403, "You do not have permission to do this.");
   }
+  if (t.status !== "active") throw CONFLICT("This account is not active.");
   if (t.invite_sent_at !== null) throw CONFLICT("This invitation was already sent.");
   const sent = await sendInviteEmail(svc, t.id, t.email);
-  return jsonResponse({ emailSent: sent });
+  return { response: jsonResponse({ emailSent: sent }), audit: sent };
 }
 
 /** (b) Rebuilds the parent invite for an approved student that has no parent link. */
-async function resendParentInvite(svc: SupabaseClient, actorId: string, t: Target): Promise<Response> {
+async function resendParentInvite(svc: SupabaseClient, actorId: string, t: Target): Promise<Outcome> {
   const { data: det } = await svc.from("student_details")
     .select("index_number, signup_parent_name, signup_parent_email").eq("profile_id", t.id).maybeSingle();
   if (!det?.index_number || !["profile_incomplete", "active"].includes(t.status)) {
@@ -54,11 +62,9 @@ async function resendParentInvite(svc: SupabaseClient, actorId: string, t: Targe
   if ((count ?? 0) > 0) throw CONFLICT("This student already has a parent.");
 
   const parentEmail = String(det.signup_parent_email ?? "").trim().toLowerCase();
-  if (!parentEmail) throw new HttpError("invalid_input", 400, "The student has no valid parent email.");
+  if (!parentEmail) throw CONFLICT("The student has no parent email. Edit the student first.");
 
-  const { data: existing } = await svc.from("profiles").select("id, role").eq("email", parentEmail).maybeSingle();
-  const { data: pending } = await svc.from("pending_invites")
-    .select("token, role").eq("email", parentEmail).maybeSingle();
+  const { data: existing } = await svc.from("profiles").select("id, role, status").eq("email", parentEmail).maybeSingle();
 
   let parentId: string | null = null;
   let invited = false;
@@ -68,24 +74,24 @@ async function resendParentInvite(svc: SupabaseClient, actorId: string, t: Targe
     parentId = existing.id;
   } else if (existing) {
     // Only a token-bearing parent sign-up shell (an interrupted creation) may be healed.
+    const { data: pending } = await svc.from("pending_invites")
+      .select("token, role").eq("email", parentEmail).maybeSingle();
     let shell = false;
-    if (existing.role === "student" && pending?.role === "parent") {
+    let ageMs = 0;
+    if (existing.role === "student" && ["unconfirmed", "pending"].includes(existing.status) && pending?.role === "parent") {
       const { data: au } = await svc.auth.admin.getUserById(existing.id);
       shell = au?.user?.app_metadata?.invite_token === pending.token;
+      ageMs = au?.user ? Date.now() - new Date(au.user.created_at).getTime() : 0;
     }
     if (!shell || !pending) throw parentEmailIsStaff(existing.role === "student" ? "student" : "staff");
+    // The claim only accepts shells younger than 24 hours; an older one needs an owner to clear it.
+    if (ageMs > 24 * 60 * 60 * 1000) throw CONFLICT("This parent invite is stuck. Ask an owner to remove the old invite.");
     token = pending.token;
-  } else if (pending && pending.role !== "parent") {
-    throw parentEmailIsStaff("staff");
   } else {
-    const { data: inv, error: iErr } = await svc.from("pending_invites")
-      .upsert({ email: parentEmail, role: "parent", invited_by: actorId }, { onConflict: "email" })
-      .select("token").single();
-    if (iErr || !inv) {
-      console.error("invite insert failed:", iErr?.code ?? "unknown");
-      throw new HttpError("internal", 500, "Something went wrong. Please try again.");
-    }
-    token = inv.token;
+    const r = await reserveInvite(svc, parentEmail, "parent", actorId);
+    if (r === "role_conflict") throw parentEmailIsStaff("staff");
+    if (r === "error") throw new HttpError("internal", 500, "Something went wrong. Please try again.");
+    token = r.token;
   }
 
   if (token) {
@@ -102,17 +108,33 @@ async function resendParentInvite(svc: SupabaseClient, actorId: string, t: Targe
     invited = res.invited;
     if (!parentId && res.warning === "email_in_use") throw parentEmailIsStaff("staff");
   }
+  if (!parentId) throw new HttpError("internal", 500, "Something went wrong. Please try again.");
 
-  let linked = false;
   let emailSent = false;
-  if (parentId) {
-    linked = await linkParent(svc, parentId, t.id);
-    if (invited) {
-      await clearInviteToken(svc, parentId);
-      emailSent = await sendInviteEmail(svc, parentId, parentEmail);
-    }
+  const lr = await linkParent(svc, parentId, t.id);
+  const linked = lr === "linked" || lr === "exists";
+  if (invited) {
+    await clearInviteToken(svc, parentId);
+    emailSent = await sendInviteEmail(svc, parentId, parentEmail);
   }
-  return jsonResponse({ parentLinked: linked, parentInvited: invited, emailSent });
+  if (!linked && !invited) {
+    // Nothing changed: report why, never audit.
+    if (lr === "parent_inactive" || lr === "blocked") {
+      return {
+        response: jsonResponse({
+          parentLinked: false,
+          parentInvited: false,
+          emailSent: false,
+          warning: lr === "blocked" ? "link_blocked" : "parent_suspended",
+        }),
+        audit: false,
+      };
+    }
+    throw new HttpError("internal", 500, "Something went wrong. Please try again.");
+  }
+  const body: Record<string, unknown> = { parentLinked: linked, parentInvited: invited, emailSent };
+  if (lr === "parent_inactive") body.warning = "parent_suspended";
+  return { response: jsonResponse(body), audit: true };
 }
 
 async function resendInvite(svc: SupabaseClient, caller: { id: string; role: AppRole }, userId: string) {
@@ -122,11 +144,11 @@ async function resendInvite(svc: SupabaseClient, caller: { id: string; role: App
   if (!t) throw new HttpError("not_found", 404, "Account not found.");
   const target = t as Target;
 
-  const res = target.role === "student"
+  const out = target.role === "student"
     ? await resendParentInvite(svc, caller.id, target)
     : await resendStaffInvite(svc, caller.role, target);
-  await writeAudit(caller.id, "invite_resent", "profile", userId);
-  return res;
+  if (out.audit) await writeAudit(caller.id, "invite_resent", "profile", userId);
+  return out.response;
 }
 
 Deno.serve(handle(async (req) => {

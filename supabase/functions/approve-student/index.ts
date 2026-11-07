@@ -64,7 +64,7 @@ Deno.serve(handle(async (req) => {
   const parentEmail = row.parent_email;
   let parentInvited = false;
   let parentId = row.parent_id;
-  let linked = row.parent_id !== null; // existing parent was linked inside the transaction
+  let linked = false;
   let warning: string | undefined;
 
   if (row.invite_token) {
@@ -89,7 +89,9 @@ Deno.serve(handle(async (req) => {
   }
 
   if (parentId) {
-    if (await linkParent(svc, parentId, studentId)) linked = true;
+    const lr = await linkParent(svc, parentId, studentId);
+    linked = lr === "linked" || lr === "exists";
+    if (lr === "parent_inactive") warning = "parent_suspended";
     if (parentInvited) await clearInviteToken(svc, parentId);
   }
 
