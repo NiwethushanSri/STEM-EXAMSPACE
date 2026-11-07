@@ -154,12 +154,6 @@ async function resendInvite(svc: SupabaseClient, caller: { id: string; role: App
 
 const STAFF = ["admin", "teacher", "tutor", "corrector"];
 
-async function targetRole(svc: SupabaseClient, id: string): Promise<AppRole | null> {
-  const { data, error } = await svc.from("profiles").select("role").eq("id", id).maybeSingle();
-  if (error) throw new Error(`profile lookup failed: ${error.code ?? "unknown"}`);
-  return (data?.role as AppRole | undefined) ?? null;
-}
-
 /**
  * Suspend or reactivate. The SQL function authorises, changes state and audits in one transaction; it is
  * idempotent ('already_*' results), so a retry after a failed Auth ban change repairs it. Only staff are
@@ -170,8 +164,10 @@ async function setStatus(svc: SupabaseClient, caller: { id: string }, userId: st
   if (error) throw new Error(`set_account_status_tx failed: ${error.code ?? "unknown"}`);
   if (data !== "already_suspended" && data !== "already_active") mapTxResult(data);
 
-  const role = await targetRole(svc, userId);
-  if (role && STAFF.includes(role)) {
+  const { data: cur, error: cErr } = await svc.from("profiles").select("role, status").eq("id", userId).maybeSingle();
+  if (cErr || !cur) throw new Error(`profile lookup failed: ${cErr?.code ?? "missing"}`);
+  // Suspend bans staff only; reactivate lifts any ban on every role (idempotent, also clears legacy bans).
+  if (action === "reactivate" || STAFF.includes(cur.role)) {
     const { error: bErr } = await svc.auth.admin.updateUserById(userId, {
       ban_duration: action === "suspend" ? "876000h" : "none",
     });
@@ -186,12 +182,19 @@ async function setStatus(svc: SupabaseClient, caller: { id: string }, userId: st
       );
     }
   }
-  return jsonResponse({ status: data === "already_suspended" ? "suspended" : data === "already_active" ? "active" : data });
+  return jsonResponse({ status: cur.status });
+}
+
+/** Authorises first (read-only), so nothing is removed for a request that will be refused. */
+async function authorise(svc: SupabaseClient, caller: { id: string }, userId: string, action: string) {
+  const { data, error } = await svc.rpc("can_manage_account", { p_actor: caller.id, p_target: userId, p_action: action });
+  if (error) throw new Error(`can_manage_account failed: ${error.code ?? "unknown"}`);
+  if (data !== "ok") mapTxResult(data);
 }
 
 async function deleteAccount(svc: SupabaseClient, caller: { id: string }, userId: string) {
-  const role = await targetRole(svc, userId);
-  if ((role === "student" || role === "parent") && userId !== caller.id) await removePhoto(svc, userId);
+  await authorise(svc, caller, userId, "delete_account");
+  await removePhoto(svc, userId);
   const { data, error } = await svc.rpc("delete_account_tx", { p_target: userId, p_actor: caller.id });
   if (error) throw new Error(`delete_account_tx failed: ${error.code ?? "unknown"}`);
   mapTxResult(data);
@@ -206,8 +209,8 @@ function mapTxResult(r: unknown): void {
 }
 
 async function removeStaff(svc: SupabaseClient, caller: { id: string }, userId: string) {
-  const role = await targetRole(svc, userId);
-  if (role && STAFF.includes(role) && userId !== caller.id) await removePhoto(svc, userId);
+  await authorise(svc, caller, userId, "remove_staff");
+  await removePhoto(svc, userId);
   const { data, error } = await svc.rpc("remove_staff_tx", { p_target: userId, p_actor: caller.id });
   if (error) throw new Error(`remove_staff_tx failed: ${error.code ?? "unknown"}`);
   mapTxResult(data);

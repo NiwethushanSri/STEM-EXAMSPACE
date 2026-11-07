@@ -624,3 +624,30 @@ Deno.test("account-admin: delete_account removes a student with photo and no-tar
     }
   });
 });
+
+Deno.test("account-admin: refused remove_staff/delete_account leave the target's photo; reactivate reports the real status", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const admin2 = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const tutor = track(await createTestUser(svc, { role: "tutor", status: "active" }));
+    const paths = [`${admin2.id}/photo.jpg`, `${tutor.id}/photo.jpg`];
+    try {
+      for (const p of paths) {
+        assertEquals((await svc.storage.from(BUCKET).upload(p, JPEG, { contentType: "image/jpeg", upsert: true })).error, null);
+      }
+      assertEquals((await act(admin.token, "remove_staff", admin2.id)).status, 403);
+      assertEquals((await act(admin.token, "delete_account", tutor.id)).status, 409);
+      for (const [i, id] of [admin2.id, tutor.id].entries()) {
+        const { data } = await svc.storage.from(BUCKET).list(id);
+        assertEquals((data ?? []).length, 1, `photo ${i} still exists after refusal`);
+      }
+      // reactivating an already-active account reports its real status, not a hard-coded "active".
+      await svc.from("profiles").update({ status: "pending" }).eq("id", tutor.id);
+      const r = await act(admin.token, "reactivate", tutor.id);
+      assertEquals(r.status, 200);
+      assertEquals(r.json.status, "pending");
+    } finally {
+      await svc.storage.from(BUCKET).remove(paths);
+    }
+  });
+});

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(73);
+select plan(89);
 select tests.assert_no_owner();
 
 -- Privileges: service_role only.
@@ -124,6 +124,37 @@ select is((select count(*)::int from public.login_attempts where key='idx:SE-209
 select is((select count(*)::int from public.audit_log where action='account_deleted' and created_at = now() and target_id is null and target_type is null and actor_id=(select id from c where name='admin')), 1, 'account_deleted audited with actor and no target');
 select is(public.delete_own_account_tx((select id from c where name='del2')), 'deleted', 'last sibling self-deletes');
 select is((select count(*)::int from public.pending_invites where email='res.parent@example.com'), 0, 'parent invite removed with the last student naming it');
+
+-- can_manage_account and the suspended-photo freeze.
+select is(has_function_privilege('authenticated', 'public.can_manage_account(uuid,uuid,text)', 'execute'), false, 'can_manage_account: not authenticated');
+select is(has_function_privilege('anon', 'public.can_manage_account(uuid,uuid,text)', 'execute'), false, 'can_manage_account: not anon');
+select is(has_function_privilege('service_role', 'public.can_manage_account(uuid,uuid,text)', 'execute'), true, 'can_manage_account: service_role');
+insert into c values ('admin3', tests.create_user('admin', 'active')), ('tutor3', tests.create_user('tutor', 'active')), ('stu_ok', tests.create_user('student', 'active')), ('stu_susp', tests.create_user('student', 'suspended'));
+select is(public.can_manage_account((select id from c where name='admin'), (select id from c where name='admin3'), 'remove_staff'), 'forbidden', 'can_manage: admin on admin');
+select is(public.can_manage_account((select id from c where name='admin'), (select id from c where name='admin'), 'remove_staff'), 'forbidden', 'can_manage: self');
+select is(public.can_manage_account((select id from c where name='admin'), (select id from c where name='owner'), 'delete_account'), 'forbidden', 'can_manage: owner target');
+select is(public.can_manage_account((select id from c where name='admin'), (select id from c where name='stu_ok'), 'remove_staff'), 'conflict', 'can_manage: remove_staff on student');
+select is(public.can_manage_account((select id from c where name='admin'), (select id from c where name='tutor3'), 'delete_account'), 'conflict', 'can_manage: delete_account on staff');
+select is(public.can_manage_account((select id from c where name='admin'), gen_random_uuid(), 'remove_staff'), 'not_found', 'can_manage: unknown');
+select is(public.can_manage_account((select id from c where name='tutor3'), (select id from c where name='stu_ok'), 'delete_account'), 'forbidden', 'can_manage: non-admin actor');
+select is(public.can_manage_account((select id from c where name='admin'), (select id from c where name='tutor3'), 'remove_staff'), 'ok', 'can_manage: ok (remove_staff)');
+select is(public.can_manage_account((select id from c where name='owner'), (select id from c where name='stu_ok'), 'delete_account'), 'ok', 'can_manage: ok (delete_account)');
+
+insert into storage.objects (bucket_id, name) values ('student-photos', (select id from c where name='stu_susp') || '/photo.jpg');
+select tests.as_user((select id from c where name='stu_susp'));
+select throws_ok(
+  format($q$insert into storage.objects (bucket_id, name) values ('student-photos', %L)$q$, (select id from c where name='stu_susp') || '/photo.jpg'),
+  '42501', null, 'suspended student cannot insert own photo');
+update storage.objects set metadata = '{"x":1}' where bucket_id = 'student-photos' and name = (select id from c where name='stu_susp') || '/photo.jpg';
+select tests.as_postgres();
+select is((select count(*)::int from storage.objects where bucket_id='student-photos' and name = (select id from c where name='stu_susp') || '/photo.jpg' and metadata is null), 1, 'suspended student update changed nothing');
+select tests.as_user((select id from c where name='stu_ok'));
+select lives_ok(
+  format($q$insert into storage.objects (bucket_id, name) values ('student-photos', %L)$q$, (select id from c where name='stu_ok') || '/photo.jpg'),
+  'active student can insert own photo');
+update storage.objects set metadata = '{"x":2}' where bucket_id = 'student-photos' and name = (select id from c where name='stu_ok') || '/photo.jpg';
+select tests.as_postgres();
+select is((select metadata->>'x' from storage.objects where bucket_id='student-photos' and name = (select id from c where name='stu_ok') || '/photo.jpg'), '2', 'active student can update own photo');
 
 select * from finish();
 rollback;
