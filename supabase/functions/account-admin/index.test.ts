@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { createTestUser, deleteUserIds, deleteUsers, env, service, type TestUser } from "../_shared/test_helpers.ts";
+import { anon, createTestUser, deleteUserIds, deleteUsers, env, service, type TestUser } from "../_shared/test_helpers.ts";
 
 type Svc = ReturnType<typeof service>;
 
@@ -351,5 +351,175 @@ Deno.test("account-admin: owner admin-invite racing resend (b) for the same emai
       assertEquals(inv.status, 409);
       assertEquals(ps![0].role, "parent");
     }
+  });
+});
+
+// ---------------------------------------------------------------- Task 10b: state changes
+
+const act = (token: string, action: string, userId: string) => post("account-admin", token, { action, userId });
+const userGone = async (svc: Svc, id: string) => {
+  const { data } = await svc.from("profiles").select("id").eq("id", id);
+  const { data: au } = await svc.auth.admin.getUserById(id);
+  return (data ?? []).length === 0 && !au?.user;
+};
+async function withPassword(svc: Svc, u: TestUser): Promise<string> {
+  const password = `Pw-${crypto.randomUUID()}`;
+  const { error } = await svc.auth.admin.updateUserById(u.id, { password });
+  if (error) throw new Error(`set password failed: ${error.message}`);
+  return password;
+}
+const status = async (svc: Svc, id: string) =>
+  (await svc.from("profiles").select("status").eq("id", id).single()).data!.status;
+
+Deno.test("account-admin: suspend bans sign-in, reactivate restores it; suspended admin loses staff reads", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const tutor = track(await createTestUser(svc, { role: "tutor", status: "active" }));
+    const pw = await withPassword(svc, tutor);
+    const { error: pre } = await anon().auth.signInWithPassword({ email: tutor.email, password: pw });
+    assertEquals(pre, null);
+
+    const r = await act(admin.token, "suspend", tutor.id);
+    assertEquals(r.status, 200);
+    assertEquals(await status(svc, tutor.id), "suspended");
+    const { data: s1, error: e1 } = await anon().auth.signInWithPassword({ email: tutor.email, password: pw });
+    assert(e1 && !s1.session, "banned user cannot sign in");
+    const { count: aud } = await svc.from("audit_log").select("*", { count: "exact", head: true })
+      .eq("action", "account_suspended").eq("target_id", tutor.id).eq("actor_id", admin.id);
+    assertEquals(aud, 1);
+    assertEquals((await act(admin.token, "suspend", tutor.id)).status, 409);
+
+    const back = await act(admin.token, "reactivate", tutor.id);
+    assertEquals(back.status, 200);
+    assertEquals(await status(svc, tutor.id), "active");
+    const { data: s2, error: e2 } = await anon().auth.signInWithPassword({ email: tutor.email, password: pw });
+    assertEquals(e2, null);
+    assert(s2.session);
+    assertEquals((await act(admin.token, "reactivate", tutor.id)).status, 409);
+
+    // A suspended admin's existing session no longer reads other users' profiles.
+    const owner = track(await createTestUser(svc, { role: "owner", status: "active" }));
+    const before = await admin.client.from("profiles").select("id").eq("id", tutor.id);
+    assertEquals(before.data!.length, 1);
+    assertEquals((await act(owner.token, "suspend", admin.id)).status, 200);
+    const after = await admin.client.from("profiles").select("id").eq("id", tutor.id);
+    assertEquals(after.data!.length, 0);
+    // ...and the Edge Function refuses it (the ban invalidates the token: 401, or 403 from the status check).
+    const denied = (await act(admin.token, "suspend", tutor.id)).status;
+    assert(denied === 401 || denied === 403, `suspended admin refused (got ${denied})`);
+  });
+});
+
+Deno.test("account-admin: reactivated students land on active / profile_incomplete / pending", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const a = track(await createTestUser(svc, { role: "student", status: "active" }));
+    const b = track(await createTestUser(svc, { role: "student", status: "active" }));
+    const c = track(await createTestUser(svc, { role: "student", status: "pending" }));
+    const { data: subj } = await svc.from("subjects").select("id").limit(1).single();
+    await svc.from("student_subjects").insert({ student_id: a.id, subject_id: subj!.id });
+    await svc.from("student_details").update({ index_number: `SE-2098-${Math.floor(1000 + Math.random() * 8999)}` }).eq("profile_id", a.id);
+    await svc.from("student_details").update({ index_number: `SE-2097-${Math.floor(1000 + Math.random() * 8999)}` }).eq("profile_id", b.id);
+    for (const u of [a, b, c]) assertEquals((await act(admin.token, "suspend", u.id)).status, 200);
+    for (const u of [a, b, c]) assertEquals((await act(admin.token, "reactivate", u.id)).status, 200);
+    assertEquals(await status(svc, a.id), "active");
+    assertEquals(await status(svc, b.id), "profile_incomplete");
+    assertEquals(await status(svc, c.id), "pending");
+  });
+});
+
+Deno.test("account-admin: forbidden combinations and 404", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const owner = track(await createTestUser(svc, { role: "owner", status: "active" }));
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const admin2 = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const tutor = track(await createTestUser(svc, { role: "tutor", status: "active" }));
+    for (const action of ["suspend", "reactivate", "remove_staff"]) {
+      assertEquals((await act(admin.token, action, admin.id)).status, 403, `admin self ${action}`);
+      assertEquals((await act(owner.token, action, owner.id)).status, 403, `owner self ${action}`);
+      assertEquals((await act(admin.token, action, owner.id)).status, 403, `admin on owner ${action}`);
+      assertEquals((await act(owner.token, action, owner.id)).status, 403, `owner on owner ${action}`);
+      assertEquals((await act(admin.token, action, admin2.id)).status, 403, `admin on admin ${action}`);
+      const u = await act(admin.token, action, crypto.randomUUID());
+      assertEquals(u.status, 404, `unknown ${action}`);
+      assertEquals(u.json.error.code, "not_found");
+    }
+    // Non-admins never reach the actions.
+    assertEquals((await act(tutor.token, "suspend", admin.id)).status, 403);
+    assertEquals(await status(svc, admin2.id), "active");
+    assertEquals(await status(svc, owner.id), "active");
+  });
+});
+
+Deno.test("account-admin: remove_staff - admin removes tutor, not admin; owner removes admin; students refused", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const owner = track(await createTestUser(svc, { role: "owner", status: "active" }));
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const admin2 = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const tutor = track(await createTestUser(svc, { role: "tutor", status: "active" }));
+    const student = track(await createTestUser(svc, { role: "student", status: "active" }));
+
+    const r = await act(admin.token, "remove_staff", tutor.id);
+    assertEquals(r.status, 200);
+    assertEquals(r.json, { removed: true });
+    assert(await userGone(svc, tutor.id));
+    const { count } = await svc.from("audit_log").select("*", { count: "exact", head: true })
+      .eq("action", "staff_removed").eq("target_id", tutor.id).eq("actor_id", admin.id).eq("target_type", "profile");
+    assertEquals(count, 1);
+
+    assertEquals((await act(admin.token, "remove_staff", admin2.id)).status, 403);
+    assert(!(await userGone(svc, admin2.id)));
+    const conflict = await act(admin.token, "remove_staff", student.id);
+    assertEquals(conflict.status, 409);
+    assertEquals(conflict.json.error.code, "conflict");
+    assert(!(await userGone(svc, student.id)));
+
+    assertEquals((await act(owner.token, "remove_staff", admin2.id)).status, 200);
+    assert(await userGone(svc, admin2.id));
+  });
+});
+
+Deno.test("account-admin: clear_stuck_invite removes a crafted shell + invite, never a genuine student", async () => {
+  await withScenario(async ({ svc, track, parentEmail }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const owner = track(await createTestUser(svc, { role: "owner", status: "active" }));
+    const clear = (token: string, email: string) => post("account-admin", token, { action: "clear_stuck_invite", email });
+
+    // Crafted token-bearing shell + parent invite.
+    const { error: iErr } = await svc.from("pending_invites").insert({ email: parentEmail, role: "parent" });
+    assertEquals(iErr, null);
+    const { data: inv } = await svc.from("pending_invites").select("token").eq("email", parentEmail).single();
+    const { data: made, error: cErr } = await svc.auth.admin.createUser({
+      email: parentEmail, email_confirm: true, app_metadata: { invite_token: inv!.token },
+    });
+    assertEquals(cErr, null);
+    const shellId = made.user!.id;
+
+    assertEquals((await clear(admin.token, "nobody-" + parentEmail)).status, 404);
+    const r = await clear(admin.token, parentEmail.toUpperCase());
+    assertEquals(r.status, 200);
+    const { count: left } = await svc.from("pending_invites").select("*", { count: "exact", head: true }).eq("email", parentEmail);
+    assertEquals(left, 0);
+    assert(await userGone(svc, shellId));
+    const { count: aud } = await svc.from("audit_log").select("*", { count: "exact", head: true })
+      .eq("action", "invite_cleared").eq("actor_id", admin.id).is("target_id", null);
+    assertEquals(aud, 1);
+
+    // A genuine pending student with the invite's email (no token): the invite goes, the student stays.
+    const real = track(await pendingStudent(svc, `p-${crypto.randomUUID()}@example.test`));
+    try {
+      await svc.from("pending_invites").insert({ email: real.email, role: "parent" });
+      assertEquals((await clear(admin.token, real.email)).status, 200);
+      assert(!(await userGone(svc, real.id)), "genuine student untouched");
+    } finally {
+      await svc.from("pending_invites").delete().eq("email", real.email);
+    }
+
+    // Staff invites: admin 403 (invite kept), owner 200.
+    await svc.from("pending_invites").insert({ email: parentEmail, role: "tutor" });
+    assertEquals((await clear(admin.token, parentEmail)).status, 403);
+    const { count: kept } = await svc.from("pending_invites").select("*", { count: "exact", head: true }).eq("email", parentEmail);
+    assertEquals(kept, 1);
+    assertEquals((await clear(owner.token, parentEmail)).status, 200);
   });
 });

@@ -17,11 +17,13 @@ export function serviceClient(): SupabaseClient {
 
 /**
  * Verifies the caller's JWT, then reads role and status from `profiles`
- * (never from JWT claims or the request body). Non-active accounts are refused.
+ * (never from JWT claims or the request body). Non-active accounts are refused unless
+ * `opts.anyStatus` is set (self-service deletion must work in every status).
  */
 export async function requireCaller(
   req: Request,
   allowed: AppRole[],
+  opts: { anyStatus?: boolean } = {},
 ): Promise<{ id: string; role: AppRole }> {
   const header = req.headers.get("Authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(header);
@@ -38,7 +40,7 @@ export async function requireCaller(
     .maybeSingle();
   if (pErr) throw new Error(`profile lookup failed: ${pErr.message}`);
 
-  if (!profile || profile.status !== "active" || !allowed.includes(profile.role as AppRole)) {
+  if (!profile || (!opts.anyStatus && profile.status !== "active") || !allowed.includes(profile.role as AppRole)) {
     throw new HttpError("forbidden", 403, "You do not have permission to do this.");
   }
   return { id: data.user.id, role: profile.role as AppRole };

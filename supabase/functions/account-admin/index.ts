@@ -151,6 +151,54 @@ async function resendInvite(svc: SupabaseClient, caller: { id: string; role: App
   return out.response;
 }
 
+/** Suspend or reactivate. The SQL function does the state change and its audit row in one transaction. */
+async function setStatus(svc: SupabaseClient, caller: { id: string }, userId: string, action: "suspend" | "reactivate") {
+  const { data, error } = await svc.rpc("set_account_status_tx", { p_target: userId, p_actor: caller.id, p_action: action });
+  if (error) throw new Error(`set_account_status_tx failed: ${error.code ?? "unknown"}`);
+  mapTxResult(data);
+  const { error: bErr } = await svc.auth.admin.updateUserById(userId, {
+    ban_duration: action === "suspend" ? "876000h" : "none",
+  });
+  if (bErr) {
+    console.error("ban update failed:", bErr.status ?? "unknown");
+    throw new HttpError(
+      "internal",
+      500,
+      action === "suspend"
+        ? "Account suspended but sign-in block failed; retry."
+        : "Account reactivated but sign-in unblock failed; ask an owner to retry.",
+    );
+  }
+  return jsonResponse({ status: data });
+}
+
+function mapTxResult(r: unknown): void {
+  if (r === "forbidden") throw new HttpError("forbidden", 403, "You do not have permission to do this.");
+  if (r === "not_found") throw new HttpError("not_found", 404, "Account not found.");
+  if (r === "conflict") throw CONFLICT("This account cannot be changed in its current state.");
+}
+
+async function removeStaff(svc: SupabaseClient, caller: { id: string }, userId: string) {
+  const { data, error } = await svc.rpc("remove_staff_tx", { p_target: userId, p_actor: caller.id });
+  if (error) throw new Error(`remove_staff_tx failed: ${error.code ?? "unknown"}`);
+  mapTxResult(data);
+  if (data !== "removed") throw new Error("unexpected remove_staff_tx result");
+  return jsonResponse({ removed: true });
+}
+
+async function clearStuckInvite(svc: SupabaseClient, caller: { id: string }, rawEmail: unknown) {
+  const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+  if (!email || email.length > 320 || !email.includes("@")) {
+    throw new HttpError("invalid_input", 400, "email must be a valid address.");
+  }
+  const { data, error } = await svc.rpc("clear_invite_tx", { p_email: email, p_actor: caller.id });
+  if (error) throw new Error(`clear_invite_tx failed: ${error.code ?? "unknown"}`);
+  if (data === "not_found") throw new HttpError("not_found", 404, "No pending invite for that email.");
+  mapTxResult(data);
+  if (data !== "cleared") throw new Error("unexpected clear_invite_tx result");
+  return jsonResponse({ cleared: true });
+}
+
 Deno.serve(handle(async (req) => {
   if (req.method !== "POST") throw new HttpError("invalid_input", 405, "Use POST.");
   const caller = await requireCaller(req, ["owner", "admin"]);
@@ -163,15 +211,22 @@ Deno.serve(handle(async (req) => {
   } catch {
     throw new HttpError("invalid_input", 400, "Invalid request body.");
   }
+
+  const svc = serviceClient();
+  if (body.action === "clear_stuck_invite") return await clearStuckInvite(svc, caller, body.email);
+
   const userId = body.userId;
   if (typeof userId !== "string" || !UUID.test(userId)) {
     throw new HttpError("invalid_input", 400, "userId must be a valid id.");
   }
-
-  const svc = serviceClient();
   switch (body.action) {
     case "resend_invite":
       return await resendInvite(svc, caller, userId);
+    case "suspend":
+    case "reactivate":
+      return await setStatus(svc, caller, userId, body.action);
+    case "remove_staff":
+      return await removeStaff(svc, caller, userId);
     default:
       throw new HttpError("invalid_input", 400, "Unknown action.");
   }
