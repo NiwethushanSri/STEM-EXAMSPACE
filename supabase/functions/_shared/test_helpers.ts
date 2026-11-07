@@ -1,0 +1,63 @@
+// Test-only helpers (not a *.test.ts file, so it is not collected as a test).
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+export function env(name: string): string {
+  const v = Deno.env.get(name);
+  if (!v) throw new Error(`missing env ${name}`);
+  return v;
+}
+
+export const service = (): SupabaseClient =>
+  createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+export const anon = (): SupabaseClient =>
+  createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+
+export interface TestUser {
+  id: string;
+  email: string;
+  client: SupabaseClient; // anon client signed in as this user
+  token: string;
+}
+
+export async function createTestUser(
+  svc: SupabaseClient,
+  opts: { role?: string; status?: string; metadata?: Record<string, unknown> } = {},
+): Promise<TestUser> {
+  const email = `t6-${crypto.randomUUID()}@example.test`;
+  const password = `Pw-${crypto.randomUUID()}`;
+  const { data, error } = await svc.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: opts.metadata ?? {},
+  });
+  if (error || !data.user) throw new Error(`createUser failed: ${error?.message}`);
+  const id = data.user.id;
+  try {
+    if (opts.role || opts.status) {
+      const patch: Record<string, string> = {};
+      if (opts.role) patch.role = opts.role;
+      if (opts.status) patch.status = opts.status;
+      const { error: e } = await svc.from("profiles").update(patch).eq("id", id);
+      if (e) throw new Error(`profile update failed: ${e.message}`);
+    }
+    const client = anon();
+    const { data: s, error: se } = await client.auth.signInWithPassword({ email, password });
+    if (se || !s.session) throw new Error(`sign in failed: ${se?.message}`);
+    return { id, email, client, token: s.session.access_token };
+  } catch (err) {
+    await svc.auth.admin.deleteUser(id);
+    throw err;
+  }
+}
+
+export async function deleteUsers(svc: SupabaseClient, users: TestUser[]): Promise<void> {
+  for (const u of users) {
+    await svc.auth.admin.deleteUser(u.id);
+  }
+}

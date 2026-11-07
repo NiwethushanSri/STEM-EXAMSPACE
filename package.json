@@ -8,7 +8,8 @@
   "scripts": {
     "db:push": "supabase db push --remote --yes",
     "db:reset": "supabase db reset --remote --yes",
-    "db:test": "node scripts/db-test.mjs"
+    "db:test": "node scripts/db-test.mjs",
+    "fn:test": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local supabase/functions"
   },
   "devDependencies": {
     "supabase": "^3.0.0"
