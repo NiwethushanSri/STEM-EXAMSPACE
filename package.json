@@ -6,9 +6,9 @@
     "packages/*"
   ],
   "scripts": {
-    "db:push": "supabase db push --remote",
-    "db:reset": "supabase db reset --remote",
-    "db:test": "supabase test db --remote"
+    "db:push": "supabase db push --remote --yes",
+    "db:reset": "supabase db reset --remote --yes",
+    "db:test": "node scripts/db-test.mjs"
   },
   "devDependencies": {
     "supabase": "^3.0.0"
