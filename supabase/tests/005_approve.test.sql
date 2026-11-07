@@ -181,6 +181,9 @@ select is(public.claim_parent_invite((select id from o where name = 'shell'),
   (select token from public.pending_invites where email = 'orphan.parent@example.com'), 'orphan.parent@example.com'), 'claimed', 'shell is then claimed');
 update public.profiles set email = 'real.student@example.com' where id = (select id from o where name = 'real');
 update public.student_details set signup_parent_email = 'real.student@example.com' where profile_id = (select id from u where name = 's11');
+-- A parent invite exists for that email and the student carries a wrong invite_token: still not a shell.
+insert into public.pending_invites (email, role) values ('real.student@example.com', 'parent');
+update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', gen_random_uuid()::text) where id = (select id from o where name = 'real');
 select throws_ok(
   format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's11'), (select id from u where name = 'admin')),
   'P0001', 'parent_email_is_staff', 'genuine student with that email still raises parent_email_is_staff');

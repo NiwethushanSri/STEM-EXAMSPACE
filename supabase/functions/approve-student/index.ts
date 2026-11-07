@@ -108,14 +108,23 @@ Deno.serve(handle(async (req) => {
       // GoTrue writes app_metadata after the insert, so the sign-up trigger cannot apply the invite.
       const uid = created.user.id;
       let r = await claim(uid, token);
+      let unknown = false;
       if (r === "error") {
-        // Transport failure: never delete a user that is now a parent.
-        const { data: now } = await svc.from("profiles").select("role").eq("id", uid).maybeSingle();
-        if (now?.role === "parent") r = "claimed";
+        // Transport failure: find out what state the account is in before touching anything.
+        const { data: now, error: rErr } = await svc.from("profiles").select("role").eq("id", uid).maybeSingle();
+        if (rErr || !now) {
+          unknown = true;
+          console.error("claim state unknown for", uid, rErr?.code ?? "no row");
+        } else if (now.role === "parent") {
+          r = "claimed";
+        }
       }
       if (r === "claimed" || r === "already") {
         parentId = uid;
         parentInvited = r === "claimed";
+      } else if (unknown) {
+        // Leave the shell and invite for the next approval to heal.
+        parentId = null;
       } else {
         console.error("parent invite claim failed");
         await dropUser(uid);
@@ -158,7 +167,6 @@ Deno.serve(handle(async (req) => {
         parentId = null;
       }
     }
-
 
     if (parentId) {
       const { error: lErr } = await svc.from("parent_children")
