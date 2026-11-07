@@ -1,55 +1,72 @@
 // Docker-free pgTAP runner for the linked hosted dev project (bare --remote only).
-// `supabase db query` returns only the last statement's rows, so each top-level
-// `select ...` assertion in a test file is rewritten to `insert into _out ...`
-// and the final `select * from finish();` is replaced by a summary query.
+// Test files run unmodified except that the trailing `select * from finish(); rollback;`
+// is replaced by an epilogue that reads pgTAP's own state (plan, tests run, failures)
+// in one result query. `supabase db query` returns only the last statement's rows.
+// helpers.sql (if present) is injected right after each file's first `begin;`.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const dir = 'supabase/tests';
-const helpers = existsSync(join(dir, 'helpers.sql')) ? readFileSync(join(dir, 'helpers.sql'), 'utf8') : '';
-const files = readdirSync(dir).filter((f) => f.endsWith('.test.sql')).sort();
+const dir = process.env.DB_TEST_DIR || 'supabase/tests';
+const helpersPath = join(dir, 'helpers.sql');
+const helpers = existsSync(helpersPath) ? readFileSync(helpersPath, 'utf8') : '';
+const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.test.sql')).sort() : [];
+if (files.length === 0) {
+  console.log(`FAIL no *.test.sql files found in ${dir}`);
+  process.exit(1);
+}
+
 const tmp = mkdtempSync(join(tmpdir(), 'dbtest-'));
 let failed = false;
 
-for (const f of files) {
-  const src = readFileSync(join(dir, f), 'utf8');
-  const planned = Number(/select\s+plan\(\s*(\d+)\s*\)/i.exec(src)?.[1] ?? NaN);
-  let sql = src
-    .replace(/^select\s+plan\(.*$/im, (m) => `${m}\ncreate temp table _out(n serial, t text);`)
-    .replace(/^select\s+(?!plan\(|\*\s+from\s+finish)/gim, 'insert into _out(t) select ')
-    .replace(
-      /^select\s+\*\s+from\s+finish\(\s*\)\s*;/im,
-      `select (select count(*) from _out where t like 'ok%')::int as ok,
-              (select count(*) from _out where t like 'not ok%')::int as bad,
-              (select count(*) from _out)::int as total,
-              (select coalesce(string_agg(t, E'\n' order by n), '') from _out where t like 'not ok%') as lines;`,
-    );
-  const tmpFile = join(tmp, f);
-  writeFileSync(tmpFile, helpers ? `${helpers}\n${sql}` : sql);
-  const r = spawnSync('npx', ['supabase', 'db', 'query', '--remote', '--yes', '-f', tmpFile], {
+function run(sqlText, name) {
+  const p = join(tmp, name);
+  writeFileSync(p, sqlText);
+  const r = spawnSync('npx', ['supabase', 'db', 'query', '--remote', '--yes', '-f', p], {
     encoding: 'utf8', shell: true,
   });
   const out = (r.stdout ?? '') + (r.stderr ?? '');
-  let row;
+  let rows;
   try {
-    const json = out.slice(out.indexOf('{\n'), out.lastIndexOf('}') + 1);
-    row = JSON.parse(json).rows?.[0];
-  } catch { /* handled below */ }
-  if (r.status !== 0 || !row || row.ok === undefined) {
+    rows = JSON.parse(out.slice(out.indexOf('{\n'), out.lastIndexOf('}') + 1)).rows;
+  } catch { /* leave undefined */ }
+  return { status: r.status, out, rows };
+}
+
+const epilogue = `
+reset role;
+select _get('plan') as planned, _get('curr_test') as ran, num_failed() as bad;
+rollback;
+`;
+
+for (const f of files) {
+  let src = readFileSync(join(dir, f), 'utf8');
+  src = src.replace(/select\s+\*\s+from\s+finish\(\s*\)\s*;[\s\S]*$/i, '');
+  if (helpers) src = src.replace(/\bbegin\s*;/i, (m) => `${m}\n${helpers}\n`);
+  const r = run(src + epilogue, f);
+  const row = r.rows?.[0];
+  if (r.status !== 0 || !row || row.ran === undefined) {
     failed = true;
-    console.log(`FAIL ${f} (error running SQL)`);
-    console.log(out.trim());
+    console.log(`FAIL ${f} (SQL or CLI error)`);
+    console.log(r.out.trim());
     continue;
   }
-  const good = row.bad === 0 && row.ok === planned && row.total === planned;
-  if (good) {
-    console.log(`PASS ${f} (${row.ok}/${planned})`);
-  } else {
-    failed = true;
-    console.log(`FAIL ${f} (${row.ok}/${planned} ok, ${row.bad} not ok, ${row.total} run)`);
-    if (row.lines) console.log(row.lines.replace(/\r/g, ''));
+  const { planned, ran, bad } = row;
+  if (planned != null && ran === planned && bad === 0) {
+    console.log(`PASS ${f} (${ran - bad}/${planned})`);
+    continue;
+  }
+  failed = true;
+  console.log(`FAIL ${f} (planned ${planned ?? 'none'}, ran ${ran}, failed ${bad})`);
+  if (bad > 0) {
+    // Display only: re-run with assertions captured to name the failing ones.
+    const detail = src
+      .replace(/^(\s*select\s+plan\(.*)$/im, '$1\ncreate temp table _out(n serial, t text);')
+      .replace(/^select\s+(?!plan\()/gim, 'insert into _out(t) select ');
+    const d = run(detail + `\nreset role;\nselect coalesce(string_agg(t, E'\n' order by n), '') as lines from _out where t like 'not ok%';\nrollback;\n`, 'd-' + f);
+    const lines = d.rows?.[0]?.lines;
+    console.log(lines ? lines.replace(/\r/g, '') : '(failing assertion names unavailable; see failed count above)');
   }
 }
 rmSync(tmp, { recursive: true, force: true });
