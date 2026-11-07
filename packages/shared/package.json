@@ -13,5 +13,8 @@
   "devDependencies": {
     "typescript": "^5",
     "vitest": "^3"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.119.0"
   }
 }
