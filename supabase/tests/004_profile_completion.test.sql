@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(34);
+select plan(35);
 
 create temp table u (name text primary key, id uuid not null);
 insert into u values
@@ -135,6 +135,8 @@ select tests.as_user((select id from u where name = 'c'));
 select lives_ok(
   format($q$update storage.objects set metadata = '{"x":1}' where bucket_id = 'student-photos' and name = %L$q$, (select id from u where name = 'c') || '/photo.jpg'),
   'student can update own object');
+select tests.as_postgres();
+select is((select metadata->>'x' from storage.objects where bucket_id = 'student-photos' and name = (select id from u where name = 'c') || '/photo.jpg'), '1', 'own object update took effect');
 select tests.as_postgres();
 
 select * from finish();
