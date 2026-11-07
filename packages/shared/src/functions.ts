@@ -1,6 +1,6 @@
 import type { ErrorCode } from "./errors";
 import { messageFor } from "./errors";
-import type { AppRole } from "./roles";
+import type { AccountStatus, AppRole } from "./roles";
 import type { StemClient } from "./supabase";
 
 export type FunctionName =
@@ -15,18 +15,30 @@ export type FunctionName =
 export type FunctionError = { code: ErrorCode; message: string };
 export type FunctionResult<T> = { data: T } | { error: FunctionError };
 
-const CODES: readonly string[] = [
+const CODES = [
   "unauthenticated", "forbidden", "not_found", "conflict", "invalid_input",
   "parent_email_is_staff", "email_in_use", "rate_limited", "invalid_credentials", "internal",
-];
+] as const satisfies readonly ErrorCode[];
+
+// Compile-time check: every ErrorCode must appear in CODES (resolves to never otherwise).
+type MissingCodes = Exclude<ErrorCode, (typeof CODES)[number]>;
+const _allCodesListed: [MissingCodes] extends [never] ? true : never = true;
+void _allCodesListed;
 
 function internal(): { error: FunctionError } {
   return { error: { code: "internal", message: messageFor("internal") } };
 }
 
+function fromStatus(status: unknown): { error: FunctionError } {
+  const code: ErrorCode =
+    status === 401 ? "unauthenticated" : status === 403 ? "forbidden" : status === 429 ? "rate_limited" : "internal";
+  return { error: { code, message: messageFor(code) } };
+}
+
 /**
  * Invokes an Edge Function with the client's session. Never throws: HTTP errors are parsed from the
- * `{ error: { code, message } }` body; network or unparseable failures become `internal`.
+ * `{ error: { code, message } }` body; gateway failures without a code map by HTTP status
+ * (401/403/429); network or unparseable failures become `internal`.
  */
 export async function callFunction<T>(
   client: StemClient,
@@ -36,13 +48,16 @@ export async function callFunction<T>(
   try {
     const { data, error } = await client.functions.invoke(name, { body });
     if (!error) return { data: data as T };
-    const ctx = (error as { context?: unknown }).context;
-    if (ctx instanceof Response) {
+    // Duck-typed: React Native fetch polyfills may use a different Response class.
+    const ctx = (error as { context?: { json?: unknown; status?: unknown } | null }).context;
+    if (ctx && typeof ctx.json === "function") {
       try {
-        const parsed = (await ctx.json()) as { error?: { code?: unknown; message?: unknown } };
+        const parsed = (await (ctx as { json: () => Promise<unknown> }).json()) as {
+          error?: { code?: unknown; message?: unknown };
+        } | null;
         const code = parsed?.error?.code;
-        if (typeof code === "string" && CODES.includes(code)) {
-          const message = parsed.error?.message;
+        if (typeof code === "string" && (CODES as readonly string[]).includes(code)) {
+          const message = parsed?.error?.message;
           return {
             error: {
               code: code as ErrorCode,
@@ -51,8 +66,9 @@ export async function callFunction<T>(
           };
         }
       } catch {
-        // fall through to internal
+        // body unreadable: fall back to the status below
       }
+      return fromStatus(ctx.status);
     }
     return internal();
   } catch {
@@ -100,7 +116,7 @@ export type ParentLinkOutcome = {
 export type AccountAdminResult<A extends AccountAdminAction["action"]> = A extends "resend_invite"
   ? { emailSent: boolean } | ParentLinkOutcome
   : A extends "suspend" | "reactivate"
-    ? { status: string }
+    ? { status: AccountStatus }
     : A extends "remove_staff"
       ? { removed: true }
       : A extends "delete_account"
