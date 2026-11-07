@@ -1,5 +1,26 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { anon, childBody, confirm, createTestUser, idByEmail, pc, post, profileOf, userGone, withScenario } from "./_helpers.ts";
+import { anon, childBody, createTestUser, idByEmail, pc, post, profileOf, userGone, withScenario } from "./_helpers.ts";
+
+/** The real path: a recovery token verified by a fresh anon client, then the child chooses a password. */
+async function setupViaLink(svc: ReturnType<typeof import("./_helpers.ts").service>, id: string, email: string) {
+  const { data: gl, error: glErr } = await svc.auth.admin.generateLink({ type: "recovery", email });
+  assertEquals(glErr, null);
+  const hashed = gl!.properties!.hashed_token;
+  assert(hashed, "hashed_token present");
+  const client = anon();
+  const { data: v, error: vErr } = await client.auth.verifyOtp({ type: "recovery", token_hash: hashed });
+  assertEquals(vErr, null, "recovery token verifies");
+  assert(v.session, "verify returns a session");
+  const { data: au } = await svc.auth.admin.getUserById(id);
+  assert(au.user?.email_confirmed_at, "email_confirmed_at is set by verifying the link");
+  assertEquals((await profileOf(svc, id))!.status, "pending", "trigger moved the child to pending");
+  const password = `Child-${crypto.randomUUID()}`;
+  const { error: upErr } = await client.auth.updateUser({ password });
+  assertEquals(upErr, null, "child can set a password on the link session");
+  const { data: si, error: siErr } = await anon().auth.signInWithPassword({ email, password });
+  assertEquals(siErr, null);
+  assert(si.session, "child signs in with the chosen password");
+}
 
 Deno.test("parent-child register: parent registers child -> unconfirmed, confirm -> pending, approve links; reject removes", async () => {
   await withScenario(async ({ svc, track, childEmail }) => {
@@ -38,7 +59,7 @@ Deno.test("parent-child register: parent registers child -> unconfirmed, confirm
     const { data: seen } = await parent.client.from("profiles").select("id").eq("id", cid!);
     assertEquals((seen ?? []).length, 0);
 
-    await confirm(svc, cid!);
+    await setupViaLink(svc, cid!, e1);
     assertEquals((await profileOf(svc, cid!))!.status, "pending");
     const { data: seen2 } = await parent.client.from("profiles").select("id").eq("id", cid!);
     assertEquals((seen2 ?? []).length, 0, "pending child still invisible to the parent");
@@ -54,7 +75,7 @@ Deno.test("parent-child register: parent registers child -> unconfirmed, confirm
     const e2 = childEmail();
     assertEquals((await pc(parent.token, { action: "register", child: childBody(e2) })).status, 200);
     const cid2 = (await idByEmail(svc, e2))!;
-    await confirm(svc, cid2);
+    await setupViaLink(svc, cid2, e2);
     const rej = await post("reject-student", admin.token, { studentId: cid2 });
     assertEquals(rej.status, 200);
     assert(await userGone(svc, cid2));
