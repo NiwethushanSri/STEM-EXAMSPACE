@@ -197,6 +197,7 @@ Card payments happen on the web site only. The iOS app shows booking status but 
 ### 9.4 Mobile (`apps/mobile`)
 
 - Expo, expo-router, supabase-js with session stored in expo-secure-store.
+- Platform-native look (owner decision, 2026-11-07): iPhone follows Apple's Human Interface Guidelines and Android follows Material 3. One codebase; navigation uses expo-router native stack/tabs; controls use `@expo/ui` (SwiftUI on iOS, Jetpack Compose on Android); platform icons (SF Symbols on iOS, Material Symbols on Android); platform alerts/sheets vs dialogs/snackbars. Screens share logic; where layout differs, use `.ios.tsx` / `.android.tsx` files.
 - Screens: sign in (email or index number), register, forgot password, status screens, profile completion, a placeholder home ("Your dashboard is coming soon" plus name and index number), settings with sign out and delete account.
 - Parent: sign in from invite, placeholder home listing linked children.
 - Runs in Expo Go / development builds; store builds are Part 5.
