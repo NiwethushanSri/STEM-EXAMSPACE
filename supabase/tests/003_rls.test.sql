@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(80);
+select plan(87);
 
 -- Fixtures (as postgres).
 create temp table u (name text primary key, id uuid not null);
@@ -116,9 +116,15 @@ select throws_ok($$delete from public.audit_log$$, '42501', null, 'admin cannot 
 select throws_ok($$insert into public.audit_log (action) values ('x')$$, '42501', null, 'admin cannot insert audit_log directly');
 select lives_ok($$insert into public.subjects (name, kind) values ('Statistics', 'school')$$, 'admin can insert subjects');
 select lives_ok($$update public.subjects set active = false where name = 'Statistics'$$, 'admin can update subjects');
+select tests.as_postgres();
+select is((select active from public.subjects where name = 'Statistics'), false, 'admin subjects update took effect');
+select tests.as_user((select id from u where name = 'admin'));
 select throws_ok($$delete from public.subjects where name = 'Statistics'$$, '42501', null, 'admin cannot delete subjects');
 select lives_ok($$insert into public.parent_children values ((select id from u where name = 'parent'), (select id from u where name = 'stu2'))$$, 'admin can write parent_children');
 select lives_ok($$delete from public.tutor_students where tutor_id = (select id from u where name = 'tutor2')$$, 'admin can delete tutor_students');
+select tests.as_postgres();
+select is((select count(*)::int from public.tutor_students where tutor_id = (select id from u where name = 'tutor2')), 0, 'admin tutor_students delete took effect');
+select tests.as_user((select id from u where name = 'admin'));
 select throws_ok($$update public.profiles set first_name = 'x'$$, '42501', null, 'admin cannot write profiles directly');
 select is(public.my_role()::text, 'admin', 'my_role is admin');
 select is(public.is_staff_admin(), true, 'active admin is staff admin');
@@ -143,6 +149,19 @@ select throws_ok($$insert into public.subjects (name, kind) values ('Nope', 'sch
 select is(public.my_role()::text, null, 'my_role is null for suspended user');
 select is(public.is_staff_admin(), false, 'suspended admin is not staff admin');
 reset role;
+
+-- Closed default privileges for new objects, and pending_invites for authenticated.
+set local role postgres;
+create table public.scratch_t (id int);
+create function public.scratch_f() returns int language sql as 'select 1';
+reset role;
+select is(has_table_privilege('authenticated', 'public.scratch_t', 'select'), false, 'new public table is closed to authenticated');
+select is(has_table_privilege('anon', 'public.scratch_t', 'select'), false, 'new public table is closed to anon');
+select is(has_function_privilege('authenticated', 'public.scratch_f()', 'execute'), false, 'new public function is closed to authenticated');
+select is(has_function_privilege('anon', 'public.scratch_f()', 'execute'), false, 'new public function is closed to anon');
+select tests.as_user((select id from u where name = 'stu1'));
+select throws_ok($$select count(*) from public.pending_invites$$, '42501', null, 'authenticated cannot read pending_invites');
+select tests.as_postgres();
 
 -- Anon: no privileges on any table.
 select set_config('request.jwt.claims', '', true);

@@ -41,3 +41,6 @@ begin
   reset role;
 end;
 $$;
+
+grant usage on schema tests to anon, authenticated;
+grant execute on function tests.as_postgres() to anon, authenticated;

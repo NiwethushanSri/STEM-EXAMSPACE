@@ -116,3 +116,10 @@ using (tutor_id = (select auth.uid()));
 -- audit_log: owner/admin read; inserts come from server code (service role); nobody updates or deletes.
 create policy audit_log_select on public.audit_log for select to authenticated
 using ((select public.is_staff_admin()));
+
+-- Every future public table, sequence and function starts closed; grant explicitly per object.
+alter default privileges for role postgres in schema public revoke all on tables from anon, authenticated;
+alter default privileges for role postgres in schema public revoke all on sequences from anon, authenticated;
+alter default privileges for role postgres in schema public revoke execute on functions from public, anon, authenticated;
+-- PUBLIC's implicit EXECUTE can only be removed by the database-wide (not per-schema) default.
+alter default privileges for role postgres revoke execute on functions from public;
