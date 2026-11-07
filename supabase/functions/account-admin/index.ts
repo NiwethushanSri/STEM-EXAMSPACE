@@ -1,5 +1,6 @@
 import { type AppRole, requireCaller, serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
+import { removePhoto } from "../_shared/photos.ts";
 import { writeAudit } from "../_shared/audit.ts";
 import {
   clearInviteToken,
@@ -151,25 +152,51 @@ async function resendInvite(svc: SupabaseClient, caller: { id: string; role: App
   return out.response;
 }
 
-/** Suspend or reactivate. The SQL function does the state change and its audit row in one transaction. */
+const STAFF = ["admin", "teacher", "tutor", "corrector"];
+
+async function targetRole(svc: SupabaseClient, id: string): Promise<AppRole | null> {
+  const { data, error } = await svc.from("profiles").select("role").eq("id", id).maybeSingle();
+  if (error) throw new Error(`profile lookup failed: ${error.code ?? "unknown"}`);
+  return (data?.role as AppRole | undefined) ?? null;
+}
+
+/**
+ * Suspend or reactivate. The SQL function authorises, changes state and audits in one transaction; it is
+ * idempotent ('already_*' results), so a retry after a failed Auth ban change repairs it. Only staff are
+ * Auth-banned: students and parents are suspended by status alone so they can still delete themselves.
+ */
 async function setStatus(svc: SupabaseClient, caller: { id: string }, userId: string, action: "suspend" | "reactivate") {
   const { data, error } = await svc.rpc("set_account_status_tx", { p_target: userId, p_actor: caller.id, p_action: action });
   if (error) throw new Error(`set_account_status_tx failed: ${error.code ?? "unknown"}`);
-  mapTxResult(data);
-  const { error: bErr } = await svc.auth.admin.updateUserById(userId, {
-    ban_duration: action === "suspend" ? "876000h" : "none",
-  });
-  if (bErr) {
-    console.error("ban update failed:", bErr.status ?? "unknown");
-    throw new HttpError(
-      "internal",
-      500,
-      action === "suspend"
-        ? "Account suspended but sign-in block failed; retry."
-        : "Account reactivated but sign-in unblock failed; ask an owner to retry.",
-    );
+  if (data !== "already_suspended" && data !== "already_active") mapTxResult(data);
+
+  const role = await targetRole(svc, userId);
+  if (role && STAFF.includes(role)) {
+    const { error: bErr } = await svc.auth.admin.updateUserById(userId, {
+      ban_duration: action === "suspend" ? "876000h" : "none",
+    });
+    if (bErr) {
+      console.error("ban update failed:", bErr.status ?? "unknown");
+      throw new HttpError(
+        "internal",
+        500,
+        action === "suspend"
+          ? "Account suspended but sign-in block failed; retry."
+          : "Account reactivated but sign-in unblock failed; retry.",
+      );
+    }
   }
-  return jsonResponse({ status: data });
+  return jsonResponse({ status: data === "already_suspended" ? "suspended" : data === "already_active" ? "active" : data });
+}
+
+async function deleteAccount(svc: SupabaseClient, caller: { id: string }, userId: string) {
+  const role = await targetRole(svc, userId);
+  if ((role === "student" || role === "parent") && userId !== caller.id) await removePhoto(svc, userId);
+  const { data, error } = await svc.rpc("delete_account_tx", { p_target: userId, p_actor: caller.id });
+  if (error) throw new Error(`delete_account_tx failed: ${error.code ?? "unknown"}`);
+  mapTxResult(data);
+  if (data !== "deleted") throw new Error("unexpected delete_account_tx result");
+  return jsonResponse({ deleted: true });
 }
 
 function mapTxResult(r: unknown): void {
@@ -179,6 +206,8 @@ function mapTxResult(r: unknown): void {
 }
 
 async function removeStaff(svc: SupabaseClient, caller: { id: string }, userId: string) {
+  const role = await targetRole(svc, userId);
+  if (role && STAFF.includes(role) && userId !== caller.id) await removePhoto(svc, userId);
   const { data, error } = await svc.rpc("remove_staff_tx", { p_target: userId, p_actor: caller.id });
   if (error) throw new Error(`remove_staff_tx failed: ${error.code ?? "unknown"}`);
   mapTxResult(data);
@@ -225,6 +254,8 @@ Deno.serve(handle(async (req) => {
     case "suspend":
     case "reactivate":
       return await setStatus(svc, caller, userId, body.action);
+    case "delete_account":
+      return await deleteAccount(svc, caller, userId);
     case "remove_staff":
       return await removeStaff(svc, caller, userId);
     default:

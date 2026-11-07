@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(57);
+select plan(73);
 select tests.assert_no_owner();
 
 -- Privileges: service_role only.
@@ -30,7 +30,7 @@ select is(public.set_account_status_tx((select id from c where name='tutor'), (s
 select is((select status::text from public.profiles where id = (select id from c where name='tutor')), 'suspended', 'tutor is suspended');
 select is((select count(*)::int from public.audit_log where action='account_suspended' and target_type='profile'
   and target_id=(select id from c where name='tutor') and actor_id=(select id from c where name='admin')), 1, 'suspend audited with target');
-select is(public.set_account_status_tx((select id from c where name='tutor'), (select id from c where name='admin'), 'suspend'), 'conflict', 'suspending suspended -> conflict');
+select is(public.set_account_status_tx((select id from c where name='tutor'), (select id from c where name='admin'), 'suspend'), 'already_suspended', 'suspending suspended -> already_suspended (idempotent)');
 select is((select count(*)::int from public.audit_log where action='account_suspended' and target_id=(select id from c where name='tutor')), 1, 'refusal writes no audit row');
 select is(public.set_account_status_tx((select id from c where name='admin2'), (select id from c where name='admin'), 'suspend'), 'forbidden', 'admin cannot suspend admin');
 select is(public.set_account_status_tx((select id from c where name='owner'), (select id from c where name='admin'), 'suspend'), 'forbidden', 'nobody suspends the owner (admin)');
@@ -46,7 +46,8 @@ select is(public.set_account_status_tx(gen_random_uuid(), (select id from c wher
 -- Reactivate destinations.
 select is(public.set_account_status_tx((select id from c where name='tutor'), (select id from c where name='admin'), 'reactivate'), 'active', 'tutor reactivated to active');
 select is((select count(*)::int from public.audit_log where action='account_reactivated' and target_id=(select id from c where name='tutor')), 1, 'reactivate audited');
-select is(public.set_account_status_tx((select id from c where name='tutor'), (select id from c where name='admin'), 'reactivate'), 'conflict', 'reactivating active -> conflict');
+select is(public.set_account_status_tx((select id from c where name='tutor'), (select id from c where name='admin'), 'reactivate'), 'already_active', 'reactivating active -> already_active (idempotent)');
+select is((select count(*)::int from public.audit_log where action='account_reactivated' and target_id=(select id from c where name='tutor')), 1, 'idempotent retries write no extra audit row');
 insert into public.student_subjects (student_id, subject_id) values ((select id from c where name='s_subj'), (select id from public.subjects limit 1));
 update public.student_details set index_number = 'SE-2099-9001' where profile_id = (select id from c where name='s_subj');
 update public.student_details set index_number = 'SE-2099-9002' where profile_id = (select id from c where name='s_idx');
@@ -101,6 +102,28 @@ select is(public.delete_own_account_tx((select id from c where name='parent')), 
 select is((select count(*)::int from auth.users where id=(select id from c where name='parent')), 0, 'parent auth user gone');
 select is((select count(*)::int from public.audit_log where action='account_self_deleted' and created_at = now() and actor_id is null and target_id is null and target_type is null), 1, 'self-deletion audited with no actor or target');
 select is(public.delete_own_account_tx((select id from c where name='parent')), 'not_found', 'second delete -> not_found');
+
+-- delete_account_tx + student residue cleanup.
+select is(has_function_privilege('service_role', 'public.delete_account_tx(uuid,uuid)', 'execute'), true, 'delete_account_tx: service_role');
+select is(has_function_privilege('authenticated', 'public.delete_account_tx(uuid,uuid)', 'execute'), false, 'delete_account_tx: not authenticated');
+select is(has_function_privilege('anon', 'public.delete_account_tx(uuid,uuid)', 'execute'), false, 'delete_account_tx: not anon');
+select is(has_function_privilege('authenticated', 'public.purge_student_residue(uuid)', 'execute'), false, 'purge_student_residue: not authenticated');
+select is(has_function_privilege('anon', 'public.purge_student_residue(uuid)', 'execute'), false, 'purge_student_residue: not anon');
+insert into c select n, tests.create_user('student', 'suspended') from unnest(array['del1','del2']) n;
+update public.student_details set signup_parent_email = 'res.parent@example.com', index_number = 'SE-2099-9101' where profile_id = (select id from c where name='del1');
+update public.student_details set signup_parent_email = 'Res.Parent@example.com' where profile_id = (select id from c where name='del2');
+insert into public.pending_invites (email, role) values ('res.parent@example.com', 'parent');
+insert into public.login_attempts (key) values ('idx:SE-2099-9101'), ('idx:SE-2099-OTHER');
+select is(public.delete_account_tx((select id from c where name='tutor'), (select id from c where name='admin')), 'conflict', 'delete_account refuses staff');
+select is(public.delete_account_tx((select id from c where name='admin'), (select id from c where name='admin')), 'forbidden', 'delete_account refuses self');
+select is(public.delete_account_tx((select id from c where name='owner'), (select id from c where name='admin')), 'forbidden', 'delete_account refuses owner');
+select is(public.delete_account_tx((select id from c where name='del1'), (select id from c where name='admin')), 'deleted', 'admin deletes a student');
+select is((select count(*)::int from public.pending_invites where email='res.parent@example.com'), 1, 'parent invite kept while a sibling still names the email');
+select is((select count(*)::int from public.login_attempts where key='idx:SE-2099-9101'), 0, 'index login attempts removed');
+select is((select count(*)::int from public.login_attempts where key='idx:SE-2099-OTHER'), 1, 'other attempts untouched');
+select is((select count(*)::int from public.audit_log where action='account_deleted' and created_at = now() and target_id is null and target_type is null and actor_id=(select id from c where name='admin')), 1, 'account_deleted audited with actor and no target');
+select is(public.delete_own_account_tx((select id from c where name='del2')), 'deleted', 'last sibling self-deletes');
+select is((select count(*)::int from public.pending_invites where email='res.parent@example.com'), 0, 'parent invite removed with the last student naming it');
 
 select * from finish();
 rollback;
