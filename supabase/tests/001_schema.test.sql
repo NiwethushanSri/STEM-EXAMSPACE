@@ -41,9 +41,7 @@ select col_is_pk('public', 'teacher_subjects', array['teacher_id','subject_id'],
 select col_is_pk('public', 'tutor_students', array['tutor_id','student_id'], 'tutor_students composite primary key');
 
 insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000a1', 'cascade@example.com');
-insert into public.profiles (id, role, status, first_name, last_name, email)
-  values ('00000000-0000-0000-0000-0000000000a1', 'student', 'pending', 'C', 'D', 'cascade@example.com');
-insert into public.student_details (profile_id) values ('00000000-0000-0000-0000-0000000000a1');
+-- the sign-up trigger (migration 002) creates the profile and student_details rows
 delete from auth.users where id = '00000000-0000-0000-0000-0000000000a1';
 select is(
   (select count(*)::int from public.profiles where id = '00000000-0000-0000-0000-0000000000a1')
