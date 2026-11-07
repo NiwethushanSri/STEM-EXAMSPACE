@@ -1,7 +1,6 @@
 import { requireCaller, serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 import { sendEmail } from "../_shared/email.ts";
-import { writeAudit } from "../_shared/audit.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -21,8 +20,8 @@ Deno.serve(handle(async (req) => {
   }
 
   const svc = serviceClient();
-  // Locks the profile, re-checks student/pending/not-a-claim-shell, deletes, returns the address.
-  const { data, error } = await svc.rpc("reject_student_tx", { p_student: studentId });
+  // Locks the profile, re-checks student/pending/not-a-claim-shell, deletes, audits (same tx), returns the address.
+  const { data, error } = await svc.rpc("reject_student_tx", { p_student: studentId, p_actor: caller.id });
   if (error) {
     if (error.code === "P0001" && error.message === "not_found") {
       throw new HttpError("not_found", 404, "Student not found.");
@@ -38,6 +37,5 @@ Deno.serve(handle(async (req) => {
   // The account is gone. The email is best effort and never fails the request.
   const emailSent = email ? await sendEmail(email, "rejected", {}) : false;
 
-  await writeAudit(caller.id, "registration_rejected");
   return jsonResponse({ emailSent });
 }));

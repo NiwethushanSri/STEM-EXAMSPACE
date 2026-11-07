@@ -16,6 +16,12 @@ async function call(token: string, body: unknown): Promise<{ status: number; jso
   return { status: res.status, json: await res.json().catch(() => null) };
 }
 
+async function rejectedCount(svc: ReturnType<typeof service>, actor: string, since: string): Promise<number> {
+  const { count } = await svc.from("audit_log").select("id", { count: "exact", head: true })
+    .eq("action", "registration_rejected").eq("actor_id", actor).gte("created_at", since);
+  return count ?? 0;
+}
+
 async function withScenario(fn: (ctx: {
   svc: ReturnType<typeof service>;
   admin: TestUser;
@@ -30,8 +36,10 @@ async function withScenario(fn: (ctx: {
     users.push(admin);
     await fn({ svc, admin, track: (u) => (users.push(u), u), trackId: (id) => void ids.push(id) });
   } finally {
-    await deleteUsers(svc, users);
-    await deleteUserIds(svc, ids);
+    const errs: string[] = [];
+    try { await deleteUsers(svc, users); } catch (e) { errs.push(String(e)); }
+    try { await deleteUserIds(svc, ids); } catch (e) { errs.push(String(e)); }
+    if (errs.length) throw new Error(errs.join("; "));
   }
 }
 
@@ -50,6 +58,32 @@ Deno.test("reject-student: student caller -> 403", async () => {
   });
 });
 
+Deno.test("reject-student: tutor caller -> 403; no Authorization -> 401", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const t = track(await createTestUser(svc, { role: "tutor", status: "active" }));
+    const r = await call(t.token, { studentId: crypto.randomUUID() });
+    assertEquals(r.status, 403);
+    const res = await fetch(url(), {
+      method: "POST",
+      headers: { apikey: env("SUPABASE_ANON_KEY"), "Content-Type": "application/json" },
+      body: JSON.stringify({ studentId: crypto.randomUUID() }),
+    });
+    await res.body?.cancel();
+    assertEquals(res.status, 401);
+  });
+});
+
+Deno.test("reject-student: pending non-student -> 409", async () => {
+  await withScenario(async ({ svc, admin, track }) => {
+    const t = track(await createTestUser(svc, { role: "tutor", status: "pending" }));
+    const since = new Date(Date.now() - 2000).toISOString();
+    const r = await call(admin.token, { studentId: t.id });
+    assertEquals(r.status, 409);
+    assert(!(await gone(svc, t.id)));
+    assertEquals(await rejectedCount(svc, admin.id, since), 0);
+  });
+});
+
 Deno.test("reject-student: bad body -> 400", async () => {
   await withScenario(async ({ admin }) => {
     for (const body of [{}, { studentId: "nope" }, { studentId: 5 }]) {
@@ -62,8 +96,10 @@ Deno.test("reject-student: bad body -> 400", async () => {
 
 Deno.test("reject-student: unknown uuid -> 404", async () => {
   await withScenario(async ({ admin }) => {
+    const since = new Date(Date.now() - 2000).toISOString();
     const r = await call(admin.token, { studentId: crypto.randomUUID() });
     assertEquals(r.status, 404);
+    assertEquals(await rejectedCount(service(), admin.id, since), 0);
     assertEquals(r.json.error.code, "not_found");
   });
 });
@@ -71,10 +107,12 @@ Deno.test("reject-student: unknown uuid -> 404", async () => {
 Deno.test("reject-student: active student -> 409, nothing deleted", async () => {
   await withScenario(async ({ svc, admin, track }) => {
     const s = track(await createTestUser(svc, { role: "student", status: "active" }));
+    const since = new Date(Date.now() - 2000).toISOString();
     const r = await call(admin.token, { studentId: s.id });
     assertEquals(r.status, 409);
     assertEquals(r.json.error.code, "conflict");
     assert(!(await gone(svc, s.id)));
+    assertEquals(await rejectedCount(svc, admin.id, since), 0);
   });
 });
 
@@ -107,8 +145,10 @@ Deno.test("reject-student: admin rejects pending student; audit has no target; e
 
     const { data: audit } = await svc.from("audit_log").select("actor_id, target_type, target_id")
       .eq("action", "registration_rejected").gte("created_at", since);
-    assert(audit && audit.length >= 1);
-    assert(audit.some((a) => a.actor_id === admin.id && a.target_type === null && a.target_id === null));
+    assertEquals(audit?.length, 1);
+    assertEquals(audit![0].actor_id, admin.id);
+    assertEquals(audit![0].target_type, null);
+    assertEquals(audit![0].target_id, null);
 
     const { data: again, error } = await svc.auth.admin.createUser({ email: s.email, email_confirm: true });
     assert(!error && again.user);
@@ -121,6 +161,7 @@ Deno.test("reject-student: admin rejects pending student; audit has no target; e
 Deno.test("reject-student: concurrent double reject -> one 200, other 404/409", async () => {
   await withScenario(async ({ svc, admin, track }) => {
     const s = track(await createTestUser(svc, { role: "student", status: "pending" }));
+    const since = new Date(Date.now() - 2000).toISOString();
     const [a, b] = await Promise.all([
       call(admin.token, { studentId: s.id }),
       call(admin.token, { studentId: s.id }),
@@ -130,5 +171,6 @@ Deno.test("reject-student: concurrent double reject -> one 200, other 404/409", 
     const other = codes.find((c) => c !== 200)!;
     assert(other === 404 || other === 409, `unexpected ${other}`);
     assert(await gone(svc, s.id));
+    assertEquals(await rejectedCount(svc, admin.id, since), 1);
   });
 });

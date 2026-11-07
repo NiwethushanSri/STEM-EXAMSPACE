@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(28);
+select plan(34);
 
 create temp table u (name text primary key, id uuid not null);
 insert into u values
@@ -11,7 +11,12 @@ insert into u values
   ('new_unc', tests.create_user('student', 'unconfirmed')),
   ('old_pen', tests.create_user('student', 'pending')),
   ('old_stf', tests.create_user('tutor', 'unconfirmed')),
-  ('old_stu', tests.create_user('student', 'unconfirmed'));
+  ('old_stu', tests.create_user('student', 'unconfirmed')),
+  ('pen_tutor', tests.create_user('tutor', 'pending')),
+  ('pen_parent', tests.create_user('parent', 'pending')),
+  ('admin',   tests.create_user('admin', 'active')),
+  ('edge7',   tests.create_user('student', 'unconfirmed')),
+  ('edge7p1', tests.create_user('student', 'unconfirmed'));
 grant select on u to public;
 
 update public.student_details set signup_parent_email = 'p@example.com'
@@ -20,29 +25,38 @@ update auth.users set raw_app_meta_data = '{"invite_token":"7b0f6c1e-0000-4000-8
   where id = (select id from u where name = 'shell');
 
 -- Privileges.
-select is(has_function_privilege('authenticated', 'public.reject_student_tx(uuid)', 'execute'), false, 'reject_tx not executable by authenticated');
-select is(has_function_privilege('anon', 'public.reject_student_tx(uuid)', 'execute'), false, 'reject_tx not executable by anon');
-select is(has_function_privilege('service_role', 'public.reject_student_tx(uuid)', 'execute'), true, 'reject_tx executable by service_role');
+select is(has_function_privilege('authenticated', 'public.reject_student_tx(uuid,uuid)', 'execute'), false, 'reject_tx not executable by authenticated');
+select is(has_function_privilege('anon', 'public.reject_student_tx(uuid,uuid)', 'execute'), false, 'reject_tx not executable by anon');
+select is(has_function_privilege('service_role', 'public.reject_student_tx(uuid,uuid)', 'execute'), true, 'reject_tx executable by service_role');
 select is(has_function_privilege('authenticated', 'public.expire_unconfirmed(timestamptz)', 'execute'), false, 'expire not executable by authenticated');
 select is(has_function_privilege('anon', 'public.expire_unconfirmed(timestamptz)', 'execute'), false, 'expire not executable by anon');
 select is(has_function_privilege('service_role', 'public.expire_unconfirmed(timestamptz)', 'execute'), false, 'expire not executable by service_role');
 
 -- Rejection refusals.
-select throws_ok(format($q$select public.reject_student_tx(%L)$q$, (select id from u where name = 'active')),
+select throws_ok(format($q$select public.reject_student_tx(%L, %L)$q$, (select id from u where name = 'active'), (select id from u where name = 'admin')),
   'P0001', 'conflict', 'active student -> conflict');
-select throws_ok(format($q$select public.reject_student_tx(%L)$q$, (select id from u where name = 'shell')),
+select throws_ok(format($q$select public.reject_student_tx(%L, %L)$q$, (select id from u where name = 'shell'), (select id from u where name = 'admin')),
   'P0001', 'conflict', 'claim shell -> conflict');
-select throws_ok(format($q$select public.reject_student_tx(%L)$q$, (select id from u where name = 'old_stf')),
+select throws_ok(format($q$select public.reject_student_tx(%L, %L)$q$, (select id from u where name = 'old_stf'), (select id from u where name = 'admin')),
   'P0001', 'conflict', 'non-student -> conflict');
-select throws_ok(format($q$select public.reject_student_tx(%L)$q$, gen_random_uuid()),
+select throws_ok(format($q$select public.reject_student_tx(%L, %L)$q$, gen_random_uuid(), (select id from u where name = 'admin')),
   'P0001', 'not_found', 'unknown id -> not_found');
 select is((select count(*)::int from auth.users where id in (select id from u where name in ('active', 'shell'))), 2,
   'refused rejections leave users in place');
 
+select throws_ok(format($q$select public.reject_student_tx(%L, %L)$q$, (select id from u where name = 'pen_tutor'), (select id from u where name = 'admin')),
+  'P0001', 'conflict', 'pending tutor -> conflict');
+select throws_ok(format($q$select public.reject_student_tx(%L, %L)$q$, (select id from u where name = 'pen_parent'), (select id from u where name = 'admin')),
+  'P0001', 'conflict', 'pending parent -> conflict');
+select is((select count(*)::int from public.audit_log where action = 'registration_rejected' and actor_id = (select id from u where name = 'admin')), 0,
+  'refusals write no audit row');
+
 -- Rejection.
 create temp table rej_email as select email::text as e from public.profiles where id = (select id from u where name = 'rej');
 grant select on rej_email to public;
-select is(public.reject_student_tx((select id from u where name = 'rej')), (select e from rej_email), 'reject returns the captured email');
+select is(public.reject_student_tx((select id from u where name = 'rej'), (select id from u where name = 'admin')), (select e from rej_email), 'reject returns the captured email');
+select is((select count(*)::int from public.audit_log where action = 'registration_rejected' and actor_id = (select id from u where name = 'admin')
+  and target_type is null and target_id is null), 1, 'exactly one rejection audit row for the actor');
 select is((select count(*)::int from auth.users where id = (select id from u where name = 'rej')), 0, 'auth user gone');
 select is((select count(*)::int from public.profiles where id = (select id from u where name = 'rej')), 0, 'profile gone');
 select is((select count(*)::int from public.student_details where profile_id = (select id from u where name = 'rej')), 0, 'details gone');
@@ -51,21 +65,25 @@ select is((select count(*)::int from public.student_details where profile_id = (
 create temp table t0 as select '2000-01-01 00:00:00+00'::timestamptz as now_;
 grant select on t0 to public;
 update auth.users set created_at = (select now_ from t0) - interval '8 days'
-  where id in (select id from u where name in ('old_unc', 'old_pen', 'old_stf', 'old_stu'));
+  where id in (select id from u where name in ('old_unc', 'old_pen', 'old_stf', 'old_stu', 'pen_tutor', 'pen_parent', 'admin'));
+update auth.users set created_at = (select now_ from t0) - interval '7 days' where id = (select id from u where name = 'edge7');
+update auth.users set created_at = (select now_ from t0) - interval '7 days 1 second' where id = (select id from u where name = 'edge7p1');
 update auth.users set created_at = (select now_ from t0) - interval '6 days'
   where id = (select id from u where name = 'new_unc');
 
 create temp table before_audit as select count(*)::int as n from public.audit_log where action = 'registration_expired';
 grant select on before_audit to public;
-select is(public.expire_unconfirmed((select now_ from t0)), 2, 'expire returns exact count');
+select is(public.expire_unconfirmed((select now_ from t0)), 3, 'expire returns exact count');
 select is((select count(*)::int from auth.users where id in (select id from u where name in ('old_unc', 'old_stu'))), 0, '8-day unconfirmed students deleted');
 select is((select count(*)::int from public.profiles where id in (select id from u where name in ('old_unc', 'old_stu'))), 0, 'their profiles gone');
 select is((select count(*)::int from auth.users where id = (select id from u where name = 'new_unc')), 1, '6-day unconfirmed kept');
+select is((select count(*)::int from auth.users where id = (select id from u where name = 'edge7')), 1, 'exactly 7 days kept');
+select is((select count(*)::int from auth.users where id = (select id from u where name = 'edge7p1')), 0, '7 days + 1 second deleted');
 select is((select count(*)::int from auth.users where id = (select id from u where name = 'old_pen')), 1, '8-day pending kept');
 select is((select count(*)::int from auth.users where id = (select id from u where name = 'old_stf')), 1, '8-day unconfirmed staff kept');
-select is((select count(*)::int from public.audit_log where action = 'registration_expired') - (select n from before_audit), 2, 'two expiry audit rows');
+select is((select count(*)::int from public.audit_log where action = 'registration_expired') - (select n from before_audit), 3, 'three expiry audit rows');
 select is((select count(*)::int from public.audit_log where action = 'registration_expired'
-  and actor_id is null and target_type is null and target_id is null) - (select n from before_audit), 2, 'expiry audit rows have null actor and target');
+  and actor_id is null and target_type is null and target_id is null) - (select n from before_audit), 3, 'expiry audit rows have null actor and target');
 select is(public.expire_unconfirmed((select now_ from t0)), 0, 'second run deletes nothing');
 
 -- Cron job.
