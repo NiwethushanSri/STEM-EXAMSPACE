@@ -49,7 +49,8 @@ Deno.test("storage_api_delete_own_photo_only", async () => {
       { contentType: "text/plain" },
     );
     assert(txt.error, "text/plain upload must be rejected");
-    assert(/mime|type|415|not allowed/i.test(`${txt.error.message} ${(txt.error as {statusCode?: string}).statusCode ?? ""}`), "expected a MIME error");
+    assertEquals((txt.error as { statusCode?: string }).statusCode, "415");
+    assertEquals(txt.error.message, "mime type text/plain is not supported");
     assert(!(await exists(a.id)));
 
     // > 5 MB rejected.
@@ -57,7 +58,8 @@ Deno.test("storage_api_delete_own_photo_only", async () => {
     big.set(JPEG);
     const bigUp = await a.client.storage.from(BUCKET).upload(pa, big, { contentType: "image/jpeg" });
     assert(bigUp.error, ">5MB upload must be rejected");
-    assert(/size|large|exceed|413/i.test(`${bigUp.error.message} ${(bigUp.error as {statusCode?: string}).statusCode ?? ""}`), "expected a size error");
+    assertEquals((bigUp.error as { statusCode?: string }).statusCode, "413");
+    assertEquals(bigUp.error.message, "The object exceeded the maximum allowed size");
     assert(!(await exists(a.id)));
   } finally {
     try {

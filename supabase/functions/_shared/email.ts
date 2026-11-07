@@ -46,13 +46,13 @@ export async function sendEmail(
   data: Record<string, string>,
 ): Promise<boolean> {
   try {
-    if (template === "invite" && data.link) {
+    if (template === "invite") {
       let ok = false;
       try {
-        ok = new URL(data.link).protocol === "https:";
+        ok = new URL(data.link ?? "").protocol === "https:";
       } catch { /* invalid URL */ }
       if (!ok) {
-        console.error(`[email] rejected non-https link template=${template}`);
+        console.error(`[email] rejected missing or non-https link template=${template}`);
         return false;
       }
     }
