@@ -162,11 +162,16 @@ Deno.test("parent-child register: 6th registration inside 15 minutes -> 429", as
   });
 });
 
-Deno.test("parent-child register: public sign-up cannot set the child's password (observed GoTrue behaviour recorded)", async () => {
+// requires TEST_INBOX_DOMAIN (custom SMTP catch-all) — run before Task 12.
+// GoTrue rejects reserved domains on public sign-up and rate-limits its built-in mailer, so this needs a real test inbox domain.
+const INBOX_DOMAIN = Deno.env.get("TEST_INBOX_DOMAIN");
+Deno.test({
+  name: "parent-child register: public sign-up cannot set the child's password (requires TEST_INBOX_DOMAIN)",
+  ignore: !INBOX_DOMAIN,
+  fn: async () => {
   await withScenario(async ({ svc, track, childEmail }) => {
     const parent = track(await createTestUser(svc, { role: "parent", status: "active" }));
-    // GoTrue rejects .test domains on public sign-up (email_address_invalid), so use a domain with MX records (random, non-existent mailbox).
-    const e = childEmail("gmail.com");
+    const e = childEmail(INBOX_DOMAIN!);
     assertEquals((await pc(parent.token, { action: "register", child: childBody(e) })).status, 200);
     const cid = (await idByEmail(svc, e))!;
     const before = (await svc.from("student_details")
@@ -190,6 +195,7 @@ Deno.test("parent-child register: public sign-up cannot set the child's password
     const after2 = (await svc.from("student_details").select("requested_by_parent, signup_parent_email").eq("profile_id", cid).single()).data;
     assertEquals(after2!.requested_by_parent, parent.id);
   });
+  },
 });
 
 Deno.test("parent-child link: child age boundaries are exact (8 to 25 inclusive)", async () => {
