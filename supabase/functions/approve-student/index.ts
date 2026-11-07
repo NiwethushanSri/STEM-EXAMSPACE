@@ -1,6 +1,7 @@
 import { requireCaller, serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 import { sendEmail } from "../_shared/email.ts";
+import { clearInviteToken, linkParent, provisionInvitedUser, sendInviteEmail } from "../_shared/invite.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -66,28 +67,6 @@ Deno.serve(handle(async (req) => {
   let linked = row.parent_id !== null; // existing parent was linked inside the transaction
   let warning: string | undefined;
 
-  const dropInvite = async () => {
-    const { error: e } = await svc.from("pending_invites").delete().eq("email", parentEmail);
-    if (e) console.error("invite cleanup failed:", e.code ?? "unknown");
-  };
-  const dropUser = async (id: string) => {
-    const { error: e } = await svc.auth.admin.deleteUser(id);
-    if (e) console.error("orphan user cleanup failed for", id, e.status ?? "unknown");
-  };
-  type ClaimResult = "claimed" | "already" | "refused" | "error";
-  const claim = async (id: string, token: string): Promise<ClaimResult> => {
-    const { data: r, error: e } = await svc.rpc("claim_parent_invite", {
-      p_user: id,
-      p_token: token,
-      p_email: parentEmail,
-    });
-    if (e) {
-      console.error("claim rpc failed:", e.code ?? "unknown");
-      return "error";
-    }
-    return r === "claimed" || r === "already" ? r : "refused";
-  };
-
   if (row.invite_token) {
     const token = row.invite_token;
     const { data: s } = await svc.from("student_details")
@@ -97,103 +76,27 @@ Deno.serve(handle(async (req) => {
     const first = space === -1 ? full : full.slice(0, space);
     const last = space === -1 ? "" : full.slice(space + 1).trim();
 
-    const { data: created, error: cErr } = await svc.auth.admin.createUser({
+    const res = await provisionInvitedUser(svc, {
       email: parentEmail,
-      email_confirm: true,
-      app_metadata: { invite_token: token },
-      user_metadata: { first_name: first, last_name: last },
+      token,
+      role: "parent",
+      firstName: first,
+      lastName: last,
     });
+    parentId = res.userId;
+    parentInvited = res.invited;
+    if (res.warning) warning = res.warning;
+  }
 
-    if (!cErr && created.user) {
-      // GoTrue writes app_metadata after the insert, so the sign-up trigger cannot apply the invite.
-      const uid = created.user.id;
-      let r = await claim(uid, token);
-      let unknown = false;
-      if (r === "error") {
-        // Transport failure: find out what state the account is in before touching anything.
-        const { data: now, error: rErr } = await svc.from("profiles").select("role").eq("id", uid).maybeSingle();
-        if (rErr || !now) {
-          unknown = true;
-          console.error("claim state unknown for", uid, rErr?.code ?? "no row");
-        } else if (now.role === "parent") {
-          r = "claimed";
-        }
-      }
-      if (r === "claimed" || r === "already") {
-        parentId = uid;
-        parentInvited = r === "claimed";
-      } else if (unknown) {
-        // Leave the shell and invite for the next approval to heal.
-        parentId = null;
-      } else {
-        console.error("parent invite claim failed");
-        await dropUser(uid);
-        await dropInvite();
-        parentId = null;
-      }
-    } else if (cErr) {
-      console.error("parent createUser failed:", cErr.status ?? "unknown", cErr.code ?? "unknown");
-      // Another approval (or a crashed earlier one) may own this account: heal it if it carries this invite.
-      const { data: existing } = await svc.from("profiles").select("id, role")
-        .eq("email", parentEmail).maybeSingle();
-      let mine = existing?.role === "parent";
-      if (existing && !mine) {
-        const { data: au } = await svc.auth.admin.getUserById(existing.id);
-        const tok = au?.user?.app_metadata?.invite_token;
-        const age = au?.user ? Date.now() - new Date(au.user.created_at).getTime() : Infinity;
-        // GoTrue writes app_metadata after the insert: a very fresh shell without a token yet is the
-        // concurrent request mid-creation. The claim (retried below) is the real gate.
-        mine = tok === token || (tok === undefined && age < 60_000 && existing.role === "student");
-      }
-      if (existing && mine) {
-        let r: ClaimResult = "refused";
-        for (let i = 0; i < 5; i++) {
-          r = await claim(existing.id, token);
-          if (r === "claimed" || r === "already") break;
-          await new Promise((res) => setTimeout(res, 200));
-        }
-        if (r === "claimed" || r === "already") {
-          parentId = existing.id;
-          // Only the request whose claim changed the role sends the invite email.
-          parentInvited = r === "claimed";
-        } else {
-          console.error("could not claim existing parent account");
-          parentId = null;
-        }
-        // The invite is never deleted in this branch.
-      } else {
-        await dropInvite();
-        if (/already|registered|exists/i.test(cErr.message)) warning = "email_in_use";
-        parentId = null;
-      }
-    }
-
-    if (parentId) {
-      const { error: lErr } = await svc.from("parent_children")
-        .upsert({ parent_id: parentId, student_id: studentId }, { onConflict: "parent_id,student_id", ignoreDuplicates: true });
-      if (lErr) console.error("parent link failed:", lErr.code ?? "unknown");
-      else linked = true;
-      if (parentInvited) {
-        const { error: mErr } = await svc.auth.admin.updateUserById(parentId, { app_metadata: { invite_token: null } });
-        if (mErr) console.error("invite token clear failed:", mErr.status ?? "unknown");
-      }
-    }
+  if (parentId) {
+    if (await linkParent(svc, parentId, studentId)) linked = true;
+    if (parentInvited) await clearInviteToken(svc, parentId);
   }
 
   let emailsSent = true;
 
   if (parentInvited && parentId) {
-    let sent = false;
-    const { data: link } = await svc.auth.admin.generateLink({ type: "recovery", email: parentEmail });
-    const actionLink = link?.properties?.action_link;
-    if (actionLink) sent = await sendEmail(parentEmail, "invite", { link: actionLink });
-    if (sent) {
-      const { error: iErr } = await svc.from("profiles")
-        .update({ invite_sent_at: new Date().toISOString() }).eq("id", parentId);
-      if (iErr) console.error("invite_sent_at update failed:", iErr.code ?? "unknown");
-    } else {
-      emailsSent = false;
-    }
+    if (!(await sendInviteEmail(svc, parentId, parentEmail))) emailsSent = false;
   }
 
   const { data: student } = await svc.from("profiles").select("email, first_name").eq("id", studentId).maybeSingle();

@@ -202,7 +202,8 @@ Deno.test("approve-student: crash-orphan parent shell is healed by the next sibl
     assertEquals(parents![0].role, "parent");
     assertEquals(parents![0].status, "active");
     const { data: links } = await svc.from("parent_children").select("student_id").eq("parent_id", shell.user.id);
-    assertEquals(links!.map((l: { student_id: string }) => l.student_id), [b.id]);
+    // Healing also links the first child, whose link was lost in the crash (reconciliation).
+    assertEquals(links!.map((l: { student_id: string }) => l.student_id).sort(), [a.id, b.id].sort());
     const { count } = await svc.from("pending_invites").select("*", { count: "exact", head: true }).eq("email", parentEmail);
     assertEquals(count, 0);
   });
