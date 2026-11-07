@@ -46,6 +46,16 @@ export async function sendEmail(
   data: Record<string, string>,
 ): Promise<boolean> {
   try {
+    if (template === "invite" && data.link) {
+      let ok = false;
+      try {
+        ok = new URL(data.link).protocol === "https:";
+      } catch { /* invalid URL */ }
+      if (!ok) {
+        console.error(`[email] rejected non-https link template=${template}`);
+        return false;
+      }
+    }
     const provider = Deno.env.get("EMAIL_PROVIDER") ?? "console";
     if (provider === "console") {
       // Log only the template and recipient domain: no address, no data (may hold links).
@@ -55,12 +65,16 @@ export async function sendEmail(
     if (provider === "resend") {
       const key = Deno.env.get("RESEND_API_KEY");
       const from = Deno.env.get("EMAIL_FROM");
-      if (!key || !from) return false;
+      if (!key || !from) {
+        console.error(`[email:resend] missing setting: ${!key ? "RESEND_API_KEY" : "EMAIL_FROM"}`);
+        return false;
+      }
       const { subject, html } = render(template, data);
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
         body: JSON.stringify({ from, to: [to], subject, html }),
+        signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) console.error(`[email:resend] template=${template} status=${res.status}`);
       await res.body?.cancel();

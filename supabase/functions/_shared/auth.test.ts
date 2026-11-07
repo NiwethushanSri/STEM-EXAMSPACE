@@ -65,6 +65,49 @@ Deno.test("requireCaller: active admin allowed -> {id, role}", async () => {
   });
 });
 
+Deno.test("requireCaller: deleted user with still-valid token -> 401 unauthenticated", async () => {
+  await withUsers([{ role: "admin", status: "active" }], async ([u]) => {
+    await service().auth.admin.deleteUser(u.id);
+    const e = await assertRejects(() => requireCaller(reqWith(u.token), ["admin"]), HttpError);
+    assertEquals(e.status, 401);
+    assertEquals(e.code, "unauthenticated");
+  });
+});
+
+Deno.test("requireCaller: JWT signed with wrong secret -> 401 unauthenticated", async () => {
+  const b64 = (o: unknown) =>
+    btoa(JSON.stringify(o)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  const head = b64({ alg: "HS256", typ: "JWT" });
+  const body = b64({
+    sub: crypto.randomUUID(),
+    role: "authenticated",
+    aud: "authenticated",
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode("definitely-the-wrong-secret"),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${head}.${body}`)));
+  const sigB64 = btoa(String.fromCharCode(...sig)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  const e = await assertRejects(() => requireCaller(reqWith(`${head}.${body}.${sigB64}`), ["admin"]), HttpError);
+  assertEquals(e.status, 401);
+  assertEquals(e.code, "unauthenticated");
+});
+
+Deno.test("requireCaller: user without profiles row -> 403 forbidden", async () => {
+  await withUsers([{ role: "admin", status: "active" }], async ([u]) => {
+    const { error } = await service().from("profiles").delete().eq("id", u.id);
+    assertEquals(error, null);
+    const e = await assertRejects(() => requireCaller(reqWith(u.token), ["admin"]), HttpError);
+    assertEquals(e.status, 403);
+    assertEquals(e.code, "forbidden");
+  });
+});
+
 Deno.test("handle: HttpError -> status and body, with CORS", async () => {
   const h = handle(() => Promise.reject(new HttpError("conflict", 409, "Already handled")));
   const res = await h(new Request("http://localhost/fn", { method: "POST" }));

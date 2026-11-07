@@ -51,13 +51,26 @@ export async function createTestUser(
     if (se || !s.session) throw new Error(`sign in failed: ${se?.message}`);
     return { id, email, client, token: s.session.access_token };
   } catch (err) {
-    await svc.auth.admin.deleteUser(id);
+    await deleteUserIds(svc, [id]);
     throw err;
   }
 }
 
-export async function deleteUsers(svc: SupabaseClient, users: TestUser[]): Promise<void> {
-  for (const u of users) {
-    await svc.auth.admin.deleteUser(u.id);
+/** Attempts every deletion, then throws if any failed (ids only, no secrets). */
+export async function deleteUserIds(svc: SupabaseClient, ids: string[]): Promise<void> {
+  const failed: string[] = [];
+  for (const id of ids) {
+    try {
+      const { error } = await svc.auth.admin.deleteUser(id);
+      // Already-gone users are fine (tests may delete on purpose).
+      if (error && !/not found/i.test(error.message)) failed.push(id);
+    } catch {
+      failed.push(id);
+    }
   }
+  if (failed.length) throw new Error(`test cleanup failed for user ids: ${failed.join(", ")}`);
+}
+
+export function deleteUsers(svc: SupabaseClient, users: TestUser[]): Promise<void> {
+  return deleteUserIds(svc, users.map((u) => u.id));
 }
