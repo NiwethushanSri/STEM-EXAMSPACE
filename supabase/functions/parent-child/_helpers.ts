@@ -28,7 +28,7 @@ export const childBody = (email: string, over: Record<string, unknown> = {}) => 
   school: "Royal College",
   ...over,
 });
-export const newChildEmail = () => `t10c-child-${crypto.randomUUID()}@example.test`;
+export const newChildEmail = (domain = "example.test") => `t10c-child-${crypto.randomUUID()}@${domain}`;
 
 /**
  * Runs a scenario and always cleans up: tracked users, any profile created for tracked child emails,
@@ -37,7 +37,7 @@ export const newChildEmail = () => `t10c-child-${crypto.randomUUID()}@example.te
 export async function withScenario(fn: (ctx: {
   svc: Svc;
   track: (u: TestUser) => TestUser;
-  childEmail: () => string;
+  childEmail: (domain?: string) => string;
   trackKey: (key: string) => void;
 }) => Promise<void>) {
   const svc = service();
@@ -48,8 +48,8 @@ export async function withScenario(fn: (ctx: {
     await fn({
       svc,
       track: (u) => (users.push(u), u),
-      childEmail: () => {
-        const e = newChildEmail();
+      childEmail: (domain?: string) => {
+        const e = newChildEmail(domain);
         emails.push(e);
         return e;
       },
