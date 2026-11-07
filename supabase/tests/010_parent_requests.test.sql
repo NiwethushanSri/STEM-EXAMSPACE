@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(52);
+select plan(64);
 select tests.assert_no_owner();
 
 -- Privileges: service_role only.
@@ -16,7 +16,7 @@ grant select on c to public;
 insert into c values ('admin', tests.create_user('admin', 'active'));
 insert into c values ('tutor', tests.create_user('tutor', 'active'));
 insert into c select n, tests.create_user('parent', 'active') from unnest(array['p1','p2','p_susp']) n;
-insert into c select n, tests.create_user('student', 'active') from unnest(array['s_ok','s_pend','s_other']) n;
+insert into c select n, tests.create_user('student', 'active') from unnest(array['s_ok','s_pend','s_other','s_p2']) n;
 
 update public.student_details set index_number = 'SE-2099-7001', date_of_birth = date '2010-05-04'
   where profile_id = (select id from c where name='s_ok');
@@ -24,6 +24,8 @@ update public.student_details set index_number = 'SE-2099-7002', date_of_birth =
   where profile_id = (select id from c where name='s_other');
 update public.profiles set status = 'pending' where id = (select id from c where name='s_pend');
 update public.profiles set status = 'suspended' where id = (select id from c where name='p_susp');
+insert into public.student_subjects (student_id, subject_id) values ((select id from c where name='s_ok'), (select id from public.subjects limit 1));
+insert into storage.objects (bucket_id, name) values ('student-photos', (select id from c where name='s_ok') || '/photo.jpg');
 
 -- request_parent_link_tx: matching.
 select is(public.request_parent_link_tx((select id from c where name='p1'), 'SE-2099-7001', date '2010-05-04'), true, 'exact index + DOB matches');
@@ -32,7 +34,8 @@ select is((select count(*)::int from public.audit_log where action='parent_link_
   and target_type='profile' and target_id=(select id from c where name='s_ok')), 1, 'request audited with ids');
 select is(public.request_parent_link_tx((select id from c where name='p1'), 'SE-2099-7001', date '2010-05-04'), true, 'duplicate request still true');
 select is((select count(*)::int from public.parent_link_requests), 1, 'duplicate request inserts nothing');
-select is((select count(*)::int from public.audit_log where action='parent_link_requested'), 1, 'duplicate request writes no second audit row');
+select is((select count(*)::int from public.audit_log where action='parent_link_requested' and actor_id=(select id from c where name='p1')), 2, 'duplicate request writes no further audit rows (child row + request row only)');
+select is((select count(*)::int from public.audit_log a join public.parent_link_requests r on r.id = a.target_id where a.action='parent_link_requested' and a.target_type='parent_link_request'), 1, 'request id is audited too');
 select is(public.request_parent_link_tx((select id from c where name='p1'), 'SE-2099-7001', date '2010-05-05'), false, 'wrong DOB -> false');
 select is(public.request_parent_link_tx((select id from c where name='p1'), 'SE-2099-9999', date '2010-05-04'), false, 'unknown index -> false');
 select is(public.request_parent_link_tx((select id from c where name='p1'), 'SE-2099-7002', date '2010-05-04'), false, 'DOB of another child -> false');
@@ -55,6 +58,9 @@ select tests.as_postgres();
 select tests.as_user((select id from c where name='p1'));
 select is((select count(*)::int from public.parent_link_requests), 1, 'parent sees own request');
 select is((select count(*)::int from public.profiles where id=(select id from c where name='s_ok')), 0, 'parent still cannot read the requested child');
+select is((select count(*)::int from public.student_details where profile_id=(select id from c where name='s_ok')), 0, 'parent cannot read requested child details');
+select is((select count(*)::int from public.student_subjects where student_id=(select id from c where name='s_ok')), 0, 'parent cannot read requested child subjects');
+select is((select count(*)::int from storage.objects where bucket_id='student-photos' and name=(select id from c where name='s_ok') || '/photo.jpg'), 0, 'parent cannot read requested child photo');
 select throws_ok($q$insert into public.parent_link_requests (parent_id, student_id) values (gen_random_uuid(), gen_random_uuid())$q$, '42501', null, 'parent cannot insert requests');
 select throws_ok($q$delete from public.parent_link_requests$q$, '42501', null, 'parent cannot delete requests');
 select tests.as_postgres();
@@ -81,13 +87,27 @@ select is(public.decide_parent_link_tx((select id from public.parent_link_reques
 select is((select count(*)::int from public.parent_children where parent_id=(select id from c where name='p1') and student_id=(select id from c where name='s_ok')), 1, 'link created');
 select is((select count(*)::int from public.parent_link_blocks where parent_id=(select id from c where name='p1')), 0, 'block cleared');
 select is((select count(*)::int from public.parent_link_requests), 0, 'request deleted');
-select is((select count(*)::int from public.audit_log where action='parent_link_approved' and target_type='parent_link_request' and actor_id=(select id from c where name='admin')), 1, 'approval audited');
+select is((select count(*)::int from public.audit_log where action='parent_link_approved' and target_type='profile' and target_id=(select id from c where name='s_ok') and actor_id=(select id from c where name='admin')), 1, 'approval audited for the child');
+select is((select count(*)::int from public.audit_log where action='parent_link_approved' and target_type='profile' and target_id=(select id from c where name='p1') and actor_id=(select id from c where name='admin')), 1, 'approval audited for the parent');
+select tests.as_user((select id from c where name='p1'));
+select is((select count(*)::int from public.student_details where profile_id=(select id from c where name='s_ok')), 1, 'after approval the parent reads the child details');
+select tests.as_postgres();
 
 -- reject, and conflicts.
 select public.request_parent_link_tx((select id from c where name='p1'), 'SE-2099-7002', date '2011-01-02');
 select is(public.decide_parent_link_tx((select id from public.parent_link_requests limit 1), (select id from c where name='admin'), false), 'rejected', 'admin rejects');
 select is((select count(*)::int from public.parent_children where parent_id=(select id from c where name='p1') and student_id=(select id from c where name='s_other')), 0, 'reject creates no link');
-select is((select count(*)::int from public.audit_log where action='parent_link_rejected' and target_type='parent_link_request'), 1, 'rejection audited');
+select is((select count(*)::int from public.audit_log where action='parent_link_rejected' and target_type='profile' and target_id in ((select id from c where name='s_other'), (select id from c where name='p1'))), 2, 'rejection audited for child and parent');
+
+-- Unapproved or suspended child -> conflict.
+insert into public.parent_link_requests (parent_id, student_id) values ((select id from c where name='p1'), (select id from c where name='s_pend'));
+select is(public.decide_parent_link_tx((select id from public.parent_link_requests where student_id=(select id from c where name='s_pend')), (select id from c where name='admin'), true), 'conflict', 'unapproved student -> conflict');
+delete from public.parent_link_requests where student_id=(select id from c where name='s_pend');
+insert into public.parent_link_requests (parent_id, student_id) values ((select id from c where name='p1'), (select id from c where name='s_other'));
+update public.profiles set status = 'suspended' where id = (select id from c where name='s_other');
+select is(public.decide_parent_link_tx((select id from public.parent_link_requests where student_id=(select id from c where name='s_other')), (select id from c where name='admin'), true), 'conflict', 'suspended student -> conflict');
+delete from public.parent_link_requests where student_id=(select id from c where name='s_other');
+update public.profiles set status = 'active' where id = (select id from c where name='s_other');
 insert into public.parent_link_requests (parent_id, student_id) values ((select id from c where name='p_susp'), (select id from c where name='s_ok'));
 select is(public.decide_parent_link_tx((select id from public.parent_link_requests limit 1), (select id from c where name='admin'), true), 'conflict', 'inactive parent -> conflict');
 select is((select count(*)::int from public.parent_children where parent_id=(select id from c where name='p_susp')), 0, 'no link for inactive parent');
@@ -99,6 +119,18 @@ update public.student_details set index_number = null, signup_parent_email = 'so
 select lives_ok(format($q$select * from public.approve_student_tx(%L, %L, 2099)$q$, (select id from c where name='s_pend'), (select id from c where name='admin')), 'approve_student_tx runs');
 select is((select count(*)::int from public.parent_children where parent_id=(select id from c where name='p2') and student_id=(select id from c where name='s_pend')), 1, 'requesting parent linked on approval');
 
+-- A suspended requester is not linked on approval.
+update public.profiles set status = 'pending' where id = (select id from c where name='s_p2');
+update public.student_details set signup_parent_email = 'nobody@test.example', requested_by_parent = (select id from c where name='p_susp') where profile_id = (select id from c where name='s_p2');
+select lives_ok(format($q$select * from public.approve_student_tx(%L, %L, 2099)$q$, (select id from c where name='s_p2'), (select id from c where name='admin')), 'approve with suspended requester runs');
+select is((select count(*)::int from public.parent_children where parent_id=(select id from c where name='p_susp')), 0, 'suspended requester not linked');
+
+-- login_attempt_refund_key.
+insert into public.login_attempts (key) values ('zz:t'), ('zz:t');
+select public.login_attempt_refund_key('zz:t');
+select is((select count(*)::int from public.login_attempts where key='zz:t'), 1, 'refund_key removes one row');
+select is(has_function_privilege('authenticated', 'public.login_attempt_refund_key(text)', 'execute'), false, 'refund_key: not authenticated');
+
 -- register_child_tx.
 select is(has_function_privilege('authenticated', 'public.register_child_tx(uuid,uuid)', 'execute'), false, 'register_child_tx: not authenticated');
 update public.profiles set status = 'unconfirmed' where id = (select id from c where name='s_other');
@@ -106,7 +138,7 @@ update public.student_details set index_number = null where profile_id = (select
 select is(public.register_child_tx((select id from c where name='s_other'), (select id from c where name='p1')), true, 'registers a fresh unconfirmed shell');
 select is(public.register_child_tx((select id from c where name='s_other'), (select id from c where name='p2')), false, 'cannot be re-claimed by another parent');
 select is(public.register_child_tx((select id from c where name='s_ok'), (select id from c where name='p1')), false, 'an approved student cannot be claimed');
-select is((select count(*)::int from public.audit_log where action='child_registered_by_parent' and target_type='profile'), 1, 'one registration audit row');
+select is((select count(*)::int from public.audit_log where action='child_registered_by_parent' and target_id=(select id from c where name='s_other')), 1, 'one registration audit row');
 
 select * from finish();
 rollback;

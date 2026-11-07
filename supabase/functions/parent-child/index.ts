@@ -23,7 +23,12 @@ function validPastDate(s: unknown): s is string {
   if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const d = new Date(`${s}T00:00:00Z`);
   if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return false;
-  return s >= "1900-01-01" && d.getTime() < Date.now();
+  if (d.getTime() >= Date.now()) return false;
+  // The child must be 8 to 25 years old today.
+  const now = new Date();
+  let age = now.getUTCFullYear() - d.getUTCFullYear();
+  if (now.getUTCMonth() < d.getUTCMonth() || (now.getUTCMonth() === d.getUTCMonth() && now.getUTCDate() < d.getUTCDate())) age--;
+  return age >= 8 && age <= 25;
 }
 
 function str(v: unknown, min: number, max: number): string | null {
@@ -47,12 +52,8 @@ async function registerChild(svc: SupabaseClient, caller: { id: string }, raw: u
   const lastName = str(c.lastName, 1, 80);
   const school = str(c.school, 1, 120);
   const email = typeof c.email === "string" ? c.email.trim().toLowerCase() : "";
-  const password = c.password;
   if (!firstName || !lastName || !school) throw bad("Enter the child's first name, last name and school.");
   if (email.length > 254 || !EMAIL.test(email)) throw bad("Enter a valid email address for the child.");
-  if (typeof password !== "string" || password.length < 8 || password.length > 200) {
-    throw bad("The password must be 8 to 200 characters.");
-  }
   if (!validPastDate(c.dateOfBirth)) throw bad("Enter a valid date of birth.");
   const dob = c.dateOfBirth;
 
@@ -67,11 +68,13 @@ async function registerChild(svc: SupabaseClient, caller: { id: string }, raw: u
   const { data: existing, error: exErr } = await svc.from("profiles").select("id").eq("email", email).maybeSingle();
   if (exErr) throw INTERNAL();
   if (existing) throw inUse();
+  const { data: invited, error: ivErr } = await svc.from("pending_invites").select("email").eq("email", email).maybeSingle();
+  if (ivErr) throw INTERNAL();
+  if (invited) throw inUse();
 
   const parentName = `${me.first_name ?? ""} ${me.last_name ?? ""}`.trim();
   const { data: created, error: cErr } = await svc.auth.admin.createUser({
     email,
-    password,
     email_confirm: false,
     user_metadata: {
       first_name: firstName,
@@ -100,10 +103,10 @@ async function registerChild(svc: SupabaseClient, caller: { id: string }, raw: u
 
   // Best effort: the account exists; a missing email is reported, never fatal.
   let emailSent = false;
-  const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "signup", email, password });
+  const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "recovery", email });
   if (lErr) console.error("generateLink failed:", lErr.status ?? "unknown", lErr.code ?? "unknown");
   const actionLink = link?.properties?.action_link;
-  if (actionLink) emailSent = await sendEmail(email, "child_confirm", { link: actionLink, name: firstName });
+  if (actionLink) emailSent = await sendEmail(email, "child_confirm", { link: actionLink, name: firstName, parent_name: parentName });
 
   return jsonResponse({ registered: true, emailSent });
 }
@@ -132,6 +135,11 @@ async function requestLink(svc: SupabaseClient, caller: { id: string }, body: Re
       throw INTERNAL();
     }
     matched = data === true;
+    if (matched) {
+      // The index counter counts failures only: give this successful attempt back.
+      const { error: rErr } = await svc.rpc("login_attempt_refund_key", { p_key: `pidx:${index}` });
+      if (rErr) console.error("login_attempt_refund_key failed:", rErr.code ?? "unknown");
+    }
   }
   await pad();
   if (!matched) throw new HttpError("not_found", 404, NOT_FOUND);

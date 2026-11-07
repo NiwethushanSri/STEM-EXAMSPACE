@@ -65,6 +65,10 @@ Deno.test("parent-child link: correct match -> request only; admin approves -> p
     const { count: noNew } = await svc.from("parent_link_requests").select("*", { count: "exact", head: true }).eq("parent_id", parent.id);
     assertEquals(noNew, 0, "an existing link produces no new request");
 
+    // Successful matches do not count against the index limit.
+    const { count: idxRows } = await svc.from("login_attempts").select("*", { count: "exact", head: true }).eq("key", `pidx:${a.index}`);
+    assertEquals(idxRows, 0);
+
     // Reject path.
     assertEquals((await pc(parent.token, { action: "link", indexNumber: b.index, dateOfBirth: "2012-01-20" })).status, 200);
     const { data: r2 } = await svc.from("parent_link_requests").select("id").eq("parent_id", parent.id).eq("student_id", b.s.id).single();
@@ -101,7 +105,8 @@ Deno.test("parent-child link: wrong DOB and unknown index give identical 404; 6t
     const { count } = await svc.from("parent_link_requests").select("*", { count: "exact", head: true }).eq("parent_id", parent.id);
     assertEquals(count, 0);
 
-    // Bad shape is a 400 and does not count.
+    // Bad shape (including an implausible age) is a 400 and does not count.
+    assertEquals((await pc(parent.token, { action: "link", indexNumber: a.index, dateOfBirth: "2020-01-01" })).status, 400);
     assertEquals((await pc(parent.token, { action: "link", indexNumber: "", dateOfBirth: "2010-06-15" })).status, 400);
     assertEquals((await pc(parent.token, { action: "link", indexNumber: a.index, dateOfBirth: "15/06/2010" })).status, 400);
 
@@ -125,5 +130,30 @@ Deno.test("parent-child link: non-parent callers are 403", async () => {
     const r = await pc(tutor.token, { action: "link", indexNumber: a.index, dateOfBirth: "2010-06-15" });
     assertEquals(r.status, 403);
     assert((await svc.from("parent_link_requests").select("id").eq("student_id", a.s.id)).data!.length === 0);
+  });
+});
+
+Deno.test("parent-child link: approve_link for a suspended parent or unapproved child -> 409, request kept", async () => {
+  await withScenario(async ({ svc, track }) => {
+    const admin = track(await createTestUser(svc, { role: "admin", status: "active" }));
+    const parent = track(await createTestUser(svc, { role: "parent", status: "active" }));
+    const a = await approvedChild(svc, track);
+    const { data: req, error } = await svc.from("parent_link_requests")
+      .insert({ parent_id: parent.id, student_id: a.s.id }).select("id").single();
+    assertEquals(error, null);
+
+    await svc.from("profiles").update({ status: "suspended" }).eq("id", parent.id);
+    const r1 = await pc(admin.token, { action: "approve_link", requestId: req!.id });
+    assertEquals(r1.status, 409);
+    assertEquals(r1.json.error.code, "conflict");
+    await svc.from("profiles").update({ status: "active" }).eq("id", parent.id);
+
+    await svc.from("profiles").update({ status: "pending" }).eq("id", a.s.id);
+    const r2 = await pc(admin.token, { action: "approve_link", requestId: req!.id });
+    assertEquals(r2.status, 409);
+    const { count } = await svc.from("parent_children").select("*", { count: "exact", head: true }).eq("parent_id", parent.id);
+    assertEquals(count, 0);
+    const { count: kept } = await svc.from("parent_link_requests").select("*", { count: "exact", head: true }).eq("id", req!.id);
+    assertEquals(kept, 1);
   });
 });

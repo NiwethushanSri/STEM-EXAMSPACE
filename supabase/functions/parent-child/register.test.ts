@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { childBody, confirm, createTestUser, idByEmail, pc, post, profileOf, userGone, withScenario } from "./_helpers.ts";
+import { anon, childBody, confirm, createTestUser, idByEmail, pc, post, profileOf, userGone, withScenario } from "./_helpers.ts";
 
 Deno.test("parent-child register: parent registers child -> unconfirmed, confirm -> pending, approve links; reject removes", async () => {
   await withScenario(async ({ svc, track, childEmail }) => {
@@ -26,6 +26,13 @@ Deno.test("parent-child register: parent registers child -> unconfirmed, confirm
     const { count: aud } = await svc.from("audit_log").select("*", { count: "exact", head: true })
       .eq("action", "child_registered_by_parent").eq("actor_id", parent.id).eq("target_id", cid!).eq("target_type", "profile");
     assertEquals(aud, 1);
+
+    // No password exists: nothing the parent could know signs the child in.
+    const probe = anon();
+    for (const pw of ["Password123!", "x".repeat(12)]) {
+      const { data: si, error: siErr } = await probe.auth.signInWithPassword({ email: e1, password: pw });
+      assert(siErr && !si.session, "child cannot sign in with a guessed password");
+    }
 
     // The parent cannot see the child before approval.
     const { data: seen } = await parent.client.from("profiles").select("id").eq("id", cid!);
@@ -71,8 +78,8 @@ Deno.test("parent-child register: non-parent 403, duplicate email 409, bad input
 
     const overrides: Record<string, unknown>[] = [
       { email: "nope" },
-      { password: "short" },
-      { password: "x".repeat(201) },
+      { dateOfBirth: "2020-01-01" },
+      { dateOfBirth: "1990-01-01" },
       { firstName: "" },
       { lastName: "x".repeat(81) },
       { school: "" },
@@ -88,6 +95,25 @@ Deno.test("parent-child register: non-parent 403, duplicate email 409, bad input
     assertEquals((await pc(parent.token, { action: "register" })).status, 400);
     assertEquals(await idByEmail(svc, e), null);
     assertEquals((await pc(parent.token, { action: "nope" })).status, 400);
+
+    // A pending invite for the address also refuses (and is left alone).
+    const invited = childEmail();
+    const { error: iErr } = await svc.from("pending_invites").insert({ email: invited, role: "parent" });
+    assertEquals(iErr, null);
+    try {
+      const r = await pc(parent.token, { action: "register", child: childBody(invited) });
+      assertEquals(r.status, 409);
+      assertEquals(r.json.error.code, "email_in_use");
+      assertEquals(await idByEmail(svc, invited), null);
+    } finally {
+      await svc.from("pending_invites").delete().eq("email", invited);
+    }
+
+    // A password in the body is ignored: the child still cannot sign in with it.
+    const withPw = childEmail();
+    assertEquals((await pc(parent.token, { action: "register", child: childBody(withPw, { password: "Parent-Chosen-1" }) })).status, 200);
+    const { error: pwErr } = await anon().auth.signInWithPassword({ email: withPw, password: "Parent-Chosen-1" });
+    assert(pwErr, "a parent-supplied password is not applied");
 
     // Duplicate: an existing account (any case) -> 409 email_in_use, nothing changed.
     const dup = await pc(parent.token, { action: "register", child: childBody(student.email.toUpperCase()) });

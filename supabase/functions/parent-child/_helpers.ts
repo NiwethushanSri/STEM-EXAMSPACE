@@ -1,7 +1,8 @@
 import { createTestUser, deleteUserIds, deleteUsers, env, service, type TestUser } from "../_shared/test_helpers.ts";
 
 // Shared setup for the parent-child test files (not itself a test file).
-export { createTestUser, deleteUserIds, deleteUsers, env, service };
+import { anon } from "../_shared/test_helpers.ts";
+export { anon, createTestUser, deleteUserIds, deleteUsers, env, service };
 export type { TestUser };
 export type Svc = ReturnType<typeof service>;
 
@@ -23,7 +24,6 @@ export const childBody = (email: string, over: Record<string, unknown> = {}) => 
   firstName: "Nimal",
   lastName: "Silva",
   email,
-  password: `Pw-${crypto.randomUUID()}`,
   dateOfBirth: "2011-03-09",
   school: "Royal College",
   ...over,

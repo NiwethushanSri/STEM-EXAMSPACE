@@ -4,7 +4,7 @@ const SUBJECTS: Record<EmailTemplate, string> = {
   approved: "Your Stem Examspace account is approved",
   rejected: "Your Stem Examspace registration",
   invite: "You are invited to Stem Examspace",
-  child_confirm: "Confirm your Stem Examspace account",
+  child_confirm: "Set up your Stem Examspace account",
 };
 
 const ESCAPES: Record<string, string> = {
@@ -37,8 +37,8 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
       }.</p>${data.link ? `<p><a href="${esc(data.link)}">Accept your invitation</a></p>` : ""}`;
       break;
     case "child_confirm":
-      html = `<p>Hi ${name},</p><p>A parent has registered you with Stem Examspace. Confirm your email address to continue.</p>${
-        data.link ? `<p><a href="${esc(data.link)}">Confirm your email</a></p>` : ""
+      html = `<p>Hi ${name},</p><p>${esc(data.parent_name ?? "A parent")} registered you for Stem Examspace. Use this link to confirm your email and choose your password. If you did not expect this, ignore this email.</p>${
+        data.link ? `<p><a href="${esc(data.link)}">Set up your account</a></p>` : ""
       }`;
       break;
   }
