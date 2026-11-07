@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(34);
+select plan(42);
 
 -- Sign-up with full metadata, messy email casing/whitespace.
 insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data, created_at, instance_id, aud, role)
@@ -54,11 +54,12 @@ select is((select status::text from public.profiles where id = '00000000-0000-00
   'pending', 'confirming_email_sets_pending: unconfirmed becomes pending');
 
 -- invited_role_is_applied
-insert into public.pending_invites (email, role) values ('Tutor.One@Example.com', 'tutor');
+insert into public.pending_invites (email, role, token)
+  values ('tutor.one@example.com', 'tutor', '00000000-0000-0000-0000-0000000000c1');
 insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data, created_at, instance_id, aud, role)
 values ('00000000-0000-0000-0000-0000000000b4', 'tutor.one@example.com',
   '{"first_name":"Tara","last_name":"Tutor"}'::jsonb,
-  '{}'::jsonb, now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated');
+  '{"invite_token":"00000000-0000-0000-0000-0000000000c1"}'::jsonb, now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated');
 select is((select role::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b4'),
   'tutor', 'invited_role_is_applied: role is tutor');
 select is((select status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b4'),
@@ -98,45 +99,84 @@ select is(has_table_privilege('anon', 'public.pending_invites', 'select,insert,u
 select is(has_table_privilege('authenticated', 'public.pending_invites', 'select,insert,update,delete'),
   false, 'pending_invites_not_accessible_to_authenticated');
 
--- guard_blocks_protected_columns_without_bypass (postgres role, no bypass)
-select throws_ok(
-  $$update public.profiles set role = 'owner' where id = '00000000-0000-0000-0000-0000000000b1'$$,
-  '42501', null, 'guard_blocks_role_change_without_bypass');
-select throws_ok(
-  $$update public.profiles set status = 'active' where id = '00000000-0000-0000-0000-0000000000b1'$$,
-  '42501', null, 'guard_blocks_status_change_without_bypass');
-select throws_ok(
-  $$update public.student_details set index_number = 'SE-2026-0001' where profile_id = '00000000-0000-0000-0000-0000000000b1'$$,
-  '42501', null, 'guard_blocks_index_number_change_without_bypass');
-select lives_ok(
-  $$update public.profiles set first_name = 'Nim' where id = '00000000-0000-0000-0000-0000000000b1'$$,
-  'guard_allows_unprotected_column_change');
+-- public_signup_cannot_claim_invite (matching email, no token) and wrong_invite_token_is_ignored
+insert into public.pending_invites (email, role) values ('victim@example.com', 'parent');
+insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data, created_at, instance_id, aud, role)
+values ('00000000-0000-0000-0000-0000000000b6', 'victim@example.com',
+  '{"invite_token":"x"}'::jsonb, '{}'::jsonb, now(),
+  '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated');
+select is((select role::text || '/' || status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b6'),
+  'student/unconfirmed', 'public_signup_cannot_claim_invite: student/unconfirmed');
+select is((select count(*)::int from public.pending_invites where email = 'victim@example.com'),
+  1, 'public_signup_cannot_claim_invite: invite row still present');
+insert into public.pending_invites (email, role) values ('victim2@example.com', 'admin');
+insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data, created_at, instance_id, aud, role)
+values ('00000000-0000-0000-0000-0000000000b7', 'victim2@example.com',
+  '{}'::jsonb, '{"invite_token":"00000000-0000-0000-0000-0000000000ff"}'::jsonb, now(),
+  '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated');
+select is((select role::text || '/' || status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b7'),
+  'student/unconfirmed', 'wrong_invite_token_is_ignored: student/unconfirmed');
+select is((select count(*)::int from public.pending_invites where email = 'victim2@example.com'),
+  1, 'wrong_invite_token_is_ignored: invite row still present');
+select is((select count(*)::int from public.student_details where profile_id = '00000000-0000-0000-0000-0000000000b7'),
+  1, 'wrong_invite_token_is_ignored: student_details created');
+select is((select count(*)::int from public.student_details where profile_id = '00000000-0000-0000-0000-0000000000b6'),
+  1, 'public_signup_cannot_claim_invite: student_details created');
 
--- guard_bypass_setting_allows_change
-select set_config('app.bypass_guard', 'on', true);
-select lives_ok(
-  $$update public.profiles set status = 'active' where id = '00000000-0000-0000-0000-0000000000b1'$$,
-  'guard_bypass_setting_allows_change');
-select set_config('app.bypass_guard', 'off', true);
+-- confirmed_at_insert_starts_pending
+insert into auth.users (id, email, email_confirmed_at, raw_user_meta_data, raw_app_meta_data, created_at, instance_id, aud, role)
+values ('00000000-0000-0000-0000-0000000000b8', 'preconfirmed@example.com', now(),
+  '{}'::jsonb, '{}'::jsonb, now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated');
+select is((select status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b8'),
+  'pending', 'confirmed_at_insert_starts_pending');
 
--- user_cannot_change_own_role_as_authenticated (no policies yet: update must change nothing)
-set local role authenticated;
+-- invalid date_of_birth does not abort sign-up
+insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data, created_at, instance_id, aud, role)
+values ('00000000-0000-0000-0000-0000000000b9', 'baddob@example.com',
+  '{"date_of_birth":"not-a-date"}'::jsonb, '{}'::jsonb, now(),
+  '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated');
+select is((select count(*)::int from public.profiles where id = '00000000-0000-0000-0000-0000000000b9'),
+  1, 'invalid_dob_does_not_abort_signup: profile created');
+select is((select date_of_birth from public.student_details where profile_id = '00000000-0000-0000-0000-0000000000b9'),
+  null::date, 'invalid_dob_does_not_abort_signup: date_of_birth is null');
+
+select throws_ok(
+  $$insert into public.pending_invites (email, role) values ('Mixed@Example.com', 'admin')$$,
+  '23514', null, 'pending_invites_requires_normalised_email');
+
+-- Guard tests: temporary policies/grants (rolled back) make rows reachable for authenticated.
+grant select, update on public.profiles, public.student_details to authenticated;
+create policy tmp_sel on public.profiles for select to authenticated using (true);
+create policy tmp_upd on public.profiles for update to authenticated using (true) with check (true);
+create policy tmp_sel on public.student_details for select to authenticated using (true);
+create policy tmp_upd on public.student_details for update to authenticated using (true) with check (true);
 select set_config('request.jwt.claims',
   json_build_object('sub', '00000000-0000-0000-0000-0000000000b2', 'role', 'authenticated')::text, true);
-update public.profiles set role = 'owner' where id = '00000000-0000-0000-0000-0000000000b2';
-reset role;
-select set_config('request.jwt.claims', '', true);
-select is((select role::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b2'),
-  'student', 'user_cannot_change_own_role_as_authenticated: role unchanged');
 
--- service_role_context_can_change_status
-select set_config('request.jwt.claims', json_build_object('role', 'service_role')::text, true);
+set local role authenticated;
+select throws_ok(
+  $$update public.profiles set role = 'owner' where id = '00000000-0000-0000-0000-0000000000b2'$$,
+  '42501', null, 'user_cannot_change_own_role: authenticated role change throws');
+select throws_ok(
+  $$update public.profiles set status = 'active' where id = '00000000-0000-0000-0000-0000000000b2'$$,
+  '42501', null, 'authenticated_status_change_throws');
+select throws_ok(
+  $$update public.student_details set index_number = 'SE-2026-0001' where profile_id = '00000000-0000-0000-0000-0000000000b1'$$,
+  '42501', null, 'authenticated_index_number_change_throws');
+select lives_ok(
+  $$update public.profiles set first_name = 'Nim' where id = '00000000-0000-0000-0000-0000000000b2'$$,
+  'authenticated_can_change_unprotected_column');
+reset role;
+
+select lives_ok(
+  $$update public.profiles set role = 'admin' where id = '00000000-0000-0000-0000-0000000000b2'$$,
+  'postgres_can_change_role');
+
+set local role service_role;
 select lives_ok(
   $$update public.profiles set status = 'suspended' where id = '00000000-0000-0000-0000-0000000000b2'$$,
-  'service_role_context_can_change_status: update allowed');
-select set_config('request.jwt.claims', '', true);
-select is((select status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b2'),
-  'suspended', 'service_role_context_can_change_status: status changed');
+  'service_role_can_change_status');
+reset role;
 
 select * from finish();
 rollback;

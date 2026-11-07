@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(26);
+select plan(27);
 
 select has_table('public', t, t || ' table exists')
 from unnest(array['profiles','student_details','subjects','student_subjects',
@@ -42,6 +42,10 @@ select col_is_pk('public', 'tutor_students', array['tutor_id','student_id'], 'tu
 
 insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000a1', 'cascade@example.com');
 -- the sign-up trigger (migration 002) creates the profile and student_details rows
+select is(
+  (select count(*)::int from public.profiles where id = '00000000-0000-0000-0000-0000000000a1')
+  + (select count(*)::int from public.student_details where profile_id = '00000000-0000-0000-0000-0000000000a1'),
+  2, 'sign-up trigger created profile and student_details before delete');
 delete from auth.users where id = '00000000-0000-0000-0000-0000000000a1';
 select is(
   (select count(*)::int from public.profiles where id = '00000000-0000-0000-0000-0000000000a1')
