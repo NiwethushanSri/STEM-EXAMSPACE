@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 
+const MIN_MS = 600;
 const BAD_LOGIN = "Index number or password is incorrect.";
 
 function normaliseIndex(raw: string): string {
@@ -12,6 +13,7 @@ function normaliseIndex(raw: string): string {
 }
 
 Deno.serve(handle(async (req) => {
+  const started = Date.now();
   if (req.method !== "POST") throw new HttpError("invalid_input", 405, "Use POST.");
 
   let body: unknown;
@@ -34,19 +36,29 @@ Deno.serve(handle(async (req) => {
   const idxKey = `idx:${index}`;
   const svc = serviceClient();
 
-  // Rate limit first, before any lookup or password verification.
-  const { data: allowed, error: checkErr } = await svc.rpc("login_attempt_check", { p_ip_key: ipKey, p_idx_key: idxKey });
-  if (checkErr) {
-    console.error("login_attempt_check failed:", checkErr.code ?? "unknown");
+  // Every non-200 response after the begin step takes at least MIN_MS, so timing does not reveal
+  // whether an index exists.
+  const pad = async () => {
+    const left = MIN_MS - (Date.now() - started);
+    if (left > 0) await new Promise((r) => setTimeout(r, left));
+  };
+  const reject = async (status: 401 | 500): Promise<never> => {
+    await pad();
+    if (status === 401) throw new HttpError("invalid_credentials", 401, BAD_LOGIN);
     throw new HttpError("internal", 500, "Something went wrong. Please try again.");
+  };
+  const refund = async () => {
+    const { error } = await svc.rpc("login_attempt_refund", { p_ip_key: ipKey, p_idx_key: idxKey });
+    if (error) console.error("login_attempt_refund failed:", error.code ?? "unknown");
+  };
+
+  // Atomic limit check + attempt record, before any lookup or password verification.
+  const { data: allowed, error: beginErr } = await svc.rpc("login_attempt_begin", { p_ip_key: ipKey, p_idx_key: idxKey });
+  if (beginErr) {
+    console.error("login_attempt_begin failed:", beginErr.code ?? "unknown");
+    return await reject(500);
   }
   if (allowed !== true) throw new HttpError("rate_limited", 429, "Too many attempts. Try again later.");
-
-  const fail = async (): Promise<never> => {
-    const { error } = await svc.rpc("login_attempt_fail", { p_ip_key: ipKey, p_idx_key: idxKey });
-    if (error) console.error("login_attempt_fail failed:", error.code ?? "unknown");
-    throw new HttpError("invalid_credentials", 401, BAD_LOGIN);
-  };
 
   // Look up the account email (never returned to the caller).
   let email: string | null = null;
@@ -55,31 +67,38 @@ Deno.serve(handle(async (req) => {
       .eq("index_number", index).maybeSingle();
     if (dErr) {
       console.error("index lookup failed:", dErr.code ?? "unknown");
-      throw new HttpError("internal", 500, "Something went wrong. Please try again.");
+      await refund();
+      return await reject(500);
     }
     if (det) {
       const { data: prof, error: pErr } = await svc.from("profiles").select("email, role")
         .eq("id", det.profile_id).maybeSingle();
       if (pErr) {
         console.error("profile lookup failed:", pErr.code ?? "unknown");
-        throw new HttpError("internal", 500, "Something went wrong. Please try again.");
+        await refund();
+        return await reject(500);
       }
       if (prof && prof.role === "student" && typeof prof.email === "string") email = prof.email;
     }
   }
+  // Unknown index: the attempt row stays (counts toward the limit); no sign-in is made.
+  if (!email) return await reject(401);
 
   const anon = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  // Unknown index: still perform a sign-in attempt so response timing is comparable.
-  const { data, error } = await anon.auth.signInWithPassword({
-    email: email ?? "no-such-account@invalid.example",
-    password,
-  });
-  if (!email || error || !data.session) return await fail();
+  const { data, error } = await anon.auth.signInWithPassword({ email, password });
+  if (error || !data.session) {
+    // Only an invalid-credentials answer is a failed login; anything else is an infrastructure error.
+    const bad = error && (error.code === "invalid_credentials" || error.status === 400);
+    if (bad) return await reject(401);
+    console.error("sign in failed:", error?.code ?? String(error?.status ?? "unknown"));
+    await refund();
+    return await reject(500);
+  }
 
-  const { error: clearErr } = await svc.rpc("login_attempt_clear", { p_idx_key: idxKey });
-  if (clearErr) console.error("login_attempt_clear failed:", clearErr.code ?? "unknown");
+  const { error: okErr } = await svc.rpc("login_attempt_succeed", { p_ip_key: ipKey, p_idx_key: idxKey });
+  if (okErr) console.error("login_attempt_succeed failed:", okErr.code ?? "unknown");
 
   return jsonResponse({
     access_token: data.session.access_token,

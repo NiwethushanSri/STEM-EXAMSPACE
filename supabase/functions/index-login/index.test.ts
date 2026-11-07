@@ -32,7 +32,7 @@ async function withStudent(fn: (ctx: {
   const keys = [`ip:${ip}`, `idx:${index}`, "idx:SE-2099-000000"];
   let userId: string | null = null;
   // The hosted gateway sets the first x-forwarded-for value to the real client IP, so a test cannot
-  // pick its own ip key. Clear the shared ip rows before and after each scenario instead.
+  // pick its own ip key. These tests MUST run serially (Deno runs a file's tests in order). Clear the shared ip rows before and after each scenario instead.
   const clearIp = async () => {
     const { error } = await svc.from("login_attempts").delete().like("key", "ip:%");
     if (error) throw new Error(`ip cleanup: ${error.message}`);
@@ -129,4 +129,26 @@ Deno.test("index-login: bad body -> 400", async () => {
     assertEquals(r.status, 400);
     assertEquals(r.json.error.code, "invalid_input");
   }
+});
+
+Deno.test("index-login: unknown index counts toward its limit", async () => {
+  await withStudent(async ({ svc, password, ip }) => {
+    const ghost = `SE-2099-${rnd()}`;
+    try {
+      for (let i = 0; i < 5; i++) assertEquals((await call({ indexNumber: ghost, password }, ip)).status, 401);
+      assertEquals((await call({ indexNumber: ghost, password }, ip)).status, 429);
+    } finally {
+      await svc.from("login_attempts").delete().eq("key", `idx:${ghost}`);
+    }
+  });
+});
+
+Deno.test("index-login: 20 parallel wrong-password requests -> at most 5 are 401", async () => {
+  await withStudent(async ({ index, ip }) => {
+    const rs = await Promise.all(Array.from({ length: 20 }, () => call({ indexNumber: index, password: "wrong" }, ip)));
+    const n401 = rs.filter((r) => r.status === 401).length;
+    const n429 = rs.filter((r) => r.status === 429).length;
+    assert(n401 <= 5, `got ${n401} 401s`);
+    assertEquals(n401 + n429, 20);
+  });
 });
