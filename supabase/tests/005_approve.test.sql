@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(36);
+select plan(41);
 
 -- The dev project's counters persist between function-test runs; clear them inside this transaction (rolled back).
 delete from public.index_counters;
@@ -14,6 +14,8 @@ insert into u values
   ('s5',      tests.create_user('student', 'pending')),
   ('s6',      tests.create_user('student', 'pending')),
   ('s7',      tests.create_user('student', 'pending')),
+  ('s8',      tests.create_user('student', 'pending')),
+  ('s9',      tests.create_user('student', 'pending')),
   ('active',  tests.create_user('student', 'active')),
   ('parent',  tests.create_user('parent', 'active')),
   ('tutor',   tests.create_user('tutor', 'active')),
@@ -26,7 +28,7 @@ update public.profiles set email = 'staff.tutor@example.com' where id = (select 
 update public.student_details set signup_parent_name = 'Kamal Perera', signup_parent_email = 'new.parent@example.com'
   where profile_id = (select id from u where name = 's1');
 update public.student_details set signup_parent_email = 'new.parent@example.com'
-  where profile_id in (select id from u where name in ('s2', 's3', 's6'));
+  where profile_id in (select id from u where name in ('s2', 's3', 's6', 's8'));
 update public.student_details set signup_parent_email = 'nimal.perera@example.com'
   where profile_id = (select id from u where name = 's4');
 update public.student_details set signup_parent_email = ' Nimal.Perera@Example.com '
@@ -117,25 +119,56 @@ select throws_ok($q$select * from public.index_counters$q$, '42501', null, 'inde
 select tests.as_postgres();
 select is((select count(*)::int from public.index_counters), 2, 'counters rows for 2026 and 2027 only');
 
--- claim_parent_invite: GoTrue creates the user before app_metadata exists, so the function claims the invite.
+-- claim_parent_invite is bound to the user created for that invite (token in app_metadata, fresh, bare shell).
 select is(has_function_privilege('authenticated', 'public.claim_parent_invite(uuid,uuid)', 'execute'), false, 'claim_parent_invite not executable by authenticated');
 select is(has_function_privilege('service_role', 'public.claim_parent_invite(uuid,uuid)', 'execute'), true, 'claim_parent_invite executable by service_role');
-insert into public.pending_invites (email, role) values ('claim.me@example.com', 'parent'), ('claim.tutor@example.com', 'tutor');
+insert into public.pending_invites (email, role) values
+  ('claim.me@example.com', 'parent'), ('claim.g@example.com', 'parent'),
+  ('claim.o@example.com', 'parent'), ('claim.tutor@example.com', 'tutor');
 create temp table c (name text primary key, id uuid not null);
 grant select on c to public;
-insert into c select 'p', tests.create_user('student', 'pending');
-insert into c select 't', tests.create_user('student', 'pending');
+insert into c select n, tests.create_user('student', 'pending') from unnest(array['p','g','o','t']) n;
 update public.profiles set email = 'claim.me@example.com' where id = (select id from c where name = 'p');
+update public.profiles set email = 'claim.g@example.com' where id = (select id from c where name = 'g');
+update public.profiles set email = 'claim.o@example.com' where id = (select id from c where name = 'o');
 update public.profiles set email = 'claim.tutor@example.com' where id = (select id from c where name = 't');
+update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', (select token::text from public.pending_invites where email = 'claim.me@example.com'))
+  where id = (select id from c where name = 'p');
+update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', (select token::text from public.pending_invites where email = 'claim.g@example.com'))
+  where id = (select id from c where name = 'g');
+update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', (select token::text from public.pending_invites where email = 'claim.o@example.com')),
+  created_at = now() - interval '48 hours' where id = (select id from c where name = 'o');
+update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', (select token::text from public.pending_invites where email = 'claim.tutor@example.com'))
+  where id = (select id from c where name = 't');
+update public.student_details set signup_parent_email = 'x@example.com', signup_parent_name = 'X' where profile_id = (select id from c where name = 'g');
+
+select is(public.claim_parent_invite((select id from c where name = 'g'),
+  (select token from public.pending_invites where email = 'claim.g@example.com')), false,
+  'genuine pending student (signup data) is refused even with the correct token');
 select is(public.claim_parent_invite((select id from c where name = 'p'), gen_random_uuid()), false, 'claim with wrong token refused');
+select is(public.claim_parent_invite((select id from c where name = 'o'),
+  (select token from public.pending_invites where email = 'claim.o@example.com')), false, 'claim for a user older than 24 hours refused');
 select is(public.claim_parent_invite((select id from c where name = 't'),
   (select token from public.pending_invites where email = 'claim.tutor@example.com')), false, 'claim of a non-parent invite refused');
-select is(public.claim_parent_invite((select id from c where name = 'p'),
-  (select token from public.pending_invites where email = 'claim.me@example.com')), true, 'claim with the right token succeeds');
-select results_eq(format($q$select role::text, status::text from public.profiles where id = %L$q$, (select id from c where name = 'p')),
-  $q$values ('parent', 'active')$q$, 'claimed profile is an active parent');
 select is(public.claim_parent_invite((select id from u where name = 's1'),
   (select token from public.pending_invites where email = 'new.parent@example.com')), false, 'approved student cannot be claimed as parent');
+select is(public.claim_parent_invite((select id from c where name = 'p'),
+  (select token from public.pending_invites where email = 'claim.me@example.com')), true, 'user with matching app_metadata token is claimed');
+select results_eq(format($q$select role::text, status::text from public.profiles where id = %L$q$, (select id from c where name = 'p')),
+  $q$values ('parent', 'active')$q$, 'claimed profile is an active parent');
+select is(public.claim_parent_invite((select id from c where name = 'p'), gen_random_uuid()), true, 'second claim on an already-claimed parent returns true');
+
+-- Index numbers pad to at least 4 digits and never truncate.
+insert into public.index_counters values (2030, 9999);
+select is((select index_number from public.approve_student_tx((select id from u where name = 's8'), (select id from u where name = 'admin'), 2030)),
+  'SE-2030-10000', 'index_number_not_truncated_past_9999');
+
+-- A student account as the parent email gets the same code.
+update public.student_details set signup_parent_email = (select email::text from public.profiles where id = (select id from u where name = 'active'))
+  where profile_id = (select id from u where name = 's9');
+select throws_ok(
+  format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's9'), (select id from u where name = 'admin')),
+  'P0001', 'parent_email_is_staff', 'student account as parent email is rejected');
 
 select * from finish();
 rollback;

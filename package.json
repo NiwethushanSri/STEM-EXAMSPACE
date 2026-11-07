@@ -9,6 +9,7 @@
     "db:push": "supabase db push --remote --yes",
     "db:reset": "supabase db reset --remote --yes",
     "db:test": "node scripts/db-test.mjs",
+    "fn:deploy": "supabase functions deploy --yes --import-map supabase/functions/deno.json",
     "fn:test": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local supabase/functions"
   },
   "devDependencies": {

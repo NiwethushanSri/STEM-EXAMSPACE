@@ -44,12 +44,13 @@ async function withScenario(fn: (ctx: {
     users.push(admin);
     await fn({ svc, admin, track: (u) => (users.push(u), u), parentEmail });
   } finally {
-    // Parents created by the function are not in `users`: find them by email.
-    const { data } = await svc.from("profiles").select("id").eq("email", parentEmail);
+    // Parents created by the function are not in `users`: find them by email (case-insensitively).
+    const { data, error: selErr } = await svc.from("profiles").select("id").eq("email", parentEmail);
+    const { error: invErr } = await svc.from("pending_invites").delete().eq("email", parentEmail);
     const extra = (data ?? []).map((r: { id: string }) => r.id);
-    await svc.from("pending_invites").delete().eq("email", parentEmail);
     await deleteUsers(svc, users);
     await deleteUserIds(svc, extra);
+    if (selErr || invErr) throw new Error(`test cleanup query failed: ${selErr?.code ?? ""} ${invErr?.code ?? ""}`);
   }
 }
 
@@ -84,6 +85,12 @@ Deno.test("approve-student: admin approves, creates parent, links; sibling reuse
 
     const { data: prof } = await svc.from("profiles").select("status, index:student_details(index_number)").eq("id", s1.id).single();
     assertEquals(prof!.status, "profile_incomplete");
+    const { data: det } = await svc.from("student_details").select("index_number").eq("profile_id", s1.id).single();
+    assertEquals(det!.index_number, r1.json.indexNumber);
+    assertEquals(r1.json.parentLinked, true);
+    const { count: aud } = await svc.from("audit_log").select("*", { count: "exact", head: true })
+      .eq("action", "student_approved").eq("target_id", s1.id);
+    assertEquals(aud, 1);
 
     const { data: parents } = await svc.from("profiles").select("id, role, status").eq("email", parentEmail);
     assertEquals(parents!.length, 1);
@@ -100,6 +107,7 @@ Deno.test("approve-student: admin approves, creates parent, links; sibling reuse
     const r2 = await call(admin.token, { studentId: s2.id });
     assertEquals(r2.status, 200);
     assertEquals(r2.json.parentInvited, false);
+    assertEquals(r2.json.parentLinked, true);
     assertNotEquals(r2.json.indexNumber, r1.json.indexNumber);
     const { data: parents2 } = await svc.from("profiles").select("id").eq("email", parentEmail);
     assertEquals(parents2!.length, 1);
@@ -126,5 +134,43 @@ Deno.test("concurrent_approvals_get_distinct_index_numbers", async () => {
     assertNotEquals(ra.json.indexNumber, rb.json.indexNumber);
     const { data: parents } = await svc.from("profiles").select("id").eq("email", parentEmail);
     assertEquals(parents!.length, 1);
+    const { data: links } = await svc.from("parent_children").select("student_id").eq("parent_id", parents![0].id);
+    assertEquals(links!.map((l: { student_id: string }) => l.student_id).sort(), [a.id, b.id].sort());
+    assertEquals(ra.json.parentLinked, true);
+    assertEquals(rb.json.parentLinked, true);
+  });
+});
+
+Deno.test("approve-student: parent email of a staff account -> 409 parent_email_is_staff, student stays pending", async () => {
+  await withScenario(async ({ svc, admin, track, parentEmail }) => {
+    const tutor = track(await createTestUser(svc, { role: "tutor", status: "active" }));
+    const s = track(await pendingStudent(svc, tutor.email));
+    const r = await call(admin.token, { studentId: s.id });
+    assertEquals(r.status, 409);
+    assertEquals(r.json.error.code, "parent_email_is_staff");
+    assert(/staff/.test(r.json.error.message));
+    const { data } = await svc.from("profiles").select("status").eq("id", s.id).single();
+    assertEquals(data!.status, "pending");
+    void parentEmail;
+  });
+});
+
+Deno.test("approve-student: parent email of a student account -> 409 with student message", async () => {
+  await withScenario(async ({ svc, admin, track }) => {
+    const other = track(await createTestUser(svc, { role: "student", status: "active" }));
+    const s = track(await pendingStudent(svc, other.email));
+    const r = await call(admin.token, { studentId: s.id });
+    assertEquals(r.status, 409);
+    assertEquals(r.json.error.code, "parent_email_is_staff");
+    assert(/student account/.test(r.json.error.message));
+  });
+});
+
+Deno.test("approve-student: blank parent email -> 400 invalid_input", async () => {
+  await withScenario(async ({ svc, admin, track }) => {
+    const s = track(await pendingStudent(svc, "   "));
+    const r = await call(admin.token, { studentId: s.id });
+    assertEquals(r.status, 400);
+    assertEquals(r.json.error.code, "invalid_input");
   });
 });
