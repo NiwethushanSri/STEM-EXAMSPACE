@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(50);
+select plan(51);
 
 -- The dev project's counters persist between function-test runs; clear them inside this transaction (rolled back).
 delete from public.index_counters;
@@ -215,6 +215,17 @@ select is((select count(*)::int from public.parent_children where student_id = (
 select lives_ok(format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's13'), (select id from u where name = 'admin')),
   'approval with a blocked pair succeeds');
 select is((select count(*)::int from public.parent_children where student_id = (select id from u where name = 's13')), 0, 'blocked pair is not linked');
+
+-- A token-bearing parent shell older than 24 hours is not reused.
+insert into public.pending_invites (email, role) values ('stale.parent@example.com', 'parent');
+insert into u values ('stale', tests.create_user('student', 'pending')), ('s14', tests.create_user('student', 'pending'));
+update public.profiles set email = 'stale.parent@example.com' where id = (select id from u where name = 'stale');
+update auth.users set raw_app_meta_data = jsonb_build_object('invite_token', (select token::text from public.pending_invites where email = 'stale.parent@example.com')),
+  created_at = now() - interval '25 hours' where id = (select id from u where name = 'stale');
+update public.student_details set signup_parent_email = 'stale.parent@example.com' where profile_id = (select id from u where name = 's14');
+select throws_ok(
+  format($q$select * from public.approve_student_tx(%L, %L, 2026)$q$, (select id from u where name = 's14'), (select id from u where name = 'admin')),
+  'P0001', 'parent_email_is_staff', 'stale token-bearing shell is refused');
 
 select * from finish();
 rollback;

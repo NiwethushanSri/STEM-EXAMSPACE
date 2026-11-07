@@ -1,6 +1,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(50);
+select plan(51);
+select tests.assert_no_owner();
 
 -- Privileges.
 select is(has_function_privilege('authenticated', 'public.claim_invite(uuid,uuid,text,public.app_role)', 'execute'), false, 'claim_invite not executable by authenticated');
@@ -128,6 +129,7 @@ update public.profiles set status = 'active' where id = (select id from s where 
 select is(public.link_children_to_parent((select id from c where name = 'parentshell')), 0, 'suspended parent is not linked to anyone');
 select is(public.link_student_to_parent((select id from c where name = 'parentshell'), (select id from s where name = 'g')), 'parent_inactive', 'link_student_to_parent: inactive parent');
 update public.profiles set status = 'active' where id = (select id from c where name = 'parentshell');
+select is(public.link_student_to_parent((select id from c where name = 'parentshell'), (select id from s where name = 'h')), 'refused', 'link_student_to_parent: suspended student with an index is refused');
 select is(public.link_student_to_parent((select id from c where name = 'parentshell'), (select id from s where name = 'g')), 'linked', 'link_student_to_parent: linked');
 select is(public.link_student_to_parent((select id from c where name = 'parentshell'), (select id from s where name = 'g')), 'exists', 'link_student_to_parent: exists');
 

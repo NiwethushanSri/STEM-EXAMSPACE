@@ -2,11 +2,18 @@
 //
 //   npm run setup:owner -- <email> <first name> <last name>
 //
-// Runs on Node >= 22.9 (native TypeScript type stripping, so no build step) and reads
-// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from the environment or from .env.dev.local
-// (loaded by the npm script). Refuses when an owner already exists, with one exception: if the
-// only owner has this exact email and its invite email never went out, the email is re-sent.
-// The invite link and token are never printed; the email goes out through the project's auth mailer.
+// Targets the LIVE project: it reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from
+// .env.prod.local (create that file for the live project first). The dev project never holds a
+// real owner (the test suites need that slot), so the script refuses when the URL equals the
+// one in .env.dev.local, unless --allow-dev is passed, which is only for testing the script with
+// a throwaway owner that is deleted afterwards (it then reads .env.dev.local).
+//
+// Runs on Node >= 22.9 (native TypeScript type stripping, no build step). Refuses when an owner
+// already exists, with one exception: if the only owner has this exact email and its invite
+// email never went out, the email is re-sent. The invite link and token are never printed; the
+// email goes out through the project's auth mailer.
+import { existsSync, readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
 import { createClient } from "@supabase/supabase-js";
 
 function fail(message: string): never {
@@ -14,16 +21,32 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const [rawEmail, firstName, lastName] = process.argv.slice(2);
+function readEnvFile(path: string): Record<string, string | undefined> {
+  return existsSync(path) ? parseEnv(readFileSync(path, "utf8")) : {};
+}
+
+const allowDev = process.argv.includes("--allow-dev");
+const [rawEmail, firstName, lastName] = process.argv.slice(2).filter((a) => a !== "--allow-dev");
 if (!rawEmail || !firstName || !lastName) {
-  fail("Usage: npm run setup:owner -- <email> <first name> <last name>");
+  fail("Usage: npm run setup:owner -- <email> <first name> <last name> [--allow-dev]");
 }
 const email = rawEmail.trim().toLowerCase();
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail("That does not look like an email address.");
 
-const url = process.env.SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!url || !key) fail("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (for example in .env.dev.local).");
+const devEnv = readEnvFile(".env.dev.local");
+let env: Record<string, string | undefined>;
+if (allowDev) {
+  env = devEnv;
+} else {
+  if (!existsSync(".env.prod.local")) fail("Create .env.prod.local for the live project first");
+  env = readEnvFile(".env.prod.local");
+}
+const url = env.SUPABASE_URL;
+const key = env.SUPABASE_SERVICE_ROLE_KEY;
+if (!url || !key) fail("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the env file.");
+if (!allowDev && devEnv.SUPABASE_URL && url.replace(/\/+$/, "") === devEnv.SUPABASE_URL.replace(/\/+$/, "")) {
+  fail("That is the dev project, which must never hold a real owner. Nothing was changed.");
+}
 
 const svc = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 

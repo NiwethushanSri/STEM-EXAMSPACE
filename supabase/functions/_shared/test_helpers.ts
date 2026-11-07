@@ -24,10 +24,18 @@ export interface TestUser {
   token: string;
 }
 
+/** Fails fast when a persistent owner exists on dev (the one_owner index would break the suites). */
+async function assertNoRealOwner(svc: SupabaseClient): Promise<void> {
+  const { count, error } = await svc.from("profiles").select("*", { count: "exact", head: true }).eq("role", "owner");
+  if (error) throw new Error(`owner check failed: ${error.code ?? "unknown"}`);
+  if ((count ?? 0) > 0) throw new Error("A real owner exists on the dev project — tests need it removed");
+}
+
 export async function createTestUser(
   svc: SupabaseClient,
   opts: { role?: string; status?: string; metadata?: Record<string, unknown> } = {},
 ): Promise<TestUser> {
+  if (opts.role === "owner") await assertNoRealOwner(svc);
   const email = `t6-${crypto.randomUUID()}@example.test`;
   const password = `Pw-${crypto.randomUUID()}`;
   const { data, error } = await svc.auth.admin.createUser({

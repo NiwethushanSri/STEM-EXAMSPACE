@@ -20,7 +20,9 @@ function mapTxError(message: string, detail?: string | null): HttpError {
       return new HttpError(
         "parent_email_is_staff",
         409,
-        detail === "student"
+        detail === "stuck"
+          ? "This parent invite is stuck. Ask an owner to remove the old invite."
+          : detail === "student"
           ? "The parent email belongs to a student account. Edit the parent email first."
           : "The parent email belongs to a staff account. Edit the parent email first.",
       );

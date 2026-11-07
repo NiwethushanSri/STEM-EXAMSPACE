@@ -11,7 +11,7 @@
     "db:test": "node scripts/db-test.mjs",
     "fn:deploy": "supabase functions deploy --yes --import-map supabase/functions/deno.json",
     "fn:test": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local supabase/functions",
-    "setup:owner": "node --env-file-if-exists=.env.dev.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/setup-owner.ts"
+    "setup:owner": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/setup-owner.ts"
   },
   "devDependencies": {
     "@supabase/supabase-js": "^2.119.0",
