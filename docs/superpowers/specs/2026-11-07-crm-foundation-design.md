@@ -140,6 +140,15 @@ Created once by a setup script (`npm run setup:owner -- <email>`) run against th
 
 Apple requires in-app account deletion. Students and parents get "Delete my account" in the mobile app settings: it deletes the auth user (cascade) and writes an audit row without personal data. A parent cannot delete a child's account in Part 1.
 
+### 6.9 Parents adding children (owner decision, 2026-11-07)
+
+Every child goes through the same protocol, whoever starts it. A parent never sees a child before an admin approves.
+
+- **Register a child (parent-initiated):** the parent, signed in, submits the same fields as §6.1 for the child, including an email for the child. The child's account is created exactly as a self sign-up: confirmation email to the child's address, `unconfirmed` → `pending` → admin approval → `profile_incomplete` → `active`; admin may reject (deleted as §6.3). The registration records `requested_by_parent = <parent id>`; on approval the child is linked to that parent (and to any parent matching `signup_parent_email`). `signup_parent_email` is set to the requesting parent's email.
+- **Link an existing child:** the parent submits the child's index number + date of birth. A wrong combination returns the same generic "We could not find a child with those details" and counts toward a rate limit (5 per 15 minutes per parent and per index number). A correct combination creates a `parent_link_requests` row (`pending`), never a link. Owner/admin approve (creates the `parent_children` row) or reject (row deleted). Audit rows for request, approval and rejection carry ids only.
+- A child may have several linked parents/guardians.
+- Admin approval list shows parent-initiated registrations and link requests alongside self sign-ups.
+
 ## 7. Data model (Part 1)
 
 ```

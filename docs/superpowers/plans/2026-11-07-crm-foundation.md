@@ -236,6 +236,25 @@
 
 ---
 
+### Task 10c: Parents adding children (spec §6.9)
+
+**Files:**
+- Create: `supabase/migrations/<next>_parent_children_requests.sql`, `supabase/tests/0NN_parent_requests.test.sql`, `supabase/functions/parent-child/index.ts` + `index.test.ts`
+- Modify: `supabase/functions/approve-student/index.ts` (link `requested_by_parent`), `supabase/functions/reject-student/index.ts` (unchanged behaviour; test that parent-initiated registrations reject the same way)
+
+**Interfaces:**
+- Produces:
+  - `student_details.requested_by_parent uuid null` (FK profiles on delete set null).
+  - `parent_link_requests(id uuid pk default gen_random_uuid(), parent_id uuid fk, student_id uuid fk, created_at, unique(parent_id, student_id))`, RLS: parent reads own rows; owner/admin read all; no client writes.
+  - `POST /parent-child` `{ action: "register", child: { firstName, lastName, email, password, dateOfBirth, school } }` (caller role parent, status active) → creates the child via `auth.admin.createUser({ email, password, email_confirm: false, user_metadata: {…, parent_name, parent_email: caller email} })` then sends the confirmation link (`generateLink({ type: 'signup' })` + email), sets `requested_by_parent`; child follows §6.1 statuses. 200 `{ registered: true }`; existing email → 409 email_in_use.
+  - `{ action: "link", indexNumber, dateOfBirth }` → rate-limited (reuse `login_attempt_begin` with keys `plink:<parent id>` and `pidx:<normalised index>`); match → insert request (idempotent) → 200 `{ requested: true }`; no match → padded generic 404 `not_found` "We could not find a child with those details".
+  - `{ action: "approve_link" | "reject_link", requestId }` (owner/admin) → approve inserts `parent_children` + deletes request; reject deletes request. Audit ids only.
+  - approve-student: after approval, also link `requested_by_parent` if set (and still a parent).
+- [ ] **Step 1:** Tests (pgTAP + Deno): parent registers child → child unconfirmed; confirm → pending; admin approves → child linked to requesting parent; admin rejects → child deleted, no link; non-parent caller → 403; link with correct index+DOB → request pending, parent still cannot read child; wrong DOB and unknown index → identical 404 bodies; 6th wrong attempt → 429; admin approves request → parent reads child; reject → no link; parent cannot read other parents' requests.
+- [ ] **Step 2:** Run → FAIL. **Step 3:** Implement. **Step 4:** Run → PASS. **Step 5:** Commit `feat: parents register or link children with admin approval`.
+
+---
+
 ### Task 11: Shared client and role routing
 
 **Files:**
