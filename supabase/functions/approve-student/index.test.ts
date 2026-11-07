@@ -83,7 +83,7 @@ Deno.test("approve-student: admin approves, creates parent, links; sibling reuse
     assertEquals(typeof r1.json.emailsSent, "boolean");
     assert(!JSON.stringify(r1.json).includes("token"), "response must not carry the invite token");
 
-    const { data: prof } = await svc.from("profiles").select("status, index:student_details(index_number)").eq("id", s1.id).single();
+    const { data: prof } = await svc.from("profiles").select("status, index:student_details!profile_id(index_number)").eq("id", s1.id).single();
     assertEquals(prof!.status, "profile_incomplete");
     const { data: det } = await svc.from("student_details").select("index_number").eq("profile_id", s1.id).single();
     assertEquals(det!.index_number, r1.json.indexNumber);

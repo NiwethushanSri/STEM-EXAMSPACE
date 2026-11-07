@@ -1,9 +1,10 @@
-export type EmailTemplate = "approved" | "rejected" | "invite";
+export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm";
 
 const SUBJECTS: Record<EmailTemplate, string> = {
   approved: "Your Stem Examspace account is approved",
   rejected: "Your Stem Examspace registration",
   invite: "You are invited to Stem Examspace",
+  child_confirm: "Confirm your Stem Examspace account",
 };
 
 const ESCAPES: Record<string, string> = {
@@ -35,6 +36,11 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
         data.role ? ` as ${esc(data.role)}` : ""
       }.</p>${data.link ? `<p><a href="${esc(data.link)}">Accept your invitation</a></p>` : ""}`;
       break;
+    case "child_confirm":
+      html = `<p>Hi ${name},</p><p>A parent has registered you with Stem Examspace. Confirm your email address to continue.</p>${
+        data.link ? `<p><a href="${esc(data.link)}">Confirm your email</a></p>` : ""
+      }`;
+      break;
   }
   return { subject: SUBJECTS[template], html };
 }
@@ -46,7 +52,7 @@ export async function sendEmail(
   data: Record<string, string>,
 ): Promise<boolean> {
   try {
-    if (template === "invite") {
+    if (template === "invite" || template === "child_confirm") {
       let ok = false;
       try {
         ok = new URL(data.link ?? "").protocol === "https:";
