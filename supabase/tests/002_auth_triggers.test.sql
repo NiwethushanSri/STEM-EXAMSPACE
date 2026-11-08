@@ -53,7 +53,7 @@ update auth.users set email_confirmed_at = now() where id = '00000000-0000-0000-
 select is((select status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b1'),
   'pending', 'confirming_email_sets_pending: unconfirmed becomes pending');
 
--- invited_role_is_applied
+-- sign-up never applies an invite (claim_invite does, afterwards): even with a matching token it is a plain student
 insert into public.pending_invites (email, role, token)
   values ('tutor.one@example.com', 'tutor', '00000000-0000-0000-0000-0000000000c1');
 insert into auth.users (id, email, raw_user_meta_data, raw_app_meta_data, created_at, instance_id, aud, role)
@@ -61,20 +61,20 @@ values ('00000000-0000-0000-0000-0000000000b4', 'tutor.one@example.com',
   '{"first_name":"Tara","last_name":"Tutor"}'::jsonb,
   '{"invite_token":"00000000-0000-0000-0000-0000000000c1"}'::jsonb, now(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated');
 select is((select role::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b4'),
-  'tutor', 'invited_role_is_applied: role is tutor');
+  'student', 'invite_not_applied_by_trigger: role is student');
 select is((select status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b4'),
-  'active', 'invited_role_is_applied: status is active');
+  'unconfirmed', 'invite_not_applied_by_trigger: status is unconfirmed');
 select is((select count(*)::int from public.pending_invites where email = 'tutor.one@example.com'),
-  0, 'invited_role_is_applied: invite row consumed');
+  1, 'invite_not_applied_by_trigger: invite row untouched');
 select is((select count(*)::int from public.student_details where profile_id = '00000000-0000-0000-0000-0000000000b4'),
-  0, 'invited_role_is_applied: no student_details for staff');
+  1, 'invite_not_applied_by_trigger: student_details created');
 select is((select first_name || ' ' || last_name from public.profiles where id = '00000000-0000-0000-0000-0000000000b4'),
-  'Tara Tutor', 'invited_role_is_applied: names from metadata');
+  'Tara Tutor', 'invite_not_applied_by_trigger: names from metadata');
 
--- confirming an already-active invited user must not change status
+-- confirming moves the unclaimed shell to pending
 update auth.users set email_confirmed_at = now() where id = '00000000-0000-0000-0000-0000000000b4';
 select is((select status::text from public.profiles where id = '00000000-0000-0000-0000-0000000000b4'),
-  'active', 'confirming_email_does_not_touch_active_staff');
+  'pending', 'confirming_email_moves_unclaimed_shell_to_pending');
 
 -- invite_row_for_other_email_is_ignored
 insert into public.pending_invites (email, role) values ('a@example.com', 'admin');

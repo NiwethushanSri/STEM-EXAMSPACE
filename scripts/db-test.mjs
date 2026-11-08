@@ -40,6 +40,15 @@ select _get('plan') as planned, _get('curr_test') as ran, num_failed() as bad;
 rollback;
 `;
 
+// A test file that commits would leave rows behind on the shared project: refuse to run it.
+for (const f of files) {
+  const raw = readFileSync(join(dir, f), 'utf8').replace(/--[^\n]*/g, '');
+  if (/\bcommit\b/i.test(raw)) {
+    console.log(`FAIL ${f} contains a COMMIT statement; test files must roll back`);
+    process.exit(1);
+  }
+}
+
 for (const f of files) {
   let src = readFileSync(join(dir, f), 'utf8');
   src = src.replace(/select\s+\*\s+from\s+finish\(\s*\)\s*;[\s\S]*$/i, '');

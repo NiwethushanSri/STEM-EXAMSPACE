@@ -7,7 +7,7 @@ select tests.assert_no_owner();
 select is(has_function_privilege('authenticated', 'public.claim_invite(uuid,uuid,text,public.app_role)', 'execute'), false, 'claim_invite not executable by authenticated');
 select is(has_function_privilege('anon', 'public.claim_invite(uuid,uuid,text,public.app_role)', 'execute'), false, 'claim_invite not executable by anon');
 select is(has_function_privilege('service_role', 'public.claim_invite(uuid,uuid,text,public.app_role)', 'execute'), true, 'claim_invite executable by service_role');
-select is(has_function_privilege('authenticated', 'public.claim_parent_invite(uuid,uuid,text)', 'execute'), false, 'claim_parent_invite not executable by authenticated');
+select hasnt_function('public', 'claim_parent_invite', 'claim_parent_invite wrapper is gone');
 select is(has_function_privilege('authenticated', 'public.link_children_to_parent(uuid)', 'execute'), false, 'link_children_to_parent not executable by authenticated');
 select is(has_function_privilege('anon', 'public.link_children_to_parent(uuid)', 'execute'), false, 'link_children_to_parent not executable by anon');
 select is(has_function_privilege('service_role', 'public.link_children_to_parent(uuid)', 'execute'), true, 'link_children_to_parent executable by service_role');
@@ -70,10 +70,10 @@ select is(public.claim_invite((select id from c where name = 'tutor'),
   (select token from public.pending_invites where email = 'inv.other@example.com'), 'inv.tutor@example.com', 'tutor'), 'refused',
   'already-claimed whose role differs from a live invite is refused');
 
--- claim_parent_invite wrapper only accepts parent invites.
-select is(public.claim_parent_invite((select id from c where name = 'parentshell'),
-  (select token from public.pending_invites where email = 'inv.parent@example.com'), 'inv.parent@example.com'), 'claimed', 'parent wrapper claims parent invite');
-select is(public.claim_parent_invite((select id from c where name = 'admin'), gen_random_uuid(), 'inv.admin@example.com'), 'refused', 'parent wrapper refuses an admin');
+-- claim_invite with role parent only accepts parent invites.
+select is(public.claim_invite((select id from c where name = 'parentshell'),
+  (select token from public.pending_invites where email = 'inv.parent@example.com'), 'inv.parent@example.com', 'parent'), 'claimed', 'claim_invite claims a parent invite');
+select is(public.claim_invite((select id from c where name = 'admin'), gen_random_uuid(), 'inv.admin@example.com', 'parent'), 'refused', 'claim_invite(parent) refuses an admin');
 
 -- link_children_to_parent: a, b, c, d approved with the parent email; e has it but is not approved; f other email.
 create temp table s (name text primary key, id uuid not null);
