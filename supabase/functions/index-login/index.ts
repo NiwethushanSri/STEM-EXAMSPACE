@@ -1,16 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
+import { normaliseIndex } from "../_shared/validate.ts";
 
 const MIN_MS = 600;
 const BAD_LOGIN = "Index number or password is incorrect.";
-
-function normaliseIndex(raw: string): string {
-  let s = raw.toUpperCase().replace(/\s+/g, "");
-  const m = /^SE(\d{4})(\d{4,})$/.exec(s);
-  if (m) s = `SE-${m[1]}-${m[2]}`;
-  return s;
-}
 
 Deno.serve(handle(async (req) => {
   const started = Date.now();

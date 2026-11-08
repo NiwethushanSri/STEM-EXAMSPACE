@@ -3,7 +3,6 @@ import {
   CALLBACK,
   authLinkPath,
   clearLoginAttempts,
-  HAS_INBOX_DOMAIN,
   createUnconfirmed,
   assertNoOwner,
   cleanup,
@@ -76,10 +75,8 @@ test("generated auth links redirect to the local callback", async () => {
   expect(target ?? "", `GoTrue redirected to: ${target}`).toContain(CALLBACK);
 });
 
-// Needs a sign-up domain GoTrue accepts plus custom SMTP (the built-in mailer allows a handful of emails
-// per hour and rejects reserved domains): set TEST_INBOX_DOMAIN in .env.dev.local to run it.
+// The real register-student function runs (its email goes to the console provider, no inbox needed).
 test("register_then_confirm_shows_pending", async ({ page }) => {
-  test.skip(!HAS_INBOX_DOMAIN, "requires TEST_INBOX_DOMAIN (custom SMTP on the dev project)");
   const email = testEmail("reg");
   const password = testPassword();
   trackEmail(email);
@@ -96,29 +93,38 @@ test("confirm_link_shows_pending", async ({ page }) => {
 });
 
 test("register_form_sends_signup_metadata", async ({ page }) => {
-  // The sign-up request is answered locally so no email is sent; this checks the form wiring only.
-  let body: { email?: string; data?: Record<string, string> } = {};
+  // The function call is answered locally so nothing is created; this checks the form wiring only.
+  let body: Record<string, string> = {};
+  let signUpCalls = 0;
   await page.route("**/auth/v1/signup*", async (route) => {
+    signUpCalls++;
+    await route.abort();
+  });
+  await page.route("**/functions/v1/register-student", async (route) => {
+    if (route.request().method() === "OPTIONS") return route.fallback();
     body = route.request().postDataJSON();
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ id: crypto.randomUUID(), aud: "authenticated", email: body.email, identities: [{ id: "x" }] }),
+      headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify({ ok: true }),
     });
   });
   const email = testEmail("wiring");
   await register(page, email, testPassword());
   await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
-  expect(body.email).toBe(email);
-  expect(body.data).toMatchObject({
-    first_name: "Reg",
-    last_name: "Istrant",
-    date_of_birth: "2009-04-12",
+  expect(signUpCalls).toBe(0); // the form no longer uses auth.signUp
+  expect(body).toMatchObject({
+    firstName: "Reg",
+    lastName: "Istrant",
+    email,
+    dateOfBirth: "2009-04-12",
     school: "E2E School",
-    parent_name: "Parent Istrant",
+    parentName: "Parent Istrant",
   });
-  expect(body.data).not.toHaveProperty("role");
-  expect(body.data).not.toHaveProperty("status");
+  expect(body.password).toBeTruthy();
+  expect(body).not.toHaveProperty("role");
+  expect(body).not.toHaveProperty("status");
 });
 
 test("duplicate_email_shows_check_email_screen", async ({ page }) => {
@@ -127,6 +133,20 @@ test("duplicate_email_shows_check_email_screen", async ({ page }) => {
   // Same neutral screen: never reveals that the address is taken.
   await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
   expect((await profileByEmail(existing.email))?.status).toBe("active");
+});
+
+test("register_replaces_an_earlier_unconfirmed_attempt", async ({ page }) => {
+  const email = testEmail("squat");
+  trackEmail(email);
+  await register(page, email, "Attacker-Pass-A1");
+  await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
+  const before = await profileByEmail(email);
+  await register(page, email, "Victim-Pass-B2");
+  await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
+  const after = await profileByEmail(email);
+  expect(after?.id).not.toBe(before?.id);
+  // The victim confirms and signs in with their own password only.
+  await confirmAndSignIn(page, email, "Victim-Pass-B2");
 });
 
 test("student_cannot_open_admin", async ({ page }) => {
@@ -330,4 +350,55 @@ test("banned_account_gets_the_wrong_password_message", async ({ page }) => {
   expect(error).toBeNull();
   await signIn(page, a.email, a.password);
   await expect(page.getByText("Email or password is incorrect.")).toBeVisible();
+});
+
+test("delete_my_account_confirm_then_signed_out", async ({ page }) => {
+  const a = await createAccount({ status: "active" });
+  await signIn(page, a.email, a.password);
+  await expect(page).toHaveURL(/\/account\/home$/);
+
+  // Cancel keeps the account.
+  await page.getByRole("button", { name: "Delete my account" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete my account" });
+  await expect(dialog.getByText("Permanently delete your account and data? This cannot be undone.")).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(await profileByEmail(a.email)).not.toBeNull();
+
+  // Confirm deletes it and lands on the sign-in page with a notice.
+  await page.getByRole("button", { name: "Delete my account" }).click();
+  await page.getByRole("dialog", { name: "Delete my account" }).getByRole("button", { name: "Delete my account" }).click();
+  await expect(page).toHaveURL(/\/login\?notice=deleted$/);
+  await expect(page.getByText("Your account and data have been deleted.")).toBeVisible();
+  expect(await profileByEmail(a.email)).toBeNull();
+  await signIn(page, a.email, a.password);
+  await expect(page.getByText("Email or password is incorrect.")).toBeVisible();
+});
+
+test("delete_my_account_is_offered_on_the_pending_page", async ({ page }) => {
+  const b = await createAccount({ status: "pending" });
+  await signIn(page, b.email, b.password);
+  await expect(page).toHaveURL(/\/account\/pending$/);
+  await expect(page.getByRole("button", { name: "Delete my account" })).toBeVisible();
+});
+
+test("papers_read_api_needs_a_staff_session", async ({ page, request }) => {
+  const pdf = { name: "x.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4") };
+  const anonymous = await request.post("/api/papers/read", { multipart: { file: pdf } });
+  expect(anonymous.status()).toBe(401);
+
+  const student = await createAccount({ status: "active" });
+  await signIn(page, student.email, student.password);
+  await expect(page).toHaveURL(/\/account\/home$/);
+  const asStudent = await page.request.post("/api/papers/read", { multipart: { file: pdf } });
+  expect(asStudent.status()).toBe(403);
+
+  const admin = await createAccount({ role: "admin", status: "active" });
+  const ctx = await page.context().browser()!.newContext({ baseURL: "http://localhost:3005" });
+  const p2 = await ctx.newPage();
+  await signIn(p2, admin.email, admin.password);
+  await expect(p2).toHaveURL(/\/admin/);
+  const asAdmin = await p2.request.post("/api/papers/read", { multipart: { file: pdf } });
+  expect([200, 422]).toContain(asAdmin.status()); // authorised; a stub PDF may not be readable
+  await ctx.close();
 });

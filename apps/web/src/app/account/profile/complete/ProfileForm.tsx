@@ -45,7 +45,7 @@ export function ProfileForm({ userId, subjects }: { userId: string; subjects: { 
       photoPath = `${userId}/photo.jpg`;
       const { error: upErr } = await supabase.storage
         .from("student-photos")
-        .upload(photoPath, photo, { contentType: "image/jpeg", upsert: true });
+        .upload(photoPath, photo, { contentType: photo.type, upsert: true });
       if (upErr) {
         setBusy(false);
         setError("The photo could not be uploaded. Try again or leave it out.");

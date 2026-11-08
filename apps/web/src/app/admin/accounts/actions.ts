@@ -53,6 +53,21 @@ function finish<T>(res: FunctionResult<T>, ok: (data: T) => ActionResult, regist
 const isId = (v: unknown): v is string =>
   typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 
+/** Everything the admin must follow up after an approval, in one line each (undefined when all went well). */
+function approvalWarnings(d: {
+  emailsSent: boolean;
+  parentLinked: boolean;
+  parentInvited: boolean;
+  warning?: string;
+}): string | undefined {
+  const lines: string[] = [];
+  if (d.warning) lines.push(WARNING_TEXT[d.warning] ?? d.warning);
+  if (!d.emailsSent) lines.push("Approval email not sent");
+  // A specific warning (parent email in use, parent suspended, ...) already explains a missing invite.
+  if (!d.parentLinked && !d.parentInvited && !d.warning) lines.push("Parent not invited — use Resend parent invite");
+  return lines.length ? lines.join(". ") : undefined;
+}
+
 export async function approveAction(studentId: string): Promise<ActionResult> {
   const a = await authorised();
   if ("denied" in a) return a.denied;
@@ -60,7 +75,7 @@ export async function approveAction(studentId: string): Promise<ActionResult> {
   return finish(await approveStudent(a.client, studentId), (d) => ({
     ok: true,
     message: `Approved. Index number ${d.indexNumber}`,
-    warning: d.warning ? (WARNING_TEXT[d.warning] ?? d.warning) : undefined,
+    warning: approvalWarnings(d),
   }), true);
 }
 

@@ -152,3 +152,13 @@ Deno.test("index-login: 20 parallel wrong-password requests -> at most 5 are 401
     assertEquals(n401 + n429, 20);
   });
 });
+
+Deno.test("index-login: tolerates case and mixed hyphens or spaces in the index number", async () => {
+  await withStudent(async ({ password, index, ip }) => {
+    const [, year, seq] = /^SE-(\d{4})-(\d+)$/.exec(index)!;
+    for (const variant of [`se ${year}-${seq}`, `SE-${year} ${seq}`, ` se ${year} ${seq} `]) {
+      const r = await call({ indexNumber: variant, password }, ip);
+      assertEquals(r.status, 200, variant);
+    }
+  });
+});

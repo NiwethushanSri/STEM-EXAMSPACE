@@ -1,7 +1,17 @@
 import { NextResponse } from "next/server";
 import { readPaper } from "@/lib/paper-reader";
+import { getSessionProfile } from "@/lib/supabase/server";
+
+// Staff who work with papers. Route handlers cannot redirect like pages do, so the check answers 401/403.
+const PAPER_ROLES = ["owner", "admin", "teacher", "tutor", "corrector"] as const;
 
 export async function POST(request: Request) {
+  const me = await getSessionProfile();
+  if (!me) return NextResponse.json({ error: "Sign in to continue." }, { status: 401 });
+  if (me.status !== "active" || !(PAPER_ROLES as readonly string[]).includes(me.role)) {
+    return NextResponse.json({ error: "You do not have permission to do this." }, { status: 403 });
+  }
+
   const form = await request.formData();
   const file = form.get("file");
 

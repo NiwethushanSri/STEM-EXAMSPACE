@@ -3,40 +3,13 @@ import { type AppRole, requireCaller, serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 import { sendEmail } from "../_shared/email.ts";
 import { buildAuthLink } from "../_shared/links.ts";
+import { EMAIL, normaliseIndex, str, validPastDate } from "../_shared/validate.ts";
 
 const MIN_MS = 600;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const NOT_FOUND = "We could not find a child with those details";
 const INTERNAL = () => new HttpError("internal", 500, "Something went wrong. Please try again.");
 const bad = (m: string) => new HttpError("invalid_input", 400, m);
-
-/** Same normalisation as index-login. */
-function normaliseIndex(raw: string): string {
-  let s = raw.toUpperCase().replace(/\s+/g, "");
-  const m = /^SE(\d{4})(\d{4,})$/.exec(s);
-  if (m) s = `SE-${m[1]}-${m[2]}`;
-  return s;
-}
-
-/** A real calendar date in the past (YYYY-MM-DD). */
-function validPastDate(s: unknown): s is string {
-  if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
-  const d = new Date(`${s}T00:00:00Z`);
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) return false;
-  if (d.getTime() >= Date.now()) return false;
-  // The child must be 8 to 25 years old today.
-  const now = new Date();
-  let age = now.getUTCFullYear() - d.getUTCFullYear();
-  if (now.getUTCMonth() < d.getUTCMonth() || (now.getUTCMonth() === d.getUTCMonth() && now.getUTCDate() < d.getUTCDate())) age--;
-  return age >= 8 && age <= 25;
-}
-
-function str(v: unknown, min: number, max: number): string | null {
-  if (typeof v !== "string") return null;
-  const t = v.trim();
-  return t.length >= min && t.length <= max ? t : null;
-}
 
 async function beginAttempt(svc: SupabaseClient, keyA: string, keyB: string): Promise<void> {
   const { data, error } = await svc.rpc("login_attempt_begin", { p_ip_key: keyA, p_idx_key: keyB });

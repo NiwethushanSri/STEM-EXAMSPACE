@@ -66,8 +66,13 @@ export function actionsFor(viewer: Viewer, row: AccountRow): RowActions {
   const none: RowActions = { toggleStatus: null, resendInvite: false, resendParentInvite: false, editParentEmail: false, removeStaff: false, deleteAccount: false };
   if (row.id === viewer.id || row.role === "owner") return none;
   if (viewer.role === "admin" && row.role === "admin") return none;
+  // Suspend is offered for every live account, including students still awaiting approval or finishing their profile.
   const toggleStatus =
-    row.status === "suspended" ? "reactivate" : row.status === "active" ? "suspend" : null;
+    row.status === "suspended"
+      ? "reactivate"
+      : row.status === "active" || row.status === "pending" || row.status === "profile_incomplete"
+        ? "suspend"
+        : null;
   const unlinkedApproved =
     row.role === "student" && (row.status === "profile_incomplete" || row.status === "active") && !row.hasParent;
   return {
