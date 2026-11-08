@@ -44,6 +44,8 @@ export async function GET(request: NextRequest) {
   if (tokenHash && type && (OTP_TYPES as readonly string[]).includes(type)) {
     const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: type as EmailOtpType });
     if (error) return fail();
+    // A confirmed sign-up ends every other session of the account (nothing from before the confirmation survives).
+    if (type === "signup") await supabase.auth.signOut({ scope: "others" });
     // Trust the verified session, never the query type: a recovery link edited to another type must not skip this.
     setPassword = type === "recovery" || type === "invite" || (await needsPassword());
   } else if (code) {

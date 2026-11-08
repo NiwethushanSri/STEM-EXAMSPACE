@@ -10,7 +10,8 @@ export type FunctionName =
   | "invite-user"
   | "account-admin"
   | "delete-my-account"
-  | "parent-child";
+  | "parent-child"
+  | "register-student";
 
 export type FunctionError = { code: ErrorCode; message: string };
 export type FunctionResult<T> = { data: T } | { error: FunctionError };
@@ -89,6 +90,21 @@ export type RejectStudentResult = { emailSent: boolean };
 export type IndexLoginResult = { access_token: string; refresh_token: string; expires_in: number };
 export type InviteUserResult = { invited: true; emailSent: boolean };
 export type DeleteMyAccountResult = { deleted: true };
+/** Always the same answer: a new, replaced or already registered address cannot be told apart. */
+export type RegisterStudentResult = { ok: true };
+
+export type RegisterStudentInput = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  /** 8 to 200 characters. */
+  password: string;
+  /** YYYY-MM-DD; the student must be 8 to 25 years old. */
+  dateOfBirth: string;
+  school: string;
+  parentName: string;
+  parentEmail: string;
+};
 
 export type InviteUserInput = {
   email: string;
@@ -165,3 +181,7 @@ export const deleteMyAccount = (client: StemClient) =>
 
 export const parentChild = <A extends ParentChildAction>(client: StemClient, action: A) =>
   callFunction<ParentChildResult<A["action"]>>(client, "parent-child", action);
+
+/** Public student sign-up. Needs no session; the server replaces any earlier unconfirmed attempt for the address. */
+export const registerStudent = (client: StemClient, input: RegisterStudentInput) =>
+  callFunction<RegisterStudentResult>(client, "register-student", input);

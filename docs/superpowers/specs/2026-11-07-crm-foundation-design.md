@@ -80,7 +80,7 @@ In Part 1 only these permissions are live: owner/admin manage accounts and appro
 
 Form: first name, last name, email, password (min 8), date of birth, school, parent name, parent email, agree to terms.
 
-1. Supabase Auth creates the user and sends an email confirmation link.
+1. The form calls the public `register-student` Edge Function (not `auth.signUp`). It validates the fields, rate limits by IP, and creates the unconfirmed Auth user with the chosen password, then emails a confirmation link (valid 1 hour). If an earlier, still unconfirmed self sign-up exists for the same email it is deleted and replaced, so whoever registers an address first cannot keep its password once the real owner registers and confirms. An address that is already confirmed (or belongs to any other kind of account) gets the same neutral answer and nothing changes. The project setting "Allow new users to sign up" is turned OFF in the Supabase dashboard so `auth.signUp` cannot bypass the function.
 2. A trigger on `auth.users` insert creates `profiles` (role `student`, status `unconfirmed`) and `student_details`. The trigger **ignores any role or status sent in sign-up metadata**; only the listed form fields are copied.
 3. When the email is confirmed (trigger on `auth.users` update when `email_confirmed_at` becomes set), status becomes `pending` and the registration appears in the admin approval list.
 4. Sign-ups still `unconfirmed` after 7 days are deleted by a daily scheduled job (pg_cron), with the same audit row as a rejection but action `registration_expired`.
@@ -188,7 +188,7 @@ audit_log         id PK, actor_id NULL, action, target_type NULL, target_id NULL
 
 - Public site: existing home page and exam catalogue, unchanged.
 - `/login`, `/register`, `/reset-password`: wired to Supabase, replacing the mock login role picker.
-- Student status screens (6.1 table) as a web fallback.
+- Student status screens (6.1 table) as a web fallback. Students and parents can delete their own account from every `/account/*` page ("Delete my account", with confirmation). Parent "add a child" and "link a child" screens (6.9) arrive with the mobile app (Task 14); until then admins create the links.
 - `/admin/accounts`: real data. Pending list with Approve/Reject (reject asks for confirmation), all accounts with filters by role and status, suspend/reactivate, resend invite, invite staff.
 - `/owner`: same as admin plus invite/remove admins.
 - Route protection by role in Next.js middleware/proxy (per the Next 16 docs) plus RLS as the real guard.
@@ -217,7 +217,7 @@ Staff use the web app (`apps/web`) in a normal browser on their computers. There
 
 ## 10. Error handling
 
-- Duplicate email at sign-up: "An account with this email already exists. Sign in or reset your password."
+- Duplicate email at sign-up: the same neutral "check your email" screen as a new sign-up (privacy: the form never reveals which addresses have accounts). Someone who owns the address and already has an account can use Forgot password.
 - Approve/reject on a student whose status changed meanwhile: function returns a conflict; UI refreshes the list and shows "This registration was already handled".
 - Parent email belongs to a staff account: approval fails with that message; admin edits the parent email first.
 - Email send failure: action still succeeds, record flagged, Resend button.

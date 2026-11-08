@@ -83,6 +83,8 @@ function SetForm() {
       );
       return;
     }
+    // A new password ends every other session (an old password or a stolen session must not outlive it).
+    await supabase.auth.signOut({ scope: "others" });
     const { data: profile } = await supabase.from("profiles").select("role, status").eq("id", data.user.id).maybeSingle();
     router.replace(profile ? homeFor(profile.role, profile.status, "web-staff") : "/login");
     router.refresh();

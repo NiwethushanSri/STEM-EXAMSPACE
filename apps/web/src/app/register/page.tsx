@@ -2,11 +2,9 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
-import { messageFor } from "@stem/shared";
+import { messageFor, registerStudent } from "@stem/shared";
 import { AuthLayout, inputClass, labelClass } from "@/components/AuthLayout";
 import { createClient } from "@/lib/supabase/client";
-
-const DUPLICATE_CODES = new Set(["user_already_exists", "email_exists"]);
 
 export default function RegisterPage() {
   const [done, setDone] = useState(false);
@@ -19,36 +17,24 @@ export default function RegisterPage() {
     const get = (k: string) => String(form.get(k) ?? "").trim();
     setBusy(true);
     setError(null);
-    const { error: err } = await createClient().auth.signUp({
+    // The server creates the account and sends the confirmation link; a new, replaced or already
+    // registered address all get the same answer, so the form never reveals which emails exist.
+    const res = await registerStudent(createClient(), {
+      firstName: get("first"),
+      lastName: get("last"),
       email: get("email"),
       password: String(form.get("password") ?? ""),
-      options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-        data: {
-          first_name: get("first"),
-          last_name: get("last"),
-          date_of_birth: get("dob"),
-          school: get("school"),
-          parent_name: get("pname"),
-          parent_email: get("pemail"),
-        },
-      },
+      dateOfBirth: get("dob"),
+      school: get("school"),
+      parentName: get("pname"),
+      parentEmail: get("pemail"),
     });
     setBusy(false);
-    // A duplicate address gets the same screen as a new one, so the form never reveals which emails exist.
-    if (!err || DUPLICATE_CODES.has(err.code ?? "")) {
+    if ("data" in res) {
       setDone(true);
       return;
     }
-    if (err.status === 429 || err.code === "over_email_send_rate_limit" || err.code === "over_request_rate_limit") {
-      setError(messageFor("rate_limited"));
-    } else if (err.code === "weak_password") {
-      setError("Choose a stronger password.");
-    } else if (err.code === "email_address_invalid" || err.code === "validation_failed") {
-      setError(messageFor("invalid_input"));
-    } else {
-      setError(messageFor("internal"));
-    }
+    setError(res.error.code === "invalid_input" ? res.error.message : messageFor(res.error.code));
   }
 
   if (done) {

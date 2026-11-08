@@ -447,10 +447,7 @@ export type Database = {
         }
         Returns: string
       }
-      claim_parent_invite: {
-        Args: { p_email: string; p_token: string; p_user: string }
-        Returns: string
-      }
+      can_reject_student: { Args: { p_student: string }; Returns: string }
       clear_invite_tx: {
         Args: { p_actor: string; p_email: string }
         Returns: string
@@ -485,7 +482,6 @@ export type Database = {
         Args: { p_idx_key: string; p_ip_key: string }
         Returns: boolean
       }
-      login_attempt_clear: { Args: { p_idx_key: string }; Returns: undefined }
       login_attempt_refund: {
         Args: { p_idx_key: string; p_ip_key: string }
         Returns: undefined
@@ -496,6 +492,11 @@ export type Database = {
         Returns: undefined
       }
       my_role: { Args: never; Returns: Database["public"]["Enums"]["app_role"] }
+      my_status: {
+        Args: never
+        Returns: Database["public"]["Enums"]["account_status"]
+      }
+      replace_unconfirmed_signup: { Args: { p_email: string }; Returns: string }
       purge_student_residue: { Args: { p_user: string }; Returns: undefined }
       register_child_tx: {
         Args: { p_child: string; p_parent: string }

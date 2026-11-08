@@ -21,7 +21,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
       - run: npm ci
+      - name: Type check Edge Functions
+        run: deno check --config supabase/functions/deno.json supabase/functions/*/index.ts supabase/functions/_shared/*.ts
       - name: Lint
         run: npm run lint -w @stem/web
       - name: Type check shared

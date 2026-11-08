@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStemClient, type StemClient } from "./supabase";
 import {
-  accountAdmin, approveStudent, callFunction, deleteMyAccount, indexLogin, inviteUser, parentChild, rejectStudent,
+  accountAdmin, approveStudent, callFunction, deleteMyAccount, indexLogin, inviteUser, parentChild, registerStudent, rejectStudent,
 } from "./functions";
 
 function client(fetchImpl: typeof fetch) {
@@ -92,6 +92,19 @@ describe("helper payloads", () => {
     ["accountAdmin suspend", (c: StemClient) => accountAdmin(c, { action: "suspend", userId: U }), "account-admin", { action: "suspend", userId: U }],
     ["accountAdmin edit_parent_email", (c: StemClient) => accountAdmin(c, { action: "edit_parent_email", userId: U, parentEmail: "p@b.co" }), "account-admin", { action: "edit_parent_email", userId: U, parentEmail: "p@b.co" }],
     ["accountAdmin clear", (c: StemClient) => accountAdmin(c, { action: "clear_stuck_invite", email: "a@b.co" }), "account-admin", { action: "clear_stuck_invite", email: "a@b.co" }],
+    [
+      "registerStudent",
+      (c: StemClient) =>
+        registerStudent(c, {
+          firstName: "A", lastName: "B", email: "a@b.co", password: "longenough1", dateOfBirth: "2012-01-02",
+          school: "S", parentName: "P", parentEmail: "p@b.co",
+        }),
+      "register-student",
+      {
+        firstName: "A", lastName: "B", email: "a@b.co", password: "longenough1", dateOfBirth: "2012-01-02",
+        school: "S", parentName: "P", parentEmail: "p@b.co",
+      },
+    ],
     ["deleteMyAccount", (c: StemClient) => deleteMyAccount(c), "delete-my-account", {}],
     [
       "parentChild link",
