@@ -69,3 +69,37 @@ Deno.test("storage_api_delete_own_photo_only", async () => {
     }
   }
 });
+
+Deno.test("storage_api_writes_need_a_learner_who_is_profile_incomplete_or_active", async () => {
+  const svc = service();
+  const users: TestUser[] = [];
+  const paths: string[] = [];
+  try {
+    const pending = await createTestUser(svc, { role: "student", status: "pending" });
+    users.push(pending);
+    const parent = await createTestUser(svc, { role: "parent", status: "active" });
+    users.push(parent);
+    const active = await createTestUser(svc, { role: "student", status: "active" });
+    users.push(active);
+    const jpeg = { contentType: "image/jpeg", upsert: true };
+    for (const u of [pending, parent]) {
+      const p = `${u.id}/photo.jpg`;
+      paths.push(p);
+      const r = await u.client.storage.from(BUCKET).upload(p, JPEG, jpeg);
+      assert(r.error, "write must be refused");
+    }
+    const ok = `${active.id}/photo.jpg`;
+    paths.push(ok);
+    assertEquals((await active.client.storage.from(BUCKET).upload(ok, JPEG, jpeg)).error, null);
+    // After suspension the same learner cannot overwrite it.
+    await svc.from("profiles").update({ status: "suspended" }).eq("id", active.id);
+    const again = await active.client.storage.from(BUCKET).upload(ok, JPEG, jpeg);
+    assert(again.error, "suspended learner must not overwrite");
+  } finally {
+    try {
+      if (paths.length) await svc.storage.from(BUCKET).remove(paths);
+    } finally {
+      await deleteUsers(svc, users);
+    }
+  }
+});

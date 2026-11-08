@@ -174,3 +174,38 @@ Deno.test("reject-student: concurrent double reject -> one 200, other 404/409", 
     assertEquals(await rejectedCount(svc, admin.id, since), 1);
   });
 });
+
+const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9]);
+const hasPhoto = async (svc: ReturnType<typeof service>, id: string) => {
+  const { data, error } = await svc.storage.from("student-photos").list(id);
+  assertEquals(error, null);
+  return (data ?? []).some((o) => o.name === "photo.jpg");
+};
+
+Deno.test("reject-student: the pending student's photo is removed with the account", async () => {
+  await withScenario(async ({ svc, admin, track }) => {
+    const s = track(await createTestUser(svc, { role: "student", status: "pending" }));
+    const up = await svc.storage.from("student-photos").upload(`${s.id}/photo.jpg`, JPEG, { contentType: "image/jpeg", upsert: true });
+    assertEquals(up.error, null);
+    assert(await hasPhoto(svc, s.id));
+    const r = await call(admin.token, { studentId: s.id });
+    assertEquals(r.status, 200);
+    assert(await gone(svc, s.id));
+    assert(!(await hasPhoto(svc, s.id)), "photo must be removed");
+  });
+});
+
+Deno.test("reject-student: a refused rejection (409) leaves the photo alone", async () => {
+  await withScenario(async ({ svc, admin, track }) => {
+    const s = track(await createTestUser(svc, { role: "student", status: "active" }));
+    try {
+      const up = await svc.storage.from("student-photos").upload(`${s.id}/photo.jpg`, JPEG, { contentType: "image/jpeg", upsert: true });
+      assertEquals(up.error, null);
+      const r = await call(admin.token, { studentId: s.id });
+      assertEquals(r.status, 409);
+      assert(await hasPhoto(svc, s.id), "photo must survive a refused rejection");
+    } finally {
+      await svc.storage.from("student-photos").remove([`${s.id}/photo.jpg`]);
+    }
+  });
+});
