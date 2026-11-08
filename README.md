@@ -23,7 +23,7 @@ Stem Examspace is a web app for a tutoring centre that runs school-subject class
 - Unit: `npm test -w @stem/shared`
 - Types and lint: `npx tsc --noEmit -p packages/shared`, `npx tsc --noEmit -p apps/web`, `npm run lint -w @stem/web`
 - Database (pgTAP, needs a linked Supabase project and CLI login): `npm run db:test`
-- Edge Functions (needs `.env.dev.local`): `deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local <file>`. Run one file at a time; the hosted Auth sign-in rate limit makes parallel runs fail.
+- Edge Functions (needs `.env.dev.local`, which the Playwright e2e helper also reads): `deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local <file>`. Run one file at a time; the hosted Auth sign-in rate limit makes parallel runs fail.
 - End to end: `npx playwright test` from `apps/web` (starts its own server on port 3005, runs serially).
 
 ## CI
@@ -33,7 +33,7 @@ Stem Examspace is a web app for a tutoring centre that runs school-subject class
 - **checks** runs on every push to `main` and every pull request. It needs no secrets: install, lint, type checks, shared unit tests and a production build with dummy public env values.
 - **integration** runs only when started by hand (Actions tab, "CI", "Run workflow"). It runs the pgTAP tests, each Edge Function test file in turn (with a two-minute pause between files), and the Playwright suite against the hosted Supabase project. Runs queue; two never overlap.
 
-The repository owner must add these repository secrets (Settings, Secrets and variables, Actions). The job fails immediately with a message if one is missing.
+The repository owner must first create a GitHub Environment named `integration` (Settings, Environments) with deployment branches restricted to `main`, then add these as **environment secrets** on it (not repository secrets). The job fails immediately with a message if one is missing.
 
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`

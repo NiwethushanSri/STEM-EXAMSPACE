@@ -26,8 +26,6 @@ jobs:
         run: npm run lint -w @stem/web
       - name: Type check shared
         run: npx tsc --noEmit -p packages/shared
-      - name: Type check web
-        run: npx tsc --noEmit -p apps/web
       - name: Unit tests
         run: npm test -w @stem/shared
       - name: Build web
@@ -35,29 +33,33 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy
+      # Runs after the build so .next/types and next-env.d.ts exist.
+      - name: Type check web
+        run: npx tsc --noEmit -p apps/web
 
   integration:
     # Manual only: runs against the hosted Supabase project.
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    environment: integration
     timeout-minutes: 90
     concurrency:
       group: integration
       cancel-in-progress: false
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-      TEST_INBOX_DOMAIN: ${{ secrets.TEST_INBOX_DOMAIN }}
     steps:
       - name: Check required secrets
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          TEST_INBOX_DOMAIN: ${{ secrets.TEST_INBOX_DOMAIN }}
         run: |
           missing=0
           for name in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF TEST_INBOX_DOMAIN; do
             if [ -z "${!name}" ]; then
-              echo "::error::Missing repository secret $name. Add it under Settings > Secrets and variables > Actions."
+              echo "::error::Missing environment secret $name. Add it as a secret of the "integration" environment (Settings > Environments)."
               missing=1
             fi
           done
@@ -72,20 +74,32 @@ jobs:
           deno-version: v2.x
       - run: npm ci
       - name: Link Supabase project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: npx supabase link --project-ref "$SUPABASE_PROJECT_REF"
       - name: Write env files
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TEST_INBOX_DOMAIN: ${{ secrets.TEST_INBOX_DOMAIN }}
         run: |
+          # Strip CR and surrounding quotes from secret values.
+          clean() { v="${1//$'\r'/}"; v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"; printf '%s' "$v"; }
           {
-            echo "SUPABASE_URL=$SUPABASE_URL"
-            echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
-            echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
-            echo "TEST_INBOX_DOMAIN=$TEST_INBOX_DOMAIN"
+            printf 'SUPABASE_URL=%s\n' "$(clean "$SUPABASE_URL")"
+            printf 'SUPABASE_ANON_KEY=%s\n' "$(clean "$SUPABASE_ANON_KEY")"
+            printf 'SUPABASE_SERVICE_ROLE_KEY=%s\n' "$(clean "$SUPABASE_SERVICE_ROLE_KEY")"
+            printf 'TEST_INBOX_DOMAIN=%s\n' "$(clean "$TEST_INBOX_DOMAIN")"
           } > .env.dev.local
           {
-            echo "NEXT_PUBLIC_SUPABASE_URL=$SUPABASE_URL"
-            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            printf 'NEXT_PUBLIC_SUPABASE_URL=%s\n' "$(clean "$SUPABASE_URL")"
+            printf 'NEXT_PUBLIC_SUPABASE_ANON_KEY=%s\n' "$(clean "$SUPABASE_ANON_KEY")"
           } > apps/web/.env.local
       - name: Database tests (pgTAP)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: npm run db:test
       - name: Edge Function tests
         run: |
