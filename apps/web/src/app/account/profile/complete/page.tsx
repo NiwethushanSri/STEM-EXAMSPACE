@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { homeFor } from "@stem/shared";
 import { AuthLayout } from "@/components/AuthLayout";
-import { SignOutButton } from "@/components/AccountActions";
+import { AccountFooter } from "@/components/AccountActions";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 import { ProfileForm } from "./ProfileForm";
 
@@ -18,7 +18,7 @@ async function Content() {
     <AuthLayout
       title="Complete your profile"
       subtitle={`Welcome, ${me.firstName}. A few details and you are ready to go.`}
-      footer={<SignOutButton />}
+      footer={<AccountFooter canDelete />}
     >
       <ProfileForm userId={me.id} subjects={data ?? []} />
     </AuthLayout>

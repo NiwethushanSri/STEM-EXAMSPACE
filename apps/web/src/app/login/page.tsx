@@ -9,7 +9,9 @@ import { createClient } from "@/lib/supabase/client";
 
 function LoginForm() {
   const router = useRouter();
-  const linkFailed = useSearchParams().get("error") === "link";
+  const params = useSearchParams();
+  const linkFailed = params.get("error") === "link";
+  const deleted = params.get("notice") === "deleted";
   const [error, setError] = useState<string | null>(
     linkFailed ? "That link is invalid or has expired. Request a new one." : null,
   );
@@ -83,6 +85,11 @@ function LoginForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
+      {deleted && (
+        <p role="status" className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
+          Your account and data have been deleted.
+        </p>
+      )}
       <div>
         <label htmlFor="identifier" className={labelClass}>Email or index number</label>
         <input

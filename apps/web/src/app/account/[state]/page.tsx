@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import { bannedMessage, homeFor, roleLabel } from "@stem/shared";
 import { AuthLayout } from "@/components/AuthLayout";
-import { ResendConfirmationButton, SignOutButton } from "@/components/AccountActions";
+import { AccountFooter, ResendConfirmationButton } from "@/components/AccountActions";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 
 const STATES = ["unconfirmed", "pending", "suspended", "home"] as const;
@@ -22,7 +22,7 @@ async function Content({ params }: { params: Promise<{ state: string }> }) {
   const home = homeFor(me.role, me.status, "web-staff");
   if (home !== `/account/${state as State}`) redirect(home);
 
-  const footer = <SignOutButton />;
+  const footer = <AccountFooter canDelete={me.role === "student" || me.role === "parent"} />;
 
   switch (state as State) {
     case "unconfirmed":
