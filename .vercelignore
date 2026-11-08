@@ -1,0 +1,15 @@
+# Never upload secrets or local/test material to Vercel
+.env*
+!.env*.example
+**/.env*
+!**/.env*.example
+.superpowers/
+.claude/
+supabase/.temp/
+supabase/.branches/
+**/node_modules/
+**/.next/
+apps/web/e2e/
+apps/web/test-results/
+apps/web/playwright-report/
+**/*.log
