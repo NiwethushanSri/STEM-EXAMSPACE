@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    # No secrets are used here, so it is safe on pull requests.
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Lint
+        run: npm run lint -w @stem/web
+      - name: Type check shared
+        run: npx tsc --noEmit -p packages/shared
+      - name: Type check web
+        run: npx tsc --noEmit -p apps/web
+      - name: Unit tests
+        run: npm test -w @stem/shared
+      - name: Build web
+        run: npm run build -w @stem/web
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: dummy
+
+  integration:
+    # Manual only: runs against the hosted Supabase project.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: integration
+      cancel-in-progress: false
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      TEST_INBOX_DOMAIN: ${{ secrets.TEST_INBOX_DOMAIN }}
+    steps:
+      - name: Check required secrets
+        run: |
+          missing=0
+          for name in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_ACCESS_TOKEN SUPABASE_PROJECT_REF TEST_INBOX_DOMAIN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing repository secret $name. Add it under Settings > Secrets and variables > Actions."
+              missing=1
+            fi
+          done
+          exit $missing
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm ci
+      - name: Link Supabase project
+        run: npx supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Write env files
+        run: |
+          {
+            echo "SUPABASE_URL=$SUPABASE_URL"
+            echo "SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+            echo "SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY"
+            echo "TEST_INBOX_DOMAIN=$TEST_INBOX_DOMAIN"
+          } > .env.dev.local
+          {
+            echo "NEXT_PUBLIC_SUPABASE_URL=$SUPABASE_URL"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+          } > apps/web/.env.local
+      - name: Database tests (pgTAP)
+        run: npm run db:test
+      - name: Edge Function tests
+        run: |
+          # The hosted Auth sign-in rate limit needs one file at a time with pauses.
+          failed=0
+          first=1
+          while IFS= read -r f; do
+            if [ "$first" -eq 0 ]; then sleep 120; fi
+            first=0
+            echo "::group::$f"
+            deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local "$f" || failed=1
+            echo "::endgroup::"
+          done < <(find supabase/functions -name '*.test.ts' | sort)
+          exit $failed
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests
+        working-directory: apps/web
+        run: npx playwright test --workers=1
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/web/test-results
+            apps/web/playwright-report
+          if-no-files-found: ignore
