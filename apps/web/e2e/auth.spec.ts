@@ -194,6 +194,24 @@ test("reset_password_sets_new_password", async ({ page }) => {
   await expect(page).toHaveURL(/\/account\/home$/);
 });
 
+test("recovery_after_forgot_password_request", async ({ page }) => {
+  const a = await createAccount({ status: "active" });
+  // Real request from the UI (the email is captured by the sandbox SMTP; the inbox is not read).
+  await page.goto("/reset-password");
+  await page.getByLabel("Email").fill(a.email);
+  await page.getByRole("button", { name: "Send reset link" }).click();
+  await expect(page.getByText("If an account exists for that address")).toBeVisible();
+  // Stand-in for the emailed link: an admin-generated recovery link for the same user.
+  const { tokenHash } = await linkFor("recovery", a.email);
+  await page.goto(`/auth/callback?token_hash=${tokenHash}&type=recovery`);
+  await expect(page).toHaveURL(/\/reset-password\?mode=set/);
+  const next = testPassword();
+  await page.getByLabel("New password", { exact: true }).fill(next);
+  await page.getByLabel("Confirm new password").fill(next);
+  await page.getByRole("button", { name: "Set password" }).click();
+  await expect(page).toHaveURL(/\/account\/home$/);
+});
+
 test("reset_request_is_neutral", async ({ page }) => {
   await page.goto("/reset-password");
   await page.getByLabel("Email").fill(testEmail("ghost"));
