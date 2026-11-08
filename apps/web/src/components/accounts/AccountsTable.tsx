@@ -61,6 +61,12 @@ export function AccountsTable({
   const router = useRouter();
   const pathname = usePathname();
   const [query, setQuery] = useState(filters.q);
+  const [seenQ, setSeenQ] = useState(filters.q);
+  if (seenQ !== filters.q) {
+    // The URL changed (back/forward, link): re-sync the box.
+    setSeenQ(filters.q);
+    setQuery(filters.q);
+  }
   const [confirm, setConfirm] = useState<{ kind: "remove_staff" | "delete_account"; row: AccountRow } | null>(null);
 
   /** Filters live in the URL so the server applies them (the table never holds more than one page). */

@@ -86,7 +86,7 @@ async function resendParentInvite(svc: SupabaseClient, actorId: string, t: Targe
     }
     if (!shell || !pending) throw parentEmailIsStaff(existing.role === "student" ? "student" : "staff");
     // The claim only accepts shells younger than 24 hours; an older one needs an owner to clear it.
-    if (ageMs > 24 * 60 * 60 * 1000) throw CONFLICT("This parent invite is stuck. Ask an owner to remove the old invite.");
+    if (ageMs > 24 * 60 * 60 * 1000) throw CONFLICT("This parent invite is stuck. Clear the old invite under Troubleshooting, then approve again.");
     token = pending.token;
   } else {
     const r = await reserveInvite(svc, parentEmail, "parent", actorId);

@@ -90,6 +90,9 @@ function resendParentOutcome(r: {
   if (!r.parentLinked && !r.parentInvited) {
     return { ok: false, code: "conflict", message: warning ?? "The parent could not be linked." };
   }
+  if (r.parentInvited && !r.parentLinked) {
+    return { ok: false, code: "conflict", message: `Parent invited; not linked: ${warning ?? "the link was not created."}` };
+  }
   if (r.parentInvited) {
     return r.emailSent
       ? { ok: true, message: "Parent invited and linked. The invitation email was sent.", warning }

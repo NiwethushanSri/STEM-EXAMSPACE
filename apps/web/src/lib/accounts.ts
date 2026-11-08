@@ -135,7 +135,13 @@ export async function loadLinkRequests(): Promise<LinkRequestRow[]> {
 
 /** Characters that would change a PostgREST `or`/`ilike` expression are dropped from the search text. */
 function safeSearch(q: string): string {
-  return q.replace(/[,()%*\\:"']/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  // Syntax characters of the `or` expression are dropped; LIKE wildcards and the escape character are escaped.
+  return q
+    .replace(/[,()*:"']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80)
+    .replace(/[\\%_]/g, (m) => "\\" + m);
 }
 
 export async function loadAccountsPage(

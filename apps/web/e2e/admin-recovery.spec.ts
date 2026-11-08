@@ -159,3 +159,51 @@ test("student_cannot_invoke_admin_server_action", async ({ page, browser, baseUR
     await ctx.close();
   }
 });
+
+test("student_cannot_invoke_admin_action_from_any_route", async ({ page, browser, baseURL }) => {
+  const admin = await createAccount({ role: "admin" });
+  const t1 = await createAccount({ role: "tutor" });
+  const t2 = await createAccount({ role: "tutor" });
+  const student = await createAccount({ status: "active" });
+
+  // As admin, capture a real server action call (suspend t1) to learn the action id and payload shape.
+  let actionId = "";
+  let body = "";
+  page.on("request", (r) => {
+    const id = r.headers()["next-action"];
+    if (id && r.method() === "POST" && r.postData()?.includes(t1.id)) {
+      actionId = id;
+      body = r.postData()!;
+    }
+  });
+  await signInUI(page, admin.email, admin.password);
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.goto("/admin/accounts");
+  await search(page, t1.email);
+  await allAccounts(page).getByRole("row").filter({ hasText: t1.email }).getByRole("button", { name: "Suspend" }).click();
+  await expect(page.getByRole("status")).toHaveText("Account suspended.");
+  expect(actionId).not.toBe("");
+
+  // As a signed-in student, replay that action against t2.
+  const ctx = await browser.newContext({ baseURL });
+  try {
+    const sp = await ctx.newPage();
+    await signInUI(sp, student.email, student.password);
+    await expect(sp).toHaveURL(/\/account\/home$/);
+    // Server actions can be POSTed from any route (Next data-security docs): replay the captured accountAction
+    // id from a signed-in student against t2. Either the action refuses (forbidden) or the route does not
+    // know the id; in no case may it succeed.
+    const res = await ctx.request.post("/account/home", {
+      headers: { "Next-Action": actionId, Accept: "text/x-component", "Content-Type": "text/plain;charset=UTF-8" },
+      data: body.replaceAll(t1.id, t2.id),
+      maxRedirects: 0,
+    });
+    const text = await res.text();
+    expect(text).not.toContain("Account suspended.");
+    expect(text).not.toMatch(/"ok":\s*true/);
+    expect(text === "{}" || /forbidden|You do not have permission|"ok":\s*false/.test(text), `unexpected response: ${text.slice(0, 200)}`).toBe(true);
+    expect((await profileByEmail(t2.email))?.status).toBe("active");
+  } finally {
+    await ctx.close();
+  }
+});

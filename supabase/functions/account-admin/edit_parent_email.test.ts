@@ -35,6 +35,13 @@ Deno.test("account-admin: edit_parent_email - allowed and refused targets, audit
     assertEquals((await edit(tutor.token, pending.id, `x-${parentEmail}`)).status, 403);
     const { data: after } = await svc.from("student_details").select("signup_parent_email").eq("profile_id", pending.id).single();
     assertEquals(after!.signup_parent_email, parentEmail.toLowerCase());
+
+    // A token-bearing invite shell (no signup parent email) is refused and stays unchanged.
+    const shell = track(await createTestUser(svc, { role: "student", status: "pending" }));
+    await svc.from("student_details").update({ signup_parent_email: null }).eq("profile_id", shell.id);
+    assertEquals((await edit(admin.token, shell.id, `shell-${parentEmail}`)).status, 409);
+    const { data: sd } = await svc.from("student_details").select("signup_parent_email").eq("profile_id", shell.id).single();
+    assertEquals(sd!.signup_parent_email, null);
     assert(true);
   });
 });
