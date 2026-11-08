@@ -198,7 +198,11 @@ audit_log         id PK, actor_id NULL, action, target_type NULL, target_id NULL
 
 Card payments happen on the web site only. The iOS app shows booking status but has no pay button, to stay within App Store rules on payments.
 
-### 9.3 Desktop (`apps/desktop`)
+### 9.3 Staff on desktop computers (owner decision 2026-11-08: no desktop application)
+
+Staff use the web app (`apps/web`) in a normal browser on their computers. There is no Tauri/desktop wrapper. The original desktop notes below are superseded.
+
+#### (superseded) Desktop (`apps/desktop`)
 
 - Tauri v2 window loading the hosted staff URL. Session lives in the webview.
 - Part 1: builds and runs locally on Windows; signed installers and auto-update are Part 5.
