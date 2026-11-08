@@ -33,6 +33,7 @@ export type SessionProfile = {
   role: AppRole;
   status: AccountStatus;
   firstName: string;
+  lastName: string;
 };
 
 /**
@@ -46,9 +47,9 @@ export const getSessionProfile = cache(async (): Promise<SessionProfile | null> 
   if (!auth.user) return null;
   const { data } = await supabase
     .from("profiles")
-    .select("id, role, status, first_name")
+    .select("id, role, status, first_name, last_name")
     .eq("id", auth.user.id)
     .maybeSingle();
   if (!data) return null;
-  return { id: data.id, role: data.role, status: data.status, firstName: data.first_name };
+  return { id: data.id, role: data.role, status: data.status, firstName: data.first_name, lastName: data.last_name };
 });

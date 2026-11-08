@@ -2,8 +2,41 @@
 
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
-import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { createContext, useContext, useState, type ReactNode } from "react";
+import { createClient } from "@/lib/supabase/client";
+
+/** The signed-in user, provided once per staff area by its server layout (which has already checked the role). */
+export type ShellUser = { name: string; roleLabel: string };
+const ShellUserContext = createContext<ShellUser | null>(null);
+export function ShellUserProvider({ user, children }: { user: ShellUser; children: ReactNode }) {
+  return <ShellUserContext.Provider value={user}>{children}</ShellUserContext.Provider>;
+}
+
+/** Admin pages that still show sample data until their part of the build. */
+function isPreviewPath(pathname: string) {
+  return pathname.startsWith("/admin/") && !pathname.startsWith("/admin/accounts");
+}
+
+function SignOut() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        await createClient().auth.signOut();
+        router.replace("/login");
+        router.refresh();
+      }}
+      className="rounded border border-blue-300 px-3 py-1 text-xs hover:bg-blue-600 disabled:opacity-60"
+    >
+      Sign out
+    </button>
+  );
+}
 
 export type NavItem = { href: string; label: string };
 
@@ -39,6 +72,17 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/examiner/standardisation", label: "Standardisation" },
     ],
   },
+  owner: {
+    name: "Super administrator",
+    items: [
+      { href: "/owner", label: "Dashboard" },
+      { href: "/owner/accounts", label: "Accounts" },
+      { href: "/owner/staff", label: "Staff" },
+    ],
+  },
+  teacher: { name: "Teacher", items: [{ href: "/teacher", label: "Home" }] },
+  tutor: { name: "Tutor", items: [{ href: "/tutor", label: "Home" }] },
+  corrector: { name: "Exam corrector", items: [{ href: "/corrector", label: "Home" }] },
   admin: {
     name: "Admin",
     items: [
@@ -68,6 +112,7 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const section = roleNav[role];
+  const user = useContext(ShellUserContext);
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900">
@@ -94,18 +139,29 @@ export function AppShell({
             );
           })}
         </nav>
-        <div className="mt-auto px-5 py-4 text-xs text-blue-200">
-          <Link href="/login" className="hover:text-white">
-            Switch role
-          </Link>
-        </div>
+        {user && (
+          <div className="mt-auto space-y-2 px-5 py-4 text-xs text-blue-100">
+            <div>
+              <div className="text-sm font-medium text-white">{user.name}</div>
+              <div>{user.roleLabel}</div>
+            </div>
+            <SignOut />
+          </div>
+        )}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="border-b border-slate-200 bg-white px-6 py-4">
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-semibold text-slate-900">{title}</h1>
-            <span className="text-sm text-slate-500">{section.name} view</span>
+            <span className="flex items-center gap-3 text-sm text-slate-500">
+              {user ? `${user.name} · ${user.roleLabel}` : `${section.name} view`}
+              {user && (
+                <span className="md:hidden">
+                  <SignOut />
+                </span>
+              )}
+            </span>
           </div>
           {/* Phone navigation: the sidebar is hidden below md */}
           <nav className="mt-3 flex gap-2 overflow-x-auto md:hidden">
@@ -124,6 +180,11 @@ export function AppShell({
             ))}
           </nav>
         </header>
+        {isPreviewPath(pathname) && (
+          <div role="note" className="border-b border-amber-200 bg-amber-50 px-6 py-2 text-sm text-amber-900">
+            Preview — sample data. This page is not connected to live records yet.
+          </div>
+        )}
         <main className="flex-1 p-6">{children}</main>
       </div>
     </div>
@@ -132,7 +193,7 @@ export function AppShell({
 
 export function Card({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section aria-label={title} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       {title && <h2 className="mb-3 text-sm font-semibold text-blue-800">{title}</h2>}
       {children}
     </section>

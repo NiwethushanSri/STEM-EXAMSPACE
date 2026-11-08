@@ -54,13 +54,14 @@ export async function assertNoOwner(): Promise<void> {
 export type TestAccount = { id: string; email: string; password: string; indexNumber?: string };
 
 export async function createAccount(opts: {
-  role?: "owner" | "admin" | "teacher" | "tutor" | "corrector";
+  role?: "owner" | "admin" | "teacher" | "tutor" | "corrector" | "parent";
   status?: "pending" | "profile_incomplete" | "active" | "suspended";
   indexNumber?: string;
   firstName?: string;
+  email?: string;
 }): Promise<TestAccount> {
   if (opts.role === "owner") await assertNoOwner();
-  const email = testEmail("acct");
+  const email = opts.email ?? testEmail("acct");
   const password = testPassword();
   const { data, error } = await svc().auth.admin.createUser({
     email,
@@ -86,6 +87,69 @@ export async function createAccount(opts: {
     if (e) throw new Error(`index update failed: ${e.message}`);
   }
   return { id, email, password, indexNumber: opts.indexNumber };
+}
+
+/**
+ * A student exactly as a confirmed self sign-up leaves it (status pending, parent snapshot filled in), so it
+ * shows in the admin approval list. `requestedBy` marks it as registered by that parent.
+ */
+export async function createPendingStudent(opts: {
+  parentEmail: string;
+  parentName?: string;
+  requestedBy?: string;
+  firstName?: string;
+  email?: string;
+}): Promise<TestAccount> {
+  const email = opts.email ?? testEmail("pend");
+  const password = testPassword();
+  const { data, error } = await svc().auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: {
+      first_name: opts.firstName ?? "Pen",
+      last_name: "Ding",
+      school: "E2E School",
+      date_of_birth: "2009-04-12",
+      parent_name: opts.parentName ?? "Pat Ding",
+      parent_email: opts.parentEmail,
+    },
+  });
+  if (error || !data.user) throw new Error(`createUser failed: ${error?.message}`);
+  created.add(data.user.id);
+  if (opts.requestedBy) {
+    const { error: e } = await svc().from("student_details").update({ requested_by_parent: opts.requestedBy }).eq("profile_id", data.user.id);
+    if (e) throw new Error(`requested_by update failed: ${e.message}`);
+  }
+  return { id: data.user.id, email, password };
+}
+
+/** A pending parent_link_requests row (what the parent-child function creates), without the rate limit. */
+export async function createLinkRequest(parentId: string, studentId: string): Promise<string> {
+  const { data, error } = await svc().from("parent_link_requests").insert({ parent_id: parentId, student_id: studentId }).select("id").single();
+  if (error || !data) throw new Error(`link request failed: ${error?.message}`);
+  return data.id;
+}
+
+/** Can this user (signed in with email+password through the anon key, RLS applies) read the profile? */
+export async function canRead(email: string, password: string, profileId: string): Promise<boolean> {
+  const c = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { error: se } = await c.auth.signInWithPassword({ email, password });
+  if (se) throw new Error(`test sign-in failed: ${se.message}`);
+  const { data, error } = await c.from("profiles").select("id").eq("id", profileId);
+  await c.auth.signOut();
+  if (error) throw new Error(`read failed: ${error.code ?? "unknown"}`);
+  return (data ?? []).length === 1;
+}
+
+export async function parentLinked(parentId: string, studentId: string): Promise<boolean> {
+  const { count } = await svc().from("parent_children").select("*", { count: "exact", head: true }).eq("parent_id", parentId).eq("student_id", studentId);
+  return (count ?? 0) > 0;
+}
+
+export async function studentDetails(id: string) {
+  const { data } = await svc().from("student_details").select("index_number").eq("profile_id", id).maybeSingle();
+  return data;
 }
 
 /** An account exactly as a self sign-up leaves it before the email link is used (status unconfirmed). */
@@ -170,4 +234,12 @@ export async function clearLoginAttempts(): Promise<void> {
   if (!SUPABASE_URL.includes("jmhjahwfskhlgagaqlrz")) throw new Error("refusing to touch a project other than stem-examspace-dev");
   const { error } = await svc().from("login_attempts").delete().gte("attempted_at", "1970-01-01");
   if (error) throw new Error(`clearing login attempts failed: ${error.code ?? "unknown"}`);
+}
+
+/** Signs in through the real /login form. */
+export async function signInUI(page: import("@playwright/test").Page, email: string, password: string): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Email or index number").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
 }
