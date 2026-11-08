@@ -1,33 +1,133 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState, type FormEvent } from "react";
+import { bannedMessage, homeFor, indexLogin, messageFor } from "@stem/shared";
 import { AuthLayout, inputClass, labelClass } from "@/components/AuthLayout";
+import { createClient } from "@/lib/supabase/client";
 
-const roles = [
-  { key: "student", label: "Student", home: "/student", idLabel: "Email or index number", placeholder: "you@example.com or SE-2026-0142" },
-  { key: "parent", label: "Parent", home: "/parent", idLabel: "Email address", placeholder: "you@example.com" },
-  { key: "examiner", label: "Examiner", home: "/examiner", idLabel: "Examiner email", placeholder: "examiner@stemexamspace.co.uk" },
-  { key: "admin", label: "Admin", home: "/admin", idLabel: "Admin email", placeholder: "admin@stemexamspace.co.uk" },
-] as const;
-
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
-  const [roleKey, setRoleKey] = useState<(typeof roles)[number]["key"]>("student");
-  const [remember, setRemember] = useState(true);
-  const role = roles.find((r) => r.key === roleKey)!;
+  const linkFailed = useSearchParams().get("error") === "link";
+  const [error, setError] = useState<string | null>(
+    linkFailed ? "That link is invalid or has expired. Request a new one." : null,
+  );
+  const [unconfirmedEmail, setUnconfirmedEmail] = useState<string | null>(null);
+  const [resent, setResent] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    // Mockup: no real sign-in yet, so go straight to the chosen role's dashboard.
-    router.push(role.home);
+    const form = new FormData(e.currentTarget);
+    const identifier = String(form.get("identifier") ?? "").trim();
+    const password = String(form.get("password") ?? "");
+    const supabase = createClient();
+    setBusy(true);
+    setError(null);
+    setUnconfirmedEmail(null);
+    setResent(false);
+
+    const fail = (message: string) => {
+      setError(message);
+      setBusy(false);
+    };
+
+    if (identifier.includes("@")) {
+      const { error: err } = await supabase.auth.signInWithPassword({ email: identifier, password });
+      if (err) {
+        if (err.code === "email_not_confirmed") {
+          setUnconfirmedEmail(identifier);
+          return fail("Confirm your email first");
+        }
+        if (err.code === "user_banned" || /banned/i.test(err.message)) return fail(bannedMessage);
+        if (err.status === 429 || err.code === "over_request_rate_limit") return fail(messageFor("rate_limited"));
+        if (err.code === "invalid_credentials" || err.status === 400) return fail("Email or password is incorrect.");
+        return fail(messageFor("internal"));
+      }
+    } else {
+      const res = await indexLogin(supabase, identifier, password);
+      if ("error" in res) {
+        const { code } = res.error;
+        if (code === "invalid_credentials") return fail("Index number or password is incorrect.");
+        return fail(messageFor(code));
+      }
+      const { error: err } = await supabase.auth.setSession({
+        access_token: res.data.access_token,
+        refresh_token: res.data.refresh_token,
+      });
+      if (err) return fail(messageFor("internal"));
+    }
+
+    const { data: auth } = await supabase.auth.getUser();
+    const { data: profile } = auth.user
+      ? await supabase.from("profiles").select("role, status").eq("id", auth.user.id).maybeSingle()
+      : { data: null };
+    if (!profile) return fail(messageFor("internal"));
+    router.replace(homeFor(profile.role, profile.status, "web-staff"));
+    router.refresh();
+  }
+
+  async function resend() {
+    if (!unconfirmedEmail) return;
+    await createClient().auth.resend({
+      type: "signup",
+      email: unconfirmedEmail,
+      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+    });
+    setResent(true);
   }
 
   return (
+    <form onSubmit={handleSubmit} className="space-y-5">
+      <div>
+        <label htmlFor="identifier" className={labelClass}>Email or index number</label>
+        <input
+          id="identifier"
+          name="identifier"
+          type="text"
+          required
+          autoComplete="username"
+          placeholder="you@example.com or SE-2026-0142"
+          className={inputClass}
+        />
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between">
+          <label htmlFor="password" className={labelClass}>Password</label>
+          <Link href="/reset-password" className="text-sm font-medium text-blue-700 hover:underline">Forgot password?</Link>
+        </div>
+        <input id="password" name="password" type="password" required autoComplete="current-password" placeholder="••••••••" className={inputClass} />
+      </div>
+
+      {error && (
+        <div role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p>{error}</p>
+          {unconfirmedEmail && (
+            <button type="button" onClick={resend} disabled={resent} className="mt-2 font-semibold underline disabled:opacity-60">
+              {resent ? "Confirmation email sent" : "Resend confirmation email"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <button
+        type="submit"
+        disabled={busy}
+        className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white shadow-md transition hover:bg-blue-700 disabled:opacity-60"
+      >
+        {busy ? "Signing in..." : "Sign in"}
+      </button>
+    </form>
+  );
+}
+
+export default function LoginPage() {
+  return (
     <AuthLayout
       title="Welcome back"
-      subtitle="Sign in to see your results, timetable and notices."
+      subtitle="Sign in with your email, or your index number if you are a student."
       footer={
         <>
           New student?{" "}
@@ -37,55 +137,9 @@ export default function LoginPage() {
         </>
       }
     >
-      <div role="tablist" aria-label="Sign in as" className="grid grid-cols-4 gap-1 rounded-lg bg-slate-100 p-1">
-        {roles.map((r) => (
-          <button
-            key={r.key}
-            type="button"
-            role="tab"
-            aria-selected={r.key === roleKey}
-            onClick={() => setRoleKey(r.key)}
-            className={`rounded-md px-2 py-2 text-sm font-medium transition ${
-              r.key === roleKey ? "bg-white text-blue-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
-            }`}
-          >
-            {r.label}
-          </button>
-        ))}
-      </div>
-
-      <form onSubmit={handleSubmit} className="mt-6 space-y-5">
-        <div>
-          <label htmlFor="id" className={labelClass}>{role.idLabel}</label>
-          <input id="id" type="text" required placeholder={role.placeholder} className={inputClass} />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between">
-            <label htmlFor="password" className={labelClass}>Password</label>
-            <a href="#" className="text-sm font-medium text-blue-700 hover:underline">Forgot password?</a>
-          </div>
-          <input id="password" type="password" required placeholder="••••••••" className={inputClass} />
-        </div>
-
-        <label className="flex items-center gap-2 text-sm text-slate-600">
-          <input
-            type="checkbox"
-            checked={remember}
-            onChange={(e) => setRemember(e.target.checked)}
-            className="h-4 w-4 rounded border-slate-300 text-blue-600"
-          />
-          Keep me signed in on this device
-        </label>
-
-        <button type="submit" className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white shadow-md transition hover:bg-blue-700">
-          Sign in as {role.label.toLowerCase()}
-        </button>
-      </form>
-
-      <p className="mt-6 text-center text-xs text-slate-500">
-        Mockup: sign-in does not check passwords yet.
-      </p>
+      <Suspense>
+        <LoginForm />
+      </Suspense>
     </AuthLayout>
   );
 }

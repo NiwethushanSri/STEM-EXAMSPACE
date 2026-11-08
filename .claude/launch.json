@@ -5,7 +5,7 @@
       "name": "dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "-w", "@stem/web"],
-      "port": 3000
+      "port": 3005
     }
   ]
 }

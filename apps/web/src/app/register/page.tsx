@@ -2,26 +2,56 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
+import { messageFor } from "@stem/shared";
 import { AuthLayout, inputClass, labelClass } from "@/components/AuthLayout";
-import { subjects, entranceExams } from "@/lib/site-data";
+import { createClient } from "@/lib/supabase/client";
 
-const grades = ["Year 10", "Year 11", "Year 12", "Year 13", "University applicant"];
+const DUPLICATE_CODES = new Set(["user_already_exists", "email_exists"]);
 
 export default function RegisterPage() {
-  const [submitted, setSubmitted] = useState(false);
-  const [picked, setPicked] = useState<string[]>([]);
+  const [done, setDone] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function toggle(item: string) {
-    setPicked((p) => (p.includes(item) ? p.filter((x) => x !== item) : [...p, item]));
-  }
-
-  function handleSubmit(e: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    // Mockup: nothing is saved yet. Admin approval happens in the admin portal later.
-    setSubmitted(true);
+    const form = new FormData(e.currentTarget);
+    const get = (k: string) => String(form.get(k) ?? "").trim();
+    setBusy(true);
+    setError(null);
+    const { error: err } = await createClient().auth.signUp({
+      email: get("email"),
+      password: String(form.get("password") ?? ""),
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        data: {
+          first_name: get("first"),
+          last_name: get("last"),
+          date_of_birth: get("dob"),
+          school: get("school"),
+          parent_name: get("pname"),
+          parent_email: get("pemail"),
+        },
+      },
+    });
+    setBusy(false);
+    // A duplicate address gets the same screen as a new one, so the form never reveals which emails exist.
+    if (!err || DUPLICATE_CODES.has(err.code ?? "")) {
+      setDone(true);
+      return;
+    }
+    if (err.status === 429 || err.code === "over_email_send_rate_limit" || err.code === "over_request_rate_limit") {
+      setError(messageFor("rate_limited"));
+    } else if (err.code === "weak_password") {
+      setError("Choose a stronger password.");
+    } else if (err.code === "email_address_invalid" || err.code === "validation_failed") {
+      setError(messageFor("invalid_input"));
+    } else {
+      setError(messageFor("internal"));
+    }
   }
 
-  if (submitted) {
+  if (done) {
     return (
       <AuthLayout
         title="Registration received"
@@ -29,10 +59,10 @@ export default function RegisterPage() {
         footer={<Link href="/login" className="font-semibold text-blue-700 hover:underline">Back to sign in</Link>}
       >
         <div className="rounded-xl bg-green-50 p-5 text-sm text-green-900">
-          <p className="font-semibold">Awaiting approval</p>
+          <p className="font-semibold">Check your email to confirm your address</p>
           <p className="mt-1">
-            An admin will check your details and approve your account. You will get an email with your
-            index number once it is approved.
+            Open the link we sent you. After that an admin will check your details and approve your
+            account, and you will get an email with your index number.
           </p>
         </div>
       </AuthLayout>
@@ -42,7 +72,7 @@ export default function RegisterPage() {
   return (
     <AuthLayout
       title="Create your account"
-      subtitle="Register as a student. Your account is approved by an admin before you can sign in."
+      subtitle="Register as a student. Your account is approved by an admin before you can use it."
       footer={
         <>
           Already registered?{" "}
@@ -58,41 +88,21 @@ export default function RegisterPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="first" className={labelClass}>First name</label>
-              <input id="first" required className={inputClass} />
+              <input id="first" name="first" required className={inputClass} />
             </div>
             <div>
               <label htmlFor="last" className={labelClass}>Last name</label>
-              <input id="last" required className={inputClass} />
+              <input id="last" name="last" required className={inputClass} />
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="dob" className={labelClass}>Date of birth</label>
-              <input id="dob" type="date" required className={inputClass} />
+              <input id="dob" name="dob" type="date" required className={inputClass} />
             </div>
-            <div>
-              <label htmlFor="gender" className={labelClass}>Gender</label>
-              <select id="gender" className={inputClass} defaultValue="">
-                <option value="" disabled>Select</option>
-                <option>Female</option>
-                <option>Male</option>
-                <option>Prefer not to say</option>
-              </select>
-            </div>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="school" className={labelClass}>School</label>
-              <input id="school" required className={inputClass} />
-            </div>
-            <div>
-              <label htmlFor="grade" className={labelClass}>Year group</label>
-              <select id="grade" className={inputClass} defaultValue="">
-                <option value="" disabled>Select</option>
-                {grades.map((g) => (
-                  <option key={g}>{g}</option>
-                ))}
-              </select>
+              <input id="school" name="school" required className={inputClass} />
             </div>
           </div>
         </fieldset>
@@ -102,16 +112,12 @@ export default function RegisterPage() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="pname" className={labelClass}>Parent name</label>
-              <input id="pname" required className={inputClass} />
+              <input id="pname" name="pname" required className={inputClass} />
             </div>
             <div>
-              <label htmlFor="pphone" className={labelClass}>Parent phone</label>
-              <input id="pphone" type="tel" required className={inputClass} />
+              <label htmlFor="pemail" className={labelClass}>Parent email</label>
+              <input id="pemail" name="pemail" type="email" required className={inputClass} />
             </div>
-          </div>
-          <div>
-            <label htmlFor="pemail" className={labelClass}>Parent email</label>
-            <input id="pemail" type="email" required className={inputClass} />
           </div>
         </fieldset>
 
@@ -119,33 +125,20 @@ export default function RegisterPage() {
           <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-700">Sign-in details</legend>
           <div>
             <label htmlFor="email" className={labelClass}>Your email</label>
-            <input id="email" type="email" required className={inputClass} />
+            <input id="email" name="email" type="email" required autoComplete="email" className={inputClass} />
           </div>
           <div>
             <label htmlFor="password" className={labelClass}>Password</label>
-            <input id="password" type="password" minLength={8} required placeholder="At least 8 characters" className={inputClass} />
-          </div>
-        </fieldset>
-
-        <fieldset>
-          <legend className="mb-2 text-xs font-semibold uppercase tracking-wide text-blue-700">Subjects you plan to sit</legend>
-          <div className="flex flex-wrap gap-2">
-            {[...subjects, ...entranceExams].map((s) => {
-              const on = picked.includes(s);
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => toggle(s)}
-                  aria-pressed={on}
-                  className={`rounded-full px-3 py-1.5 text-sm transition ${
-                    on ? "bg-blue-600 text-white" : "border border-slate-300 text-slate-700 hover:border-blue-400"
-                  }`}
-                >
-                  {s}
-                </button>
-              );
-            })}
+            <input
+              id="password"
+              name="password"
+              type="password"
+              minLength={8}
+              required
+              autoComplete="new-password"
+              placeholder="At least 8 characters"
+              className={inputClass}
+            />
           </div>
         </fieldset>
 
@@ -154,8 +147,14 @@ export default function RegisterPage() {
           <span>I agree to the terms and confirm that the parent details above are correct.</span>
         </label>
 
-        <button type="submit" className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white shadow-md transition hover:bg-blue-700">
-          Create account
+        {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white shadow-md transition hover:bg-blue-700 disabled:opacity-60"
+        >
+          {busy ? "Creating account..." : "Create account"}
         </button>
       </form>
     </AuthLayout>
