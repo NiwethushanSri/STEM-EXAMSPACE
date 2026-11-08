@@ -15,7 +15,8 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient();
   // Any failure ends with no session left behind.
   const fail = async () => {
-    await supabase.auth.signOut();
+    // Local scope only: a junk link must not be able to sign the user out of their other devices.
+    await supabase.auth.signOut({ scope: "local" });
     return NextResponse.redirect(new URL("/login?error=link", request.url));
   };
 
@@ -24,24 +25,31 @@ export async function GET(request: NextRequest) {
   const type = searchParams.get("type");
   let setPassword = false;
 
+  // Decides from the verified session, never from the query type, whether the user must choose a password.
+  // GoTrue accepts a recovery token under any email-style type and signs every OTP session "otp", so the
+  // reliable signal is the account itself: a recovery email sent within the token lifetime (1 hour).
+  // Unreadable claims or user fail closed (set a password).
+  const needsPassword = async () => {
+    const { data: claims } = await supabase.auth.getClaims();
+    const amr = claims?.claims?.amr;
+    if (!Array.isArray(amr)) return true;
+    const methods = (amr as Array<string | { method?: string }>).map((m) => (typeof m === "string" ? m : (m.method ?? "")));
+    if (methods.includes("recovery") || methods.includes("invite")) return true;
+    const { data: auth } = await supabase.auth.getUser();
+    if (!auth.user) return true;
+    const sent = auth.user.recovery_sent_at ? Date.parse(auth.user.recovery_sent_at) : NaN;
+    return Number.isFinite(sent) && Date.now() - sent < 60 * 60 * 1000;
+  };
+
   if (tokenHash && type && (OTP_TYPES as readonly string[]).includes(type)) {
-    // verifyOtp checks the token against this type, so the type is only trusted once verification succeeded.
     const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: type as EmailOtpType });
     if (error) return fail();
-    setPassword = type === "recovery" || type === "invite";
+    // Trust the verified session, never the query type: a recovery link edited to another type must not skip this.
+    setPassword = type === "recovery" || type === "invite" || (await needsPassword());
   } else if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) return fail();
-    // A PKCE link carries no trustworthy type; only the verified session says how the user signed in.
-    // If that cannot be read, fail closed: send the user to set a password.
-    const { data: claims } = await supabase.auth.getClaims();
-    const amr = claims?.claims?.amr;
-    if (!Array.isArray(amr)) {
-      setPassword = true;
-    } else {
-      const methods = (amr as Array<string | { method?: string }>).map((m) => (typeof m === "string" ? m : (m.method ?? "")));
-      setPassword = methods.includes("recovery") || methods.includes("invite");
-    }
+    setPassword = await needsPassword();
   } else {
     return fail();
   }

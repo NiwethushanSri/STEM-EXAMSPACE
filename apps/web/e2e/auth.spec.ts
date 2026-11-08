@@ -254,7 +254,7 @@ test("parent_registered_child_sets_password_from_emailed_link", async ({ page })
   await expect(page).toHaveURL(/\/account\/pending$/);
 });
 
-test("admin_and_owner_can_open_admin_and_owner_only_owner", async ({ page }) => {
+test("admin_can_open_admin_but_not_owner", async ({ page }) => {
   const admin = await createAccount({ role: "admin" });
   await signIn(page, admin.email, admin.password);
   await expect(page).toHaveURL(/\/admin$/);
@@ -262,15 +262,29 @@ test("admin_and_owner_can_open_admin_and_owner_only_owner", async ({ page }) => 
   await expect(page).toHaveURL(/\/admin\/accounts$/);
   await page.goto("/owner");
   await expect(page).toHaveURL(/\/admin$/);
-  await page.context().clearCookies();
+});
 
+test("owner_can_open_owner_and_admin", async ({ page }) => {
   const owner = await createAccount({ role: "owner" });
-  await signIn(page, owner.email, owner.password);
-  await expect(page).toHaveURL(/\/owner$/);
-  await page.goto("/admin");
-  await expect(page).toHaveURL(/\/admin$/);
-  await page.goto("/owner");
-  await expect(page).toHaveURL(/\/owner$/);
+  try {
+    await signIn(page, owner.email, owner.password);
+    await expect(page).toHaveURL(/\/owner$/);
+    await page.goto("/admin");
+    await expect(page).toHaveURL(/\/admin$/);
+    await page.goto("/owner");
+    await expect(page).toHaveURL(/\/owner$/);
+  } finally {
+    // Delete the owner immediately so an aborted run cannot leave one on dev.
+    await svc().auth.admin.deleteUser(owner.id);
+  }
+});
+
+test("recovery_token_with_edited_type_still_requires_new_password", async ({ page }) => {
+  const a = await createAccount({ status: "active" });
+  const { tokenHash } = await linkFor("recovery", a.email);
+  await page.goto(`/auth/callback?token_hash=${encodeURIComponent(tokenHash)}&type=email`);
+  // GoTrue accepts the mismatched type (and signs the session "otp"), so the callback must still force set-password.
+  await expect(page).toHaveURL(/\/reset-password\?mode=set/);
 });
 
 test("student_redirected_from_every_staff_area", async ({ page }) => {
