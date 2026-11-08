@@ -1,3 +1,5 @@
+export const instant = false;
+
 import type { ReactNode } from "react";
 import { StaffLayout } from "@/lib/staff-gate";
 

@@ -1,33 +1,61 @@
 import { Suspense } from "react";
-import { redirect } from "next/navigation";
-import { Card, Stat } from "@/components/AppShell";
-import { loadAccounts } from "@/lib/accounts";
-import { getSessionProfile } from "@/lib/supabase/server";
-import { AccountsManager } from "./AccountsManager";
 import Link from "next/link";
+import type { AccountStatus, AppRole } from "@stem/shared";
+import { Card, Stat } from "@/components/AppShell";
+import { loadAccountsPage, loadCounts, loadLinkRequests, loadPending } from "@/lib/accounts";
+import type { AccountFilters } from "@/lib/account-rules";
+import { requireStaff } from "@/lib/staff-gate";
+import { AccountsManager } from "./AccountsManager";
 
-async function viewer() {
-  const me = await getSessionProfile();
-  if (!me || (me.role !== "owner" && me.role !== "admin")) redirect("/login");
-  return { id: me.id, role: me.role } as const;
+const ROLE_VALUES: AppRole[] = ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"];
+const STATUS_VALUES: AccountStatus[] = ["unconfirmed", "pending", "profile_incomplete", "active", "suspended"];
+
+export type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
+
+/** Reads and validates the URL filters (anything unknown is ignored). */
+function parseFilters(raw: Record<string, string | string[] | undefined>): AccountFilters {
+  const role = first(raw.role);
+  const status = first(raw.status);
+  const page = Number.parseInt(first(raw.page), 10);
+  return {
+    role: (ROLE_VALUES as string[]).includes(role) ? (role as AppRole) : null,
+    status: (STATUS_VALUES as string[]).includes(status) ? (status as AccountStatus) : null,
+    q: first(raw.q).slice(0, 80),
+    page: Number.isFinite(page) && page > 0 ? page : 1,
+  };
 }
 
-/** Live account management (server component: reads with the caller's session, RLS applies). */
-async function SectionBody({ mode }: { mode: "all" | "staff" }) {
-  const [v, data] = await Promise.all([viewer(), loadAccounts()]);
-  return <AccountsManager viewer={v} mode={mode} {...data} />;
+async function SectionBody({
+  mode,
+  roles,
+  searchParams,
+}: {
+  mode: "all" | "staff";
+  roles: readonly AppRole[];
+  searchParams: SearchParams;
+}) {
+  const me = await requireStaff(roles);
+  const filters = parseFilters(await searchParams);
+  const [accounts, pending, links] = await Promise.all([
+    loadAccountsPage(filters, mode === "staff"),
+    mode === "all" ? loadPending() : Promise.resolve([]),
+    mode === "all" ? loadLinkRequests() : Promise.resolve([]),
+  ]);
+  const viewer = { id: me.id, role: me.role === "owner" ? ("owner" as const) : ("admin" as const) };
+  return <AccountsManager viewer={viewer} mode={mode} filters={filters} accounts={accounts} pending={pending} links={links} />;
 }
 
-/** Dashboard body shared by /admin and /owner: real counts and the first pending registrations. */
-async function OverviewBody({ accountsHref }: { accountsHref: string }) {
-  await viewer();
-  const { accounts, pending, links } = await loadAccounts();
+async function OverviewBody({ accountsHref, roles }: { accountsHref: string; roles: readonly AppRole[] }) {
+  await requireStaff(roles);
+  const [counts, pending] = await Promise.all([loadCounts(), loadPending(5)]);
   return (
     <>
       <div className="grid gap-4 md:grid-cols-3">
-        <Stat label="Accounts" value={accounts.length} />
-        <Stat label="Awaiting approval" value={pending.length} />
-        <Stat label="Parent link requests" value={links.length} />
+        <Stat label="Accounts" value={counts.accounts} />
+        <Stat label="Awaiting approval" value={counts.pending} />
+        <Stat label="Parent link requests" value={counts.links} />
       </div>
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Card title="Pending student approvals">
@@ -35,7 +63,7 @@ async function OverviewBody({ accountsHref }: { accountsHref: string }) {
             <p className="text-sm text-slate-500">No registrations are waiting for approval.</p>
           ) : (
             <ul className="divide-y divide-slate-100 text-sm">
-              {pending.slice(0, 5).map((p) => (
+              {pending.map((p) => (
                 <li key={p.id} className="flex items-center justify-between py-2.5">
                   <span>
                     <span className="font-medium">{p.name}</span> · {p.school}
@@ -47,9 +75,9 @@ async function OverviewBody({ accountsHref }: { accountsHref: string }) {
               ))}
             </ul>
           )}
-          {pending.length > 5 && (
+          {counts.pending > pending.length && (
             <Link href={accountsHref} className="mt-3 inline-block text-sm text-blue-700 underline">
-              See all {pending.length}
+              See all {counts.pending}
             </Link>
           )}
         </Card>
@@ -63,18 +91,27 @@ async function OverviewBody({ accountsHref }: { accountsHref: string }) {
 
 const loading = <p className="text-sm text-slate-500">Loading…</p>;
 
-export function AccountsSection({ mode }: { mode: "all" | "staff" }) {
+/** Live account management. `roles` is who may open the page (the loaders still re-check owner/admin). */
+export function AccountsSection({
+  mode,
+  roles,
+  searchParams,
+}: {
+  mode: "all" | "staff";
+  roles: readonly AppRole[];
+  searchParams: SearchParams;
+}) {
   return (
     <Suspense fallback={loading}>
-      <SectionBody mode={mode} />
+      <SectionBody mode={mode} roles={roles} searchParams={searchParams} />
     </Suspense>
   );
 }
 
-export function AccountsOverview({ accountsHref }: { accountsHref: string }) {
+export function AccountsOverview({ accountsHref, roles }: { accountsHref: string; roles: readonly AppRole[] }) {
   return (
     <Suspense fallback={loading}>
-      <OverviewBody accountsHref={accountsHref} />
+      <OverviewBody accountsHref={accountsHref} roles={roles} />
     </Suspense>
   );
 }

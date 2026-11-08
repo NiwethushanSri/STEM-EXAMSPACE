@@ -90,6 +90,7 @@ describe("helper payloads", () => {
       { email: "a@b.co", firstName: "A", lastName: "B", role: "teacher" },
     ],
     ["accountAdmin suspend", (c: StemClient) => accountAdmin(c, { action: "suspend", userId: U }), "account-admin", { action: "suspend", userId: U }],
+    ["accountAdmin edit_parent_email", (c: StemClient) => accountAdmin(c, { action: "edit_parent_email", userId: U, parentEmail: "p@b.co" }), "account-admin", { action: "edit_parent_email", userId: U, parentEmail: "p@b.co" }],
     ["accountAdmin clear", (c: StemClient) => accountAdmin(c, { action: "clear_stuck_invite", email: "a@b.co" }), "account-admin", { action: "clear_stuck_invite", email: "a@b.co" }],
     ["deleteMyAccount", (c: StemClient) => deleteMyAccount(c), "delete-my-account", {}],
     [

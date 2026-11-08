@@ -6,13 +6,15 @@ import {
   accountAction,
   approveAction,
   clearStuckInviteAction,
+  editParentEmailAction,
   inviteAction,
   linkRequestAction,
   rejectAction,
   type ActionResult,
 } from "@/app/admin/accounts/actions";
-import type { AccountRow, LinkRequestRow, PendingRow, Viewer } from "@/lib/account-rules";
+import type { AccountFilters, AccountRow, LinkRequestRow, PendingRow, Viewer } from "@/lib/account-rules";
 import { STAFF_ROLES } from "@/lib/account-rules";
+import { EditParentEmailDialog } from "./EditParentEmailDialog";
 import { AccountsTable } from "./AccountsTable";
 import { InviteStaffDialog, type InviteInput } from "./InviteStaffDialog";
 import { LinkRequestsTable, PendingTable } from "./PendingTable";
@@ -26,12 +28,14 @@ type Notice = { ok: boolean; message: string; warning?: string };
 export function AccountsManager({
   viewer,
   accounts,
+  filters,
   pending,
   links,
   mode,
 }: {
   viewer: Viewer;
-  accounts: AccountRow[];
+  filters: AccountFilters;
+  accounts: { rows: AccountRow[]; total: number; page: number; pages: number };
   pending: PendingRow[];
   links: LinkRequestRow[];
   mode: "all" | "staff";
@@ -39,6 +43,7 @@ export function AccountsManager({
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [inviting, setInviting] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; name: string; email: string } | null>(null);
   const [, startTransition] = useTransition();
 
   /** Runs a server action, shows its outcome and resolves true on success. The action revalidates the page. */
@@ -54,19 +59,19 @@ export function AccountsManager({
           result = { ok: false, code: "internal", message: messageFor("internal") };
         }
         if (result.ok) setNotice({ ok: true, message: result.message, warning: result.warning });
-        else setNotice({ ok: false, message: result.code === "conflict" ? messageFor("conflict") : result.message });
+        else setNotice({ ok: false, message: result.message });
         setBusyKey(null);
         resolve(result.ok);
       });
     });
   }
 
-  const visible = mode === "staff" ? accounts.filter((a) => STAFF_ROLES.includes(a.role)) : accounts;
   const roles = mode === "staff" ? STAFF_ROLES.slice() : undefined;
+  const modalOpen = inviting || editing !== null;
 
   return (
     <div className="space-y-6">
-      {notice && !(inviting && !notice.ok) &&
+      {notice && !(modalOpen && !notice.ok) &&
         (notice.ok ? (
           <div role="status" className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
             <p>{notice.message}</p>
@@ -99,6 +104,10 @@ export function AccountsManager({
             run={run}
             approve={approveAction}
             reject={rejectAction}
+            onEditParent={(p) => {
+              setNotice(null);
+              setEditing({ id: p.id, name: p.name, email: p.parentEmail });
+            }}
           />
           <LinkRequestsTable rows={links} busyKey={busyKey} run={run} decide={linkRequestAction} />
         </>
@@ -106,7 +115,15 @@ export function AccountsManager({
 
       <AccountsTable
         title={mode === "staff" ? "Staff accounts" : "All accounts"}
-        rows={visible}
+        rows={accounts.rows}
+        total={accounts.total}
+        page={accounts.page}
+        pages={accounts.pages}
+        filters={filters}
+        onEditParent={(r) => {
+          setNotice(null);
+          setEditing({ id: r.id, name: `${r.firstName} ${r.lastName}`.trim(), email: r.signupParentEmail ?? "" });
+        }}
         viewer={viewer}
         busyKey={busyKey}
         run={run}
@@ -118,6 +135,17 @@ export function AccountsManager({
         <summary className="cursor-pointer font-medium text-slate-700">Troubleshooting</summary>
         <ClearStuckInvite busy={busyKey === "clear"} onClear={(email) => run("clear", () => clearStuckInviteAction(email))} />
       </details>
+
+      {editing && (
+        <EditParentEmailDialog
+          studentName={editing.name}
+          initial={editing.email}
+          busy={busyKey === "edit-parent"}
+          error={notice && !notice.ok ? notice.message : null}
+          onClose={() => setEditing(null)}
+          onSave={(email) => run("edit-parent", () => editParentEmailAction(editing.id, email))}
+        />
+      )}
 
       {inviting && (
         <InviteStaffDialog

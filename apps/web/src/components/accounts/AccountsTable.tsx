@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { roleLabel, type AccountStatus, type AppRole } from "@stem/shared";
 import { Badge, Card } from "@/components/AppShell";
-import { actionsFor, type AccountRow, type Viewer } from "@/lib/account-rules";
+import { actionsFor, type AccountFilters, type AccountRow, type Viewer } from "@/lib/account-rules";
 import type { ActionResult } from "@/app/admin/accounts/actions";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -32,43 +34,56 @@ const btn = "rounded border border-slate-300 px-2.5 py-1 text-xs hover:bg-slate-
 export function AccountsTable({
   title,
   rows,
+  total,
+  page,
+  pages,
+  filters,
   viewer,
   busyKey,
   run,
   act,
+  onEditParent,
   roles = ROLES,
 }: {
   title: string;
   rows: AccountRow[];
+  total: number;
+  page: number;
+  pages: number;
+  filters: AccountFilters;
+  onEditParent: (row: AccountRow) => void;
   viewer: Viewer;
   busyKey: string | null;
   run: Run;
   act: (kind: Kind, id: string) => Promise<ActionResult>;
   roles?: AppRole[];
 }) {
-  const [role, setRole] = useState<AppRole | "all">("all");
-  const [status, setStatus] = useState<AccountStatus | "all">("all");
-  const [query, setQuery] = useState("");
+  const router = useRouter();
+  const pathname = usePathname();
+  const [query, setQuery] = useState(filters.q);
   const [confirm, setConfirm] = useState<{ kind: "remove_staff" | "delete_account"; row: AccountRow } | null>(null);
 
-  const shown = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rows.filter(
-      (r) =>
-        (role === "all" || r.role === role) &&
-        (status === "all" || r.status === status) &&
-        (!q || `${r.firstName} ${r.lastName}`.toLowerCase().includes(q) || r.email.toLowerCase().includes(q)),
-    );
-  }, [rows, role, status, query]);
+  /** Filters live in the URL so the server applies them (the table never holds more than one page). */
+  const hrefFor = (next: Partial<{ role: string; status: string; q: string; page: number }>) => {
+    const p = new URLSearchParams();
+    const merged = { role: filters.role ?? "", status: filters.status ?? "", q: filters.q, page: 1, ...next };
+    if (merged.role) p.set("role", merged.role);
+    if (merged.status) p.set("status", merged.status);
+    if (merged.q) p.set("q", merged.q);
+    if (merged.page > 1) p.set("page", String(merged.page));
+    const qs = p.toString();
+    return qs ? `${pathname}?${qs}` : pathname;
+  };
+  const shown = rows;
 
   const field = "rounded border border-slate-300 bg-white px-2 py-1.5 text-sm";
 
   return (
-    <Card title={`${title} (${shown.length})`}>
+    <Card title={`${title} (${total})`}>
       <div className="mb-3 flex flex-wrap gap-3 text-sm">
         <label className="flex items-center gap-2">
           <span className="text-slate-600">Role</span>
-          <select className={field} value={role} onChange={(e) => setRole(e.target.value as AppRole | "all")}>
+          <select className={field} value={filters.role ?? "all"} onChange={(e) => router.replace(hrefFor({ role: e.target.value === "all" ? "" : e.target.value }))}>
             <option value="all">All roles</option>
             {roles.map((r) => (
               <option key={r} value={r}>
@@ -79,7 +94,7 @@ export function AccountsTable({
         </label>
         <label className="flex items-center gap-2">
           <span className="text-slate-600">Status</span>
-          <select className={field} value={status} onChange={(e) => setStatus(e.target.value as AccountStatus | "all")}>
+          <select className={field} value={filters.status ?? "all"} onChange={(e) => router.replace(hrefFor({ status: e.target.value === "all" ? "" : e.target.value }))}>
             <option value="all">All statuses</option>
             {STATUSES.map((s) => (
               <option key={s} value={s}>
@@ -88,16 +103,24 @@ export function AccountsTable({
             ))}
           </select>
         </label>
-        <label className="flex items-center gap-2">
-          <span className="text-slate-600">Search accounts</span>
-          <input
-            type="search"
-            className={`${field} w-64`}
-            placeholder="Name or email"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </label>
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            router.replace(hrefFor({ q: query.trim() }));
+          }}
+        >
+          <label className="flex items-center gap-2">
+            <span className="text-slate-600">Search accounts</span>
+            <input
+              type="search"
+              className={`${field} w-64`}
+              placeholder="Name or email, press Enter"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+        </form>
       </div>
 
       <div className="overflow-x-auto">
@@ -124,7 +147,7 @@ export function AccountsTable({
                   <td className="py-2.5 pr-4">
                     <span className="flex flex-wrap items-center gap-1">
                       <Badge tone={TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>
-                      {r.role !== "student" && r.inviteSentAt === null && <Badge tone="amber">Invite not sent</Badge>}
+                      {r.role !== "student" && r.role !== "owner" && r.inviteSentAt === null && <Badge tone="amber">Invite not sent</Badge>}
                     </span>
                   </td>
                   <td className="py-2.5 pr-4">{r.indexNumber ?? "—"}</td>
@@ -138,6 +161,16 @@ export function AccountsTable({
                       {a.resendInvite && (
                         <button type="button" disabled={busy} className={btn} onClick={() => go("resend_invite")}>
                           Resend invite
+                        </button>
+                      )}
+                      {a.resendParentInvite && (
+                        <button type="button" disabled={busy} className={btn} onClick={() => go("resend_invite")}>
+                          Resend parent invite
+                        </button>
+                      )}
+                      {a.editParentEmail && (
+                        <button type="button" disabled={busy} className={btn} onClick={() => onEditParent(r)}>
+                          Edit parent email
                         </button>
                       )}
                       {a.removeStaff && (
@@ -165,6 +198,24 @@ export function AccountsTable({
           </tbody>
         </table>
       </div>
+
+      <nav className="mt-3 flex items-center justify-between text-sm text-slate-600" aria-label="Pagination">
+        <span>
+          Page {page} of {pages}
+        </span>
+        <span className="flex gap-3">
+          {page > 1 && (
+            <Link href={hrefFor({ page: page - 1 })} className="text-blue-700 underline">
+              Previous
+            </Link>
+          )}
+          {page < pages && (
+            <Link href={hrefFor({ page: page + 1 })} className="text-blue-700 underline">
+              Next
+            </Link>
+          )}
+        </span>
+      </nav>
 
       {confirm && (
         <ConfirmDialog

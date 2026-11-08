@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
+  warmUp,
   assertNoOwner,
   canRead,
   cleanup,
@@ -21,6 +22,7 @@ import {
 
 test.beforeAll(async () => {
   await assertNoOwner();
+  await warmUp();
 });
 test.beforeEach(async () => {
   await clearLoginAttempts();
@@ -84,6 +86,7 @@ test("admin_rejects_student_and_row_disappears", async ({ page }) => {
   const again = await createPendingStudent({ parentEmail: testEmail("rejparent2"), email: student.email });
   expect(again.id).not.toBe(student.id);
   expect((await profileByEmail(student.email))?.status).toBe("pending");
+
 });
 
 test("parent_registered_child_shows_badge", async ({ page }) => {
@@ -123,4 +126,16 @@ test("parent_email_is_staff_shows_message", async ({ page }) => {
   await row.getByRole("button", { name: "Approve" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "The parent email belongs to a staff account" })).toContainText("Edit the parent email first.");
   expect((await profileByEmail(student.email))?.status).toBe("pending");
+
+  // The admin edits the parent email first, then approval works.
+  const newParent = testEmail("fixedparent");
+  trackEmail(newParent);
+  await pendingRow(page, student.email).getByRole("button", { name: "Edit parent email" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Parent email").fill(newParent);
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toHaveText("Parent email updated.");
+  await expect(pendingRow(page, student.email)).toContainText(newParent);
+  await pendingRow(page, student.email).getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByRole("status").filter({ hasText: /SE-\d{4}-\d{4}/ })).toBeVisible();
 });

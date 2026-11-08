@@ -35,11 +35,18 @@ async function authorised(): Promise<{ client: StemClient } | { denied: ActionRe
   return { client: (await createClient()) as unknown as StemClient };
 }
 
-function finish<T>(res: FunctionResult<T>, ok: (data: T) => ActionResult): ActionResult {
+/**
+ * `registration` marks the approve/reject/link-decision actions, where a conflict means "someone else
+ * already handled this" (spec section 10); everywhere else the server's own message is shown.
+ */
+function finish<T>(res: FunctionResult<T>, ok: (data: T) => ActionResult, registration = false): ActionResult {
   // Refresh in both outcomes: a conflict means the list on screen was stale.
   revalidatePath("/admin", "layout");
   revalidatePath("/owner", "layout");
-  if ("error" in res) return fail(res.error.code, res.error.message || messageFor(res.error.code));
+  if ("error" in res) {
+    if (registration && res.error.code === "conflict") return fail("conflict");
+    return fail(res.error.code, res.error.message || messageFor(res.error.code));
+  }
   return ok(res.data);
 }
 
@@ -54,14 +61,14 @@ export async function approveAction(studentId: string): Promise<ActionResult> {
     ok: true,
     message: `Approved. Index number ${d.indexNumber}`,
     warning: d.warning ? (WARNING_TEXT[d.warning] ?? d.warning) : undefined,
-  }));
+  }), true);
 }
 
 export async function rejectAction(studentId: string): Promise<ActionResult> {
   const a = await authorised();
   if ("denied" in a) return a.denied;
   if (!isId(studentId)) return fail("invalid_input");
-  return finish(await rejectStudent(a.client, studentId), () => ({ ok: true, message: "Registration rejected and deleted." }));
+  return finish(await rejectStudent(a.client, studentId), () => ({ ok: true, message: "Registration rejected and deleted." }), true);
 }
 
 export async function linkRequestAction(requestId: string, decision: "approve" | "reject"): Promise<ActionResult> {
@@ -69,7 +76,30 @@ export async function linkRequestAction(requestId: string, decision: "approve" |
   if ("denied" in a) return a.denied;
   if (!isId(requestId) || (decision !== "approve" && decision !== "reject")) return fail("invalid_input");
   const res = await parentChild(a.client, { action: decision === "approve" ? "approve_link" : "reject_link", requestId });
-  return finish(res, () => ({ ok: true, message: decision === "approve" ? "Parent linked to child." : "Link request rejected." }));
+  return finish(res, () => ({ ok: true, message: decision === "approve" ? "Parent linked to child." : "Link request rejected." }), true);
+}
+
+/** Maps the parent-invite rebuild outcome. Linking an existing parent is a success even when no email was needed. */
+function resendParentOutcome(r: {
+  emailSent?: boolean;
+  parentLinked?: boolean;
+  parentInvited?: boolean;
+  warning?: string;
+}): ActionResult {
+  const warning = r.warning ? (WARNING_TEXT[r.warning] ?? r.warning) : undefined;
+  if (!r.parentLinked && !r.parentInvited) {
+    return { ok: false, code: "conflict", message: warning ?? "The parent could not be linked." };
+  }
+  if (r.parentInvited) {
+    return r.emailSent
+      ? { ok: true, message: "Parent invited and linked. The invitation email was sent.", warning }
+      : {
+          ok: true,
+          message: "Parent account created and linked, but the invitation email could not be sent.",
+          warning: warning ?? "Use Resend invite on the parent account.",
+        };
+  }
+  return { ok: true, message: "Parent linked to the student.", warning };
 }
 
 export async function accountAction(
@@ -92,11 +122,11 @@ export async function accountAction(
       case "delete_account":
         return { ok: true, message: "Account deleted." };
       default: {
-        const r = d as { emailSent?: boolean; warning?: string };
-        const warning = r.warning ? (WARNING_TEXT[r.warning] ?? r.warning) : undefined;
+        const r = d as { emailSent?: boolean; parentLinked?: boolean; parentInvited?: boolean; warning?: string };
+        if ("parentLinked" in r) return resendParentOutcome(r);
         return r.emailSent === false
           ? { ok: false, code: "internal", message: "The invitation email could not be sent. Try again later." }
-          : { ok: true, message: "Invitation sent.", warning };
+          : { ok: true, message: "Invitation sent." };
       }
     }
   });
@@ -129,5 +159,16 @@ export async function clearStuckInviteAction(email: string): Promise<ActionResul
   return finish(await accountAdmin(a.client, { action: "clear_stuck_invite", email: clean }), () => ({
     ok: true,
     message: "Stuck invite cleared.",
+  }));
+}
+
+export async function editParentEmailAction(userId: string, parentEmail: string): Promise<ActionResult> {
+  const a = await authorised();
+  if ("denied" in a) return a.denied;
+  const email = String(parentEmail ?? "").trim();
+  if (!isId(userId) || !email.includes("@")) return fail("invalid_input");
+  return finish(await accountAdmin(a.client, { action: "edit_parent_email", userId, parentEmail: email }), () => ({
+    ok: true,
+    message: "Parent email updated.",
   }));
 }

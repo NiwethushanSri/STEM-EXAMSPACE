@@ -10,6 +10,10 @@ export type AccountRow = {
   email: string;
   inviteSentAt: string | null;
   indexNumber: string | null;
+  /** Students only: a parent is linked. */
+  hasParent: boolean;
+  /** Students only: the parent email typed at sign-up (editable until a parent is linked). */
+  signupParentEmail: string | null;
 };
 
 export type PendingRow = {
@@ -47,6 +51,9 @@ export function invitableRoles(viewer: Viewer["role"]): AppRole[] {
 export type RowActions = {
   toggleStatus: "suspend" | "reactivate" | null;
   resendInvite: boolean;
+  /** Approved student with no parent link: rebuild the parent invite. */
+  resendParentInvite: boolean;
+  editParentEmail: boolean;
   removeStaff: boolean;
   deleteAccount: boolean;
 };
@@ -56,14 +63,18 @@ export type RowActions = {
  * themselves, an admin cannot act on another admin. Hiding is a courtesy; the server is the guard.
  */
 export function actionsFor(viewer: Viewer, row: AccountRow): RowActions {
-  const none: RowActions = { toggleStatus: null, resendInvite: false, removeStaff: false, deleteAccount: false };
+  const none: RowActions = { toggleStatus: null, resendInvite: false, resendParentInvite: false, editParentEmail: false, removeStaff: false, deleteAccount: false };
   if (row.id === viewer.id || row.role === "owner") return none;
   if (viewer.role === "admin" && row.role === "admin") return none;
   const toggleStatus =
     row.status === "suspended" ? "reactivate" : row.status === "active" ? "suspend" : null;
+  const unlinkedApproved =
+    row.role === "student" && (row.status === "profile_incomplete" || row.status === "active") && !row.hasParent;
   return {
     toggleStatus,
     resendInvite: row.role !== "student" && row.status === "active" && row.inviteSentAt === null,
+    resendParentInvite: unlinkedApproved,
+    editParentEmail: unlinkedApproved,
     removeStaff: STAFF_ROLES.includes(row.role),
     deleteAccount: row.role === "student" || row.role === "parent",
   };
@@ -84,5 +95,15 @@ export const WARNING_TEXT: Record<string, string> = {
   email_in_use: "The parent email is already used by another account, so no parent invite was created.",
   parent_suspended: "The parent account is suspended, so the child was not linked to it.",
   link_blocked: "The parent link was blocked and was not created.",
-  stuck: "The parent invite is stuck. Ask an owner to clear the old invite (Troubleshooting).",
+  stuck: "This parent invite is stuck. Clear the old invite under Troubleshooting, then approve again.",
+};
+
+/** Number of rows per page in the all-accounts table. */
+export const PAGE_SIZE = 50;
+
+export type AccountFilters = {
+  role: AppRole | null;
+  status: AccountStatus | null;
+  q: string;
+  page: number;
 };

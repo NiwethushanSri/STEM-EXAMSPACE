@@ -243,3 +243,38 @@ export async function signInUI(page: import("@playwright/test").Page, email: str
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
 }
+
+/** Marks a pending student as approved without going through the function (so no parent is created). */
+export async function approveDirectly(id: string, index: string): Promise<void> {
+  const { error: e1 } = await svc().from("student_details").update({ index_number: index }).eq("profile_id", id);
+  const { error: e2 } = await svc().from("profiles").update({ status: "profile_incomplete" }).eq("id", id);
+  if (e1 || e2) throw new Error(`approveDirectly failed: ${e1?.message ?? e2?.message}`);
+}
+
+/** A parent invite row plus its never-claimed sign-up shell, as left by an interrupted approval. */
+export async function createStuckInvite(email: string): Promise<void> {
+  const { data: inv, error } = await svc().from("pending_invites").insert({ email, role: "parent" }).select("token").single();
+  if (error || !inv) throw new Error(`invite insert failed: ${error?.message}`);
+  const { data, error: e } = await svc().auth.admin.createUser({ email, email_confirm: true, app_metadata: { invite_token: inv.token } });
+  if (e || !data.user) throw new Error(`shell create failed: ${e?.message}`);
+  created.add(data.user.id);
+}
+
+export async function inviteCount(email: string): Promise<number> {
+  const { count } = await svc().from("pending_invites").select("*", { count: "exact", head: true }).eq("email", email.toLowerCase());
+  return count ?? 0;
+}
+
+export async function removeInvite(email: string): Promise<void> {
+  await svc().from("pending_invites").delete().eq("email", email.toLowerCase());
+}
+
+/**
+ * Compiles the staff routes once (dev server, cold start) before the first browser test, so the dev-only
+ * instant-navigation validation render cannot race the first sign-in redirect.
+ */
+export async function warmUp(): Promise<void> {
+  for (const path of ["/admin", "/admin/accounts", "/owner", "/owner/staff", "/owner/accounts"]) {
+    await fetch(`${BASE}${path}`, { redirect: "manual" }).catch(() => undefined);
+  }
+}

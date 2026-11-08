@@ -14,7 +14,9 @@ export function PendingTable({
   run,
   approve,
   reject,
+  onEditParent,
 }: {
+  onEditParent: (row: PendingRow) => void;
   rows: PendingRow[];
   busyKey: string | null;
   run: Run;
@@ -82,6 +84,14 @@ export function PendingTable({
                           className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50 disabled:opacity-60"
                         >
                           Reject
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => onEditParent(p)}
+                          className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          Edit parent email
                         </button>
                       </span>
                     </td>

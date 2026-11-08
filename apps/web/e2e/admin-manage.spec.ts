@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
+  warmUp,
   assertNoOwner,
   cleanup,
   clearLoginAttempts,
@@ -15,6 +16,7 @@ import {
 
 test.beforeAll(async () => {
   await assertNoOwner();
+  await warmUp();
 });
 test.beforeEach(async () => {
   await clearLoginAttempts();
@@ -29,6 +31,8 @@ test.afterAll(async () => {
 
 async function filterTo(page: import("@playwright/test").Page, text: string) {
   await page.getByLabel("Search accounts").fill(text);
+  await page.getByLabel("Search accounts").press("Enter");
+  await expect(page).toHaveURL(/q=/);
 }
 
 test("admin_invite_dialog_has_no_admin_option", async ({ page }) => {
@@ -58,12 +62,13 @@ test("owner_can_invite_admin", async ({ page }) => {
     await dialog.getByLabel("Last name").fill("Admin");
     await dialog.getByLabel("Role").selectOption("admin");
     await dialog.getByRole("button", { name: "Send invitation" }).click();
-    await expect(page.getByRole("status")).toContainText("Invitation");
+    await expect(page.getByRole("status")).toHaveText(`Invitation sent to ${inviteeEmail}.`);
     await expect.poll(async () => (await profileByEmail(inviteeEmail))?.role).toBe("admin");
   } finally {
     await cleanup();
   }
   await assertNoOwner();
+  await warmUp();
 });
 
 test("admin_cannot_see_actions_on_admin", async ({ page }) => {

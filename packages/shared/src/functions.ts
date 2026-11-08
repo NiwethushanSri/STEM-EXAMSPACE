@@ -104,7 +104,8 @@ export type AccountAdminAction =
   | { action: "reactivate"; userId: string }
   | { action: "remove_staff"; userId: string }
   | { action: "delete_account"; userId: string }
-  | { action: "clear_stuck_invite"; email: string };
+  | { action: "clear_stuck_invite"; email: string }
+  | { action: "edit_parent_email"; userId: string; parentEmail: string };
 
 export type ParentLinkOutcome = {
   parentLinked: boolean;
@@ -121,7 +122,9 @@ export type AccountAdminResult<A extends AccountAdminAction["action"]> = A exten
       ? { removed: true }
       : A extends "delete_account"
         ? { deleted: true }
-        : { cleared: true };
+        : A extends "edit_parent_email"
+          ? { updated: true }
+          : { cleared: true };
 
 export type ParentChildAction =
   | {

@@ -231,6 +231,17 @@ async function clearStuckInvite(svc: SupabaseClient, caller: { id: string }, raw
   return jsonResponse({ cleared: true });
 }
 
+async function editParentEmail(svc: SupabaseClient, caller: { id: string }, userId: string, rawEmail: unknown) {
+  const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+  if (!email || email.length > 320) throw new HttpError("invalid_input", 400, "parentEmail must be a valid address.");
+  const { data, error } = await svc.rpc("edit_parent_email_tx", { p_target: userId, p_actor: caller.id, p_email: email });
+  if (error) throw new Error(`edit_parent_email_tx failed: ${error.code ?? "unknown"}`);
+  if (data === "invalid_input") throw new HttpError("invalid_input", 400, "parentEmail must be a valid address.");
+  mapTxResult(data);
+  if (data !== "ok") throw new Error("unexpected edit_parent_email_tx result");
+  return jsonResponse({ updated: true });
+}
+
 Deno.serve(handle(async (req) => {
   if (req.method !== "POST") throw new HttpError("invalid_input", 405, "Use POST.");
   const caller = await requireCaller(req, ["owner", "admin"]);
@@ -261,6 +272,8 @@ Deno.serve(handle(async (req) => {
       return await deleteAccount(svc, caller, userId);
     case "remove_staff":
       return await removeStaff(svc, caller, userId);
+    case "edit_parent_email":
+      return await editParentEmail(svc, caller, userId, body.parentEmail);
     default:
       throw new HttpError("invalid_input", 400, "Unknown action.");
   }
