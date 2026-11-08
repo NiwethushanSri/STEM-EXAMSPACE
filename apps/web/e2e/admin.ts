@@ -36,6 +36,12 @@ export const testEmail = (tag: string) => `e2e-${tag}-${crypto.randomUUID().slic
 export const testPassword = () => `Pw-${crypto.randomUUID()}`;
 
 const created = new Set<string>();
+const createdOwners = new Set<string>();
+
+/** Same format as supabase/functions/_shared/links.ts buildAuthLink, as a path on the local site. */
+export function authLinkPath(hashedToken: string, type: "recovery" | "signup" | "invite"): string {
+  return `/auth/callback?token_hash=${encodeURIComponent(hashedToken)}&type=${type}`;
+}
 const createdEmails = new Set<string>();
 
 /** Owner guard: refuse to run (or to delete anything) if a real owner exists on the dev project. */
@@ -48,10 +54,12 @@ export async function assertNoOwner(): Promise<void> {
 export type TestAccount = { id: string; email: string; password: string; indexNumber?: string };
 
 export async function createAccount(opts: {
+  role?: "owner" | "admin" | "teacher" | "tutor" | "corrector";
   status?: "pending" | "profile_incomplete" | "active" | "suspended";
   indexNumber?: string;
   firstName?: string;
 }): Promise<TestAccount> {
+  if (opts.role === "owner") await assertNoOwner();
   const email = testEmail("acct");
   const password = testPassword();
   const { data, error } = await svc().auth.admin.createUser({
@@ -63,10 +71,16 @@ export async function createAccount(opts: {
   if (error || !data.user) throw new Error(`createUser failed: ${error?.message}`);
   const id = data.user.id;
   created.add(id);
-  if (opts.status && opts.status !== "pending") {
-    const { error: e } = await svc().from("profiles").update({ status: opts.status }).eq("id", id);
-    if (e) throw new Error(`status update failed: ${e.message}`);
+  if (opts.role === "owner") createdOwners.add(id);
+  const patch: Record<string, string> = {};
+  if (opts.role) patch.role = opts.role;
+  if (opts.status && opts.status !== "pending") patch.status = opts.status;
+  if (opts.role && !opts.status) patch.status = "active";
+  if (Object.keys(patch).length) {
+    const { error: e } = await svc().from("profiles").update(patch).eq("id", id);
+    if (e) throw new Error(`profile update failed: ${e.message}`);
   }
+  if (opts.role) await svc().from("student_details").delete().eq("profile_id", id);
   if (opts.indexNumber) {
     const { error: e } = await svc().from("student_details").update({ index_number: opts.indexNumber }).eq("profile_id", id);
     if (e) throw new Error(`index update failed: ${e.message}`);
@@ -108,7 +122,7 @@ export async function cleanup(): Promise<void> {
   }
   for (const id of created) {
     const { data: prof } = await svc().from("profiles").select("role").eq("id", id).maybeSingle();
-    if (prof?.role === "owner") {
+    if (prof?.role === "owner" && !createdOwners.has(id)) {
       failed.push(`${id} (owner, refusing)`);
       continue;
     }
@@ -116,6 +130,7 @@ export async function cleanup(): Promise<void> {
     if (error && !/not found/i.test(error.message)) failed.push(id);
   }
   created.clear();
+  createdOwners.clear();
   createdEmails.clear();
   if (failed.length) throw new Error(`e2e cleanup failed for: ${failed.join(", ")}`);
 }
@@ -152,6 +167,7 @@ export async function countTestUsers(): Promise<number> {
 
 /** Dev-only: forget index-login attempts so repeated runs from one IP never hit the 5-per-15-minutes limit. */
 export async function clearLoginAttempts(): Promise<void> {
+  if (!SUPABASE_URL.includes("jmhjahwfskhlgagaqlrz")) throw new Error("refusing to touch a project other than stem-examspace-dev");
   const { error } = await svc().from("login_attempts").delete().gte("attempted_at", "1970-01-01");
   if (error) throw new Error(`clearing login attempts failed: ${error.code ?? "unknown"}`);
 }

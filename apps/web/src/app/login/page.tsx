@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState, type FormEvent } from "react";
-import { bannedMessage, homeFor, indexLogin, messageFor } from "@stem/shared";
+import { homeFor, indexLogin, messageFor } from "@stem/shared";
 import { AuthLayout, inputClass, labelClass } from "@/components/AuthLayout";
 import { createClient } from "@/lib/supabase/client";
 
@@ -40,9 +40,11 @@ function LoginForm() {
           setUnconfirmedEmail(identifier);
           return fail("Confirm your email first");
         }
-        if (err.code === "user_banned" || /banned/i.test(err.message)) return fail(bannedMessage);
         if (err.status === 429 || err.code === "over_request_rate_limit") return fail(messageFor("rate_limited"));
-        if (err.code === "invalid_credentials" || err.status === 400) return fail("Email or password is incorrect.");
+        // A suspended (banned) account gets the same answer as a wrong password, so sign-in never reveals it.
+        if (err.code === "user_banned" || /banned/i.test(err.message) || err.code === "invalid_credentials" || err.status === 400) {
+          return fail("Email or password is incorrect.");
+        }
         return fail(messageFor("internal"));
       }
     } else {
@@ -70,12 +72,13 @@ function LoginForm() {
 
   async function resend() {
     if (!unconfirmedEmail) return;
-    await createClient().auth.resend({
+    const { error: err } = await createClient().auth.resend({
       type: "signup",
       email: unconfirmedEmail,
       options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
     });
-    setResent(true);
+    if (err?.status === 429) setError(messageFor("rate_limited"));
+    else setResent(true);
   }
 
   return (

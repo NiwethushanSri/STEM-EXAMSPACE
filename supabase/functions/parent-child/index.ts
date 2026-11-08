@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { type AppRole, requireCaller, serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 import { sendEmail } from "../_shared/email.ts";
+import { buildAuthLink } from "../_shared/links.ts";
 
 const MIN_MS = 600;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -105,8 +106,14 @@ async function registerChild(svc: SupabaseClient, caller: { id: string }, raw: u
   let emailSent = false;
   const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "recovery", email });
   if (lErr) console.error("generateLink failed:", lErr.status ?? "unknown", lErr.code ?? "unknown");
-  const actionLink = link?.properties?.action_link;
-  if (actionLink) emailSent = await sendEmail(email, "child_confirm", { link: actionLink, name: firstName, parent_name: parentName });
+  const hashed = link?.properties?.hashed_token;
+  if (hashed) {
+    try {
+      emailSent = await sendEmail(email, "child_confirm", { link: buildAuthLink(hashed, "recovery"), name: firstName, parent_name: parentName });
+    } catch (e) {
+      console.error("child link failed:", e instanceof Error ? e.message : "unknown"); // e.g. SITE_URL missing
+    }
+  }
 
   return jsonResponse({ registered: true, emailSent });
 }

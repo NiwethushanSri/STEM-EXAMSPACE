@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   CALLBACK,
+  authLinkPath,
   clearLoginAttempts,
   HAS_INBOX_DOMAIN,
   createUnconfirmed,
@@ -11,6 +12,7 @@ import {
   linkFor,
   profileByEmail,
   redirectTarget,
+  svc,
   testEmail,
   testPassword,
   trackEmail,
@@ -55,8 +57,8 @@ async function register(page: Page, email: string, password: string) {
 
 async function confirmAndSignIn(page: Page, email: string, password: string) {
   // Confirm via an admin-generated link (no inbox), landing on the real callback route.
-  const { tokenHash } = await linkFor("magiclink", email);
-  await page.goto(`/auth/callback?token_hash=${tokenHash}&type=email`);
+  const { tokenHash } = await linkFor("signup", email, password);
+  await page.goto(authLinkPath(tokenHash, "signup"));
   await expect(page).toHaveURL(/\/account\/pending$/);
   await expect(page.getByText("Awaiting approval").first()).toBeVisible();
   expect((await profileByEmail(email))?.status).toBe("pending");
@@ -196,20 +198,102 @@ test("reset_password_sets_new_password", async ({ page }) => {
 
 test("recovery_after_forgot_password_request", async ({ page }) => {
   const a = await createAccount({ status: "active" });
-  // Real request from the UI (the email is captured by the sandbox SMTP; the inbox is not read).
+  // The recover request is answered locally so no real email is sent.
+  const recoverBodies: Array<{ email?: string }> = [];
+  await page.route("**/auth/v1/recover*", async (route) => {
+    recoverBodies.push(route.request().postDataJSON());
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
   await page.goto("/reset-password");
   await page.getByLabel("Email").fill(a.email);
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(page.getByText("If an account exists for that address")).toBeVisible();
-  // Stand-in for the emailed link: an admin-generated recovery link for the same user.
+  expect(recoverBodies).toHaveLength(1);
+  expect(recoverBodies[0].email).toBe(a.email);
+  // Stand-in for the emailed link: a recovery link for the same user, in the format the emails use.
   const { tokenHash } = await linkFor("recovery", a.email);
-  await page.goto(`/auth/callback?token_hash=${tokenHash}&type=recovery`);
+  await page.goto(authLinkPath(tokenHash, "recovery"));
   await expect(page).toHaveURL(/\/reset-password\?mode=set/);
   const next = testPassword();
   await page.getByLabel("New password", { exact: true }).fill(next);
   await page.getByLabel("Confirm new password").fill(next);
   await page.getByRole("button", { name: "Set password" }).click();
   await expect(page).toHaveURL(/\/account\/home$/);
+});
+
+test("invited_tutor_sets_password_from_emailed_link", async ({ page }) => {
+  const tutor = await createAccount({ role: "tutor" });
+  // Same link shape invite-user emails (recovery token_hash via the callback).
+  const { tokenHash } = await linkFor("recovery", tutor.email);
+  await page.goto(authLinkPath(tokenHash, "recovery"));
+  await expect(page).toHaveURL(/\/reset-password\?mode=set/);
+  const next = testPassword();
+  await page.getByLabel("New password", { exact: true }).fill(next);
+  await page.getByLabel("Confirm new password").fill(next);
+  await page.getByRole("button", { name: "Set password" }).click();
+  await expect(page).toHaveURL(/\/tutor$/);
+  await page.context().clearCookies();
+  await signIn(page, tutor.email, next);
+  await expect(page).toHaveURL(/\/tutor$/);
+});
+
+test("parent_registered_child_sets_password_from_emailed_link", async ({ page }) => {
+  // parent-child register leaves the child exactly like this (unconfirmed, no usable password).
+  const child = await createUnconfirmed();
+  const { tokenHash } = await linkFor("recovery", child.email);
+  await page.goto(authLinkPath(tokenHash, "recovery"));
+  await expect(page).toHaveURL(/\/reset-password\?mode=set/);
+  const next = testPassword();
+  await page.getByLabel("New password", { exact: true }).fill(next);
+  await page.getByLabel("Confirm new password").fill(next);
+  await page.getByRole("button", { name: "Set password" }).click();
+  await expect(page).toHaveURL(/\/account\/pending$/);
+  expect((await profileByEmail(child.email))?.status).toBe("pending");
+  await page.context().clearCookies();
+  await signIn(page, child.email, next);
+  await expect(page).toHaveURL(/\/account\/pending$/);
+});
+
+test("admin_and_owner_can_open_admin_and_owner_only_owner", async ({ page }) => {
+  const admin = await createAccount({ role: "admin" });
+  await signIn(page, admin.email, admin.password);
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.goto("/admin/accounts");
+  await expect(page).toHaveURL(/\/admin\/accounts$/);
+  await page.goto("/owner");
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.context().clearCookies();
+
+  const owner = await createAccount({ role: "owner" });
+  await signIn(page, owner.email, owner.password);
+  await expect(page).toHaveURL(/\/owner$/);
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.goto("/owner");
+  await expect(page).toHaveURL(/\/owner$/);
+});
+
+test("student_redirected_from_every_staff_area", async ({ page }) => {
+  const a = await createAccount({ status: "active" });
+  await signIn(page, a.email, a.password);
+  await expect(page).toHaveURL(/\/account\/home$/);
+  for (const area of ["/owner", "/teacher", "/tutor", "/corrector", "/admin"]) {
+    await page.goto(area);
+    await expect(page, area).toHaveURL(/\/account\/home$/);
+  }
+});
+
+test("signed_out_account_page_goes_to_login", async ({ page }) => {
+  await page.goto("/account/home");
+  await expect(page).toHaveURL(/\/login/);
+});
+
+test("suspended_staff_cannot_reach_admin", async ({ page }) => {
+  const admin = await createAccount({ role: "admin", status: "suspended" });
+  await signIn(page, admin.email, admin.password);
+  await expect(page).toHaveURL(/\/account\/suspended$/);
+  await page.goto("/admin");
+  await expect(page).toHaveURL(/\/account\/suspended$/);
 });
 
 test("reset_request_is_neutral", async ({ page }) => {
@@ -224,4 +308,12 @@ test("suspended_student_sees_suspended_screen", async ({ page }) => {
   await signIn(page, a.email, a.password);
   await expect(page).toHaveURL(/\/account\/suspended$/);
   await expect(page.getByText("Your account is suspended, contact the institution")).toBeVisible();
+});
+
+test("banned_account_gets_the_wrong_password_message", async ({ page }) => {
+  const a = await createAccount({ role: "teacher" });
+  const { error } = await svc().auth.admin.updateUserById(a.id, { ban_duration: "876000h" });
+  expect(error).toBeNull();
+  await signIn(page, a.email, a.password);
+  await expect(page.getByText("Email or password is incorrect.")).toBeVisible();
 });

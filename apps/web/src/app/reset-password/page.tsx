@@ -13,15 +13,17 @@ const buttonClass =
 function RequestForm() {
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [limited, setLimited] = useState(false);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const email = String(new FormData(e.currentTarget).get("email") ?? "").trim();
     setBusy(true);
     // The answer never depends on whether the address has an account.
-    await createClient().auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/auth/callback` });
+    const { error } = await createClient().auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/auth/callback` });
     setBusy(false);
-    setSent(true);
+    if (error?.status === 429) setLimited(true);
+    else setSent(true);
   }
 
   if (sent) {
@@ -38,6 +40,7 @@ function RequestForm() {
         <label htmlFor="email" className={labelClass}>Email</label>
         <input id="email" name="email" type="email" required autoComplete="email" className={inputClass} />
       </div>
+      {limited && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{messageFor("rate_limited")}</p>}
       <button type="submit" disabled={busy} className={buttonClass}>
         {busy ? "Sending..." : "Send reset link"}
       </button>

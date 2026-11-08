@@ -55,7 +55,9 @@ export async function sendEmail(
     if (template === "invite" || template === "child_confirm") {
       let ok = false;
       try {
-        ok = new URL(data.link ?? "").protocol === "https:";
+        const u = new URL(data.link ?? "");
+        // https everywhere; plain http only for a local dev site (SITE_URL=http://localhost:...).
+        ok = u.protocol === "https:" || (u.protocol === "http:" && (u.hostname === "localhost" || u.hostname === "127.0.0.1"));
       } catch { /* invalid URL */ }
       if (!ok) {
         console.error(`[email] rejected missing or non-https link template=${template}`);

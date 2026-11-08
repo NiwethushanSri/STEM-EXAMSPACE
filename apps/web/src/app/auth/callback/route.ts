@@ -12,26 +12,36 @@ const OTP_TYPES = ["signup", "recovery", "invite", "email", "magiclink", "email_
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
-  const fail = () => NextResponse.redirect(new URL("/login?error=link", request.url));
   const supabase = await createClient();
+  // Any failure ends with no session left behind.
+  const fail = async () => {
+    await supabase.auth.signOut();
+    return NextResponse.redirect(new URL("/login?error=link", request.url));
+  };
 
   const code = searchParams.get("code");
   const tokenHash = searchParams.get("token_hash");
   const type = searchParams.get("type");
-  let setPassword = type === "recovery" || type === "invite";
+  let setPassword = false;
 
   if (tokenHash && type && (OTP_TYPES as readonly string[]).includes(type)) {
+    // verifyOtp checks the token against this type, so the type is only trusted once verification succeeded.
     const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: type as EmailOtpType });
     if (error) return fail();
+    setPassword = type === "recovery" || type === "invite";
   } else if (code) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) return fail();
-    // A PKCE link carries no type; the sign-in method of the session tells recovery and invite apart.
+    // A PKCE link carries no trustworthy type; only the verified session says how the user signed in.
+    // If that cannot be read, fail closed: send the user to set a password.
     const { data: claims } = await supabase.auth.getClaims();
-    const methods = ((claims?.claims?.amr ?? []) as Array<string | { method?: string }>).map((m) =>
-      typeof m === "string" ? m : (m.method ?? ""),
-    );
-    if (methods.includes("recovery") || methods.includes("invite")) setPassword = true;
+    const amr = claims?.claims?.amr;
+    if (!Array.isArray(amr)) {
+      setPassword = true;
+    } else {
+      const methods = (amr as Array<string | { method?: string }>).map((m) => (typeof m === "string" ? m : (m.method ?? "")));
+      setPassword = methods.includes("recovery") || methods.includes("invite");
+    }
   } else {
     return fail();
   }

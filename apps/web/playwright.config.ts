@@ -14,7 +14,7 @@ export default defineConfig({
   webServer: {
     command: `npx next dev --webpack -p ${PORT}`,
     url: `http://localhost:${PORT}/login`,
-    reuseExistingServer: true,
+    reuseExistingServer: false,
     timeout: 180_000,
     stdout: "ignore",
     stderr: "pipe",

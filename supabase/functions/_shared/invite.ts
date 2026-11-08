@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { sendEmail } from "./email.ts";
+import { buildAuthLink } from "./links.ts";
 import type { AppRole } from "./auth.ts";
 
 export type ClaimResult = "claimed" | "already" | "refused" | "error";
@@ -140,9 +141,14 @@ export async function clearInviteToken(svc: SupabaseClient, userId: string): Pro
  */
 export async function sendInviteEmail(svc: SupabaseClient, userId: string, email: string): Promise<boolean> {
   const { data: link } = await svc.auth.admin.generateLink({ type: "recovery", email });
-  const actionLink = link?.properties?.action_link;
-  if (!actionLink) return false;
-  const sent = await sendEmail(email, "invite", { link: actionLink });
+  const hashed = link?.properties?.hashed_token;
+  if (!hashed) return false;
+  let sent = false;
+  try {
+    sent = await sendEmail(email, "invite", { link: buildAuthLink(hashed, "recovery") });
+  } catch (e) {
+    console.error("invite link failed:", e instanceof Error ? e.message : "unknown"); // e.g. SITE_URL missing
+  }
   if (sent) {
     const { error } = await svc.from("profiles")
       .update({ invite_sent_at: new Date().toISOString() }).eq("id", userId);
