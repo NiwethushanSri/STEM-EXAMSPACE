@@ -13,3 +13,4 @@ apps/web/e2e/
 apps/web/test-results/
 apps/web/playwright-report/
 **/*.log
+**/*.local.md

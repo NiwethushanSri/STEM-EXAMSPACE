@@ -47,3 +47,6 @@ next-env.d.ts
 # playwright
 apps/web/test-results/
 apps/web/playwright-report/
+
+# local demo credentials
+*.local.md
