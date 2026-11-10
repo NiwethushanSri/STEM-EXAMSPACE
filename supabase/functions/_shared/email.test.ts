@@ -93,3 +93,12 @@ Deno.test("templates: auth link emails state the 1 hour validity and the reset p
     return Promise.resolve();
   });
 });
+
+Deno.test("templates: confirm_signup asks the reader to choose a password", async () => {
+  await withEnv({ SITE_URL: "https://stem.example/" }, () => {
+    const { subject, html } = _renderForTest("confirm_signup", { link: "https://stem.example/auth/callback?a=1", name: "Bo" });
+    assertEquals(subject, "Confirm your Stem Examspace registration");
+    assertStringIncludes(html, "Use this link to confirm your email and choose your password.");
+    return Promise.resolve();
+  });
+});

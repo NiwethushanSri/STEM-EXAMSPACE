@@ -7,17 +7,24 @@ import { email as validEmail, str, validPastDate } from "../_shared/validate.ts"
 const bad = (m: string) => new HttpError("invalid_input", 400, m);
 const internal = () => new HttpError("internal", 500, "Something went wrong. Please try again.");
 
-/** The one answer for a new, replaced or already registered address, so the form never reveals which exist. */
+/** The one answer for a new, replaced, protected, already registered or undeliverable address, so the form never reveals which exist. */
 const neutral = () => jsonResponse({ ok: true });
 
+/** Every answer after validation takes at least this long, so timing does not reveal what happened. */
+const MIN_MS = 800;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Public student registration (section 6.1). The web form calls this instead of auth.signUp so that a
- * pre-registered, still unconfirmed attempt for the same address is replaced rather than kept: whoever
- * registers an address first can no longer keep its password after the real owner registers and confirms.
+ * Public student registration (section 6.1). No password is taken here: the account is created without one and
+ * the emailed link (a recovery link) confirms the address and lets the inbox owner choose the password. Whoever
+ * registers an address therefore never holds a usable password for it. Unconfirmed sign-ups older than 1 hour
+ * are replaced by a newer attempt; younger ones, confirmed accounts and any other kind of account are untouched.
+ * Every answer after validation is the same 200 { ok: true } after at least 800 ms.
  * Deploy with --no-verify-jwt (the caller has no session).
  */
 Deno.serve(handle(async (req) => {
   if (req.method !== "POST") throw new HttpError("invalid_input", 405, "Use POST.");
+  const started = performance.now();
 
   let body: Record<string, unknown>;
   try {
@@ -34,78 +41,106 @@ Deno.serve(handle(async (req) => {
   const parentName = str(body.parentName, 1, 120);
   const email = validEmail(body.email);
   const parentEmail = validEmail(body.parentEmail);
-  const password = body.password;
   if (!firstName || !lastName || !school || !parentName) throw bad("Fill in every field.");
   if (!email) throw bad("Enter a valid email address.");
   if (!parentEmail) throw bad("Enter a valid parent email address.");
-  if (typeof password !== "string" || password.length < 8 || password.length > 200) {
-    throw bad("Choose a password of 8 to 200 characters.");
-  }
   if (!validPastDate(body.dateOfBirth)) throw bad("Enter a valid date of birth.");
   const dob = body.dateOfBirth;
 
   const svc = serviceClient();
   const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
-  const { data: allowed, error: beginErr } = await svc.rpc("login_attempt_begin", { p_ip_key: `reg:${ip}`, p_idx_key: `regx:${ip}` });
+  // 30 per IP and 3 per email in 15 minutes, both checked before anything about the address is looked up.
+  // 429 depends only on the caller's own recent attempts, so it reveals nothing about the address.
+  const { data: allowed, error: beginErr } = await svc.rpc("login_attempt_begin_n", {
+    p_key_a: `reg:${ip}`,
+    p_key_b: `rege:${email.toLowerCase()}`,
+    p_limit_a: 30,
+    p_limit_b: 3,
+  });
   if (beginErr) {
-    console.error("login_attempt_begin failed:", beginErr.code ?? "unknown");
+    console.error("login_attempt_begin_n failed:", beginErr.code ?? "unknown");
     throw internal();
   }
   if (allowed !== true) throw new HttpError("rate_limited", 429, "Too many attempts. Try again later.");
 
-  // An unconfirmed self sign-up for this address is replaced; a confirmed or any other kind of account is untouched.
-  const { data: state, error: rErr } = await svc.rpc("replace_unconfirmed_signup", { p_email: email });
+  const pad = async () => {
+    const left = MIN_MS - (performance.now() - started);
+    if (left > 0) await sleep(left);
+  };
+  try {
+    await createSignup(svc, { firstName, lastName, school, parentName, email, parentEmail, dob: String(dob) });
+  } catch (e) {
+    await pad();
+    throw e;
+  }
+  await pad();
+  return neutral();
+}));
+
+type Input = {
+  firstName: string;
+  lastName: string;
+  school: string;
+  parentName: string;
+  email: string;
+  parentEmail: string;
+  dob: string;
+};
+
+/** Creates the sign-up and emails the link. Returns normally for every outcome the caller must not tell apart. */
+async function createSignup(svc: ReturnType<typeof serviceClient>, i: Input): Promise<void> {
+  // An unconfirmed self sign-up older than 1 hour is replaced; anything else is untouched.
+  const { data: state, error: rErr } = await svc.rpc("replace_unconfirmed_signup", { p_email: i.email });
   if (rErr) {
     console.error("replace_unconfirmed_signup failed:", rErr.code ?? "unknown");
     throw internal();
   }
-  if (state === "confirmed" || state === "protected") return neutral();
+  if (state === "confirmed" || state === "protected") return;
   if (state !== "none" && state !== "replaced") throw internal();
 
+  // No password: the account cannot be signed into until the emailed link is used to choose one.
   const { data: created, error: cErr } = await svc.auth.admin.createUser({
-    email,
-    password,
+    email: i.email,
     email_confirm: false,
     user_metadata: {
-      first_name: firstName,
-      last_name: lastName,
-      date_of_birth: dob,
-      school,
-      parent_name: parentName,
-      parent_email: parentEmail,
+      first_name: i.firstName,
+      last_name: i.lastName,
+      date_of_birth: i.dob,
+      school: i.school,
+      parent_name: i.parentName,
+      parent_email: i.parentEmail,
     },
   });
   if (cErr || !created.user) {
     // A concurrent registration for the same address won: same neutral answer.
-    if (cErr && /already|registered|exists/i.test(cErr.message)) return neutral();
+    if (cErr && /already|registered|exists/i.test(cErr.message)) return;
     console.error("createUser failed:", cErr?.status ?? "unknown", cErr?.code ?? "unknown");
     throw internal();
   }
   const userId = created.user.id;
 
-  // Confirmation link (verified server side by /auth/callback). If it cannot be made, remove the account
-  // we just created (still unconfirmed, never used) so the person can simply register again.
+  // If the link cannot be made or sent, remove the account we just created (still unconfirmed, never usable)
+  // so the person can simply register again. The answer stays the same either way.
   const undo = async () => {
     const { error } = await svc.auth.admin.deleteUser(userId);
     if (error) console.error("signup cleanup failed for", userId);
   };
-  const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "signup", email, password });
+  // A recovery link: verifying it confirms the address and signs the person in to choose their password.
+  const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "recovery", email: i.email });
   const hashed = link?.properties?.hashed_token;
   if (lErr || !hashed) {
     console.error("generateLink failed:", lErr?.status ?? "unknown", lErr?.code ?? "unknown");
     await undo();
-    throw internal();
+    return;
   }
   let sent = false;
   try {
-    sent = await sendEmail(email, "confirm_signup", { link: buildAuthLink(hashed, "signup"), name: firstName });
+    sent = await sendEmail(i.email, "confirm_signup", { link: buildAuthLink(hashed, "recovery"), name: i.firstName });
   } catch (e) {
     console.error("confirm link failed:", e instanceof Error ? e.message : "unknown"); // e.g. SITE_URL missing
   }
   if (!sent) {
-    // Nothing was delivered, so nobody can confirm this account: do not leave it squatting on the address.
+    console.error("confirm email not sent");
     await undo();
-    throw internal();
   }
-  return neutral();
-}));
+}

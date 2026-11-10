@@ -78,9 +78,9 @@ In Part 1 only these permissions are live: owner/admin manage accounts and appro
 
 ### 6.1 Student self sign-up (mobile app, and web fallback)
 
-Form: first name, last name, email, password (min 8), date of birth, school, parent name, parent email, agree to terms.
+Form: first name, last name, email (no password), date of birth, school, parent name, parent email, agree to terms.
 
-1. The form calls the public `register-student` Edge Function (not `auth.signUp`). It validates the fields, rate limits by IP, and creates the unconfirmed Auth user with the chosen password, then emails a confirmation link (valid 1 hour). If an earlier, still unconfirmed self sign-up exists for the same email it is deleted and replaced, so whoever registers an address first cannot keep its password once the real owner registers and confirms. An address that is already confirmed (or belongs to any other kind of account) gets the same neutral answer and nothing changes. The project setting "Allow new users to sign up" is turned OFF in the Supabase dashboard so `auth.signUp` cannot bypass the function.
+1. The form calls the public `register-student` Edge Function (not `auth.signUp`). It validates the fields, rate limits (30 per IP and 3 per email per 15 minutes, before any lookup), and creates the unconfirmed Auth user WITHOUT a password, then emails a recovery link (valid 1 hour) that confirms the address and sends the person to choose their password, so whoever submits an address never holds a usable password for it. If an earlier, still unconfirmed self sign-up exists for the same email and is over 1 hour old it is deleted and replaced; a younger one is left alone. An address that is already confirmed (or belongs to any other kind of account), and a failed email send (the new account is removed), all get the same neutral answer: 200 `{ ok: true }` after at least 800 ms, so the form never reveals which addresses exist. The project setting "Allow new users to sign up" is turned OFF in the Supabase dashboard so `auth.signUp` cannot bypass the function.
 2. A trigger on `auth.users` insert creates `profiles` (role `student`, status `unconfirmed`) and `student_details`. The trigger **ignores any role or status sent in sign-up metadata**; only the listed form fields are copied.
 3. When the email is confirmed (trigger on `auth.users` update when `email_confirmed_at` becomes set), status becomes `pending` and the registration appears in the admin approval list.
 4. Sign-ups still `unconfirmed` after 7 days are deleted by a daily scheduled job (pg_cron), with the same audit row as a rejection but action `registration_expired`.
@@ -217,7 +217,7 @@ Staff use the web app (`apps/web`) in a normal browser on their computers. There
 
 ## 10. Error handling
 
-- Duplicate email at sign-up: the same neutral "check your email" screen as a new sign-up (privacy: the form never reveals which addresses have accounts). Someone who owns the address and already has an account can use Forgot password.
+- Duplicate email at sign-up (and a failed confirmation email): the same neutral "check your email to confirm your address and choose your password" screen as a new sign-up, with the same status, body and minimum response time (privacy: the form never reveals which addresses have accounts). Someone who owns the address and already has an account can use Forgot password.
 - Approve/reject on a student whose status changed meanwhile: function returns a conflict; UI refreshes the list and shows "This registration was already handled".
 - Parent email belongs to a staff account: approval fails with that message; admin edits the parent email first.
 - Email send failure: action still succeeds, record flagged, Resend button.

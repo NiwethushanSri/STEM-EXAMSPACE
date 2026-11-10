@@ -48,6 +48,20 @@ function RequestForm() {
   );
 }
 
+/** Policy errors get a clear message; only genuine failures fall back to the generic one. */
+function passwordErrorMessage(err: { code?: string; message?: string } | null): string {
+  const code = err?.code ?? "";
+  const text = (err?.message ?? "").toLowerCase();
+  if (code === "weak_password" || /pwned|breach|leaked|too common|easy to guess/.test(text)) {
+    return "Choose a stronger password — this one is too common or has appeared in a data breach.";
+  }
+  if (code === "same_password") return "Choose a password you have not used before.";
+  if (/at least|too short|minimum/.test(text)) return "Use at least 8 characters.";
+  if (/72|too long|at most|maximum/.test(text)) return "Use 72 characters or fewer.";
+  if (code === "validation_failed" && /password/.test(text)) return "Choose a password of 8 to 72 characters.";
+  return messageFor("internal");
+}
+
 function SetForm() {
   const router = useRouter();
   const [ready, setReady] = useState<"loading" | "yes" | "no">("loading");
@@ -64,6 +78,14 @@ function SetForm() {
     e.preventDefault();
     const form = new FormData(e.currentTarget);
     const password = String(form.get("password") ?? "");
+    if (password.length < 8) {
+      setError("Use at least 8 characters.");
+      return;
+    }
+    if (password.length > 72) {
+      setError("Use 72 characters or fewer.");
+      return;
+    }
     if (password !== String(form.get("confirm") ?? "")) {
       setError("The two passwords do not match.");
       return;
@@ -74,13 +96,7 @@ function SetForm() {
     const { data, error: err } = await supabase.auth.updateUser({ password });
     if (err || !data.user) {
       setBusy(false);
-      setError(
-        err?.code === "weak_password"
-          ? "Choose a stronger password."
-          : err?.code === "same_password"
-            ? "Choose a password you have not used before."
-            : messageFor("internal"),
-      );
+      setError(passwordErrorMessage(err));
       return;
     }
     // A new password ends every other session (an old password or a stolen session must not outlive it).
@@ -105,7 +121,7 @@ function SetForm() {
     <form onSubmit={submit} className="space-y-5">
       <div>
         <label htmlFor="password" className={labelClass}>New password</label>
-        <input id="password" name="password" type="password" minLength={8} required autoComplete="new-password" placeholder="At least 8 characters" className={inputClass} />
+        <input id="password" name="password" type="password" minLength={8} required autoComplete="new-password" placeholder="8 to 72 characters" className={inputClass} />
       </div>
       <div>
         <label htmlFor="confirm" className={labelClass}>Confirm new password</label>

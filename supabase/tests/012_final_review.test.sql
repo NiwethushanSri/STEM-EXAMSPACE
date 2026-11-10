@@ -84,6 +84,7 @@ insert into u values ('unc', tests.create_user('student', 'unconfirmed')), ('kid
   ('tunc', tests.create_user('tutor', 'unconfirmed'));
 update public.student_details set requested_by_parent = (select id from u where name = 'par') where profile_id = (select id from u where name = 'kid');
 update auth.users set email_confirmed_at = now() where id = (select id from u where name = 'act');
+update auth.users set created_at = now() - interval '2 hours' where id in (select id from u where name in ('unc', 'kid', 'tunc'));
 select is(public.replace_unconfirmed_signup('nobody@example.test'), 'none', 'unknown address: none');
 select is(public.replace_unconfirmed_signup((select email from auth.users where id = (select id from u where name = 'act'))), 'confirmed', 'confirmed address: nothing changes');
 select is(public.replace_unconfirmed_signup((select email from auth.users where id = (select id from u where name = 'kid'))), 'protected', 'child registered by a parent is protected');

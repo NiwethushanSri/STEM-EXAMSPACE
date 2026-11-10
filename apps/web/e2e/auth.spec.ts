@@ -8,6 +8,7 @@ import {
   cleanup,
   countTestUsers,
   createAccount,
+  createPendingStudent,
   linkFor,
   profileByEmail,
   redirectTarget,
@@ -40,7 +41,7 @@ async function signIn(page: Page, identifier: string, password: string) {
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
-async function register(page: Page, email: string, password: string) {
+async function register(page: Page, email: string) {
   await page.goto("/register");
   await page.getByLabel("First name").fill("Reg");
   await page.getByLabel("Last name").fill("Istrant");
@@ -49,15 +50,22 @@ async function register(page: Page, email: string, password: string) {
   await page.getByLabel("Parent name").fill("Parent Istrant");
   await page.getByLabel("Parent email").fill(testEmail("parent"));
   await page.getByLabel("Your email").fill(email);
-  await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create account" }).click();
 }
 
+async function setPasswordFromLink(page: Page, tokenHash: string, password: string) {
+  await page.goto(authLinkPath(tokenHash, "recovery"));
+  await expect(page).toHaveURL(/\/reset-password\?mode=set/);
+  await page.getByLabel("New password", { exact: true }).fill(password);
+  await page.getByLabel("Confirm new password").fill(password);
+  await page.getByRole("button", { name: "Set password" }).click();
+}
+
+// A student confirms through the emailed recovery link (here generated directly, no inbox) and chooses the password.
 async function confirmAndSignIn(page: Page, email: string, password: string) {
-  // Confirm via an admin-generated link (no inbox), landing on the real callback route.
-  const { tokenHash } = await linkFor("signup", email, password);
-  await page.goto(authLinkPath(tokenHash, "signup"));
+  const { tokenHash } = await linkFor("recovery", email);
+  await setPasswordFromLink(page, tokenHash, password);
   await expect(page).toHaveURL(/\/account\/pending$/);
   await expect(page.getByText("Awaiting approval").first()).toBeVisible();
   expect((await profileByEmail(email))?.status).toBe("pending");
@@ -80,16 +88,23 @@ test("register_then_confirm_shows_pending", async ({ page }) => {
   const email = testEmail("reg");
   const password = testPassword();
   trackEmail(email);
-  await register(page, email, password);
-  await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
-  expect((await profileByEmail(email))?.status).toBe("unconfirmed");
+  await register(page, email);
+  await expect(page.getByText("Check your email to confirm your address and choose your password.")).toBeVisible();
+  expect((await profileByEmail(email))?.status).toBe("unconfirmed"); // needs a working email provider
   await confirmAndSignIn(page, email, password);
 });
 
 test("confirm_link_shows_pending", async ({ page }) => {
   const a = await createUnconfirmed();
   expect((await profileByEmail(a.email))?.status).toBe("unconfirmed");
-  await confirmAndSignIn(page, a.email, a.password);
+  await confirmAndSignIn(page, a.email, testPassword());
+});
+
+test("register_form_has_no_password_field", async ({ page }) => {
+  await page.goto("/register");
+  await expect(page.getByLabel("Your email")).toBeVisible();
+  await expect(page.getByLabel("Password")).toHaveCount(0);
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
 });
 
 test("register_form_sends_signup_metadata", async ({ page }) => {
@@ -111,8 +126,8 @@ test("register_form_sends_signup_metadata", async ({ page }) => {
     });
   });
   const email = testEmail("wiring");
-  await register(page, email, testPassword());
-  await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
+  await register(page, email);
+  await expect(page.getByText("Check your email to confirm your address and choose your password.")).toBeVisible();
   expect(signUpCalls).toBe(0); // the form no longer uses auth.signUp
   expect(body).toMatchObject({
     firstName: "Reg",
@@ -122,31 +137,68 @@ test("register_form_sends_signup_metadata", async ({ page }) => {
     school: "E2E School",
     parentName: "Parent Istrant",
   });
-  expect(body.password).toBeTruthy();
+  expect(body).not.toHaveProperty("password");
   expect(body).not.toHaveProperty("role");
   expect(body).not.toHaveProperty("status");
 });
 
 test("duplicate_email_shows_check_email_screen", async ({ page }) => {
   const existing = await createAccount({ status: "active" });
-  await register(page, existing.email, testPassword());
+  await register(page, existing.email);
   // Same neutral screen: never reveals that the address is taken.
-  await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
+  await expect(page.getByText("Check your email to confirm your address and choose your password.")).toBeVisible();
   expect((await profileByEmail(existing.email))?.status).toBe("active");
 });
 
-test("register_replaces_an_earlier_unconfirmed_attempt", async ({ page }) => {
-  const email = testEmail("squat");
-  trackEmail(email);
-  await register(page, email, "Attacker-Pass-A1");
-  await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
-  const before = await profileByEmail(email);
-  await register(page, email, "Victim-Pass-B2");
-  await expect(page.getByText("Check your email to confirm your address")).toBeVisible();
-  const after = await profileByEmail(email);
-  expect(after?.id).not.toBe(before?.id);
-  // The victim confirms and signs in with their own password only.
-  await confirmAndSignIn(page, email, "Victim-Pass-B2");
+test("register_does_not_replace_a_young_unconfirmed_signup", async ({ page }) => {
+  // A sign-up under an hour old keeps its link: a second submitter cannot knock it out.
+  const victim = await createUnconfirmed();
+  await register(page, victim.email);
+  await expect(page.getByText("Check your email to confirm your address and choose your password.")).toBeVisible();
+  expect((await profileByEmail(victim.email))?.id).toBe(victim.id);
+});
+
+test("pending_screen_shows_the_parent_email_on_record", async ({ page }) => {
+  const parentEmail = testEmail("parent");
+  const a = await createPendingStudent({ parentEmail });
+  await signIn(page, a.email, a.password);
+  await expect(page).toHaveURL(/\/account\/pending$/);
+  await expect(page.getByText(`Parent email on record: ${parentEmail}`)).toBeVisible();
+  await expect(page.getByText("Not right? Contact the institution.")).toBeVisible();
+});
+
+test("set_password_shows_a_clear_message_for_weak_passwords", async ({ page }) => {
+  const a = await createAccount({ status: "active" });
+  const { tokenHash } = await linkFor("recovery", a.email);
+  await page.goto(authLinkPath(tokenHash, "recovery"));
+  await expect(page).toHaveURL(/\/reset-password\?mode=set/);
+  // The answer GoTrue gives when the project rejects weak or leaked passwords (simulated: the setting may be off).
+  await page.route("**/auth/v1/user", async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    await route.fulfill({
+      status: 422,
+      contentType: "application/json",
+      headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify({
+        code: 422,
+        error_code: "weak_password",
+        msg: "Password is known to be weak and easy to guess, please choose a different one.",
+        weak_password: { reasons: ["pwned"] },
+      }),
+    });
+  });
+  await page.getByLabel("New password", { exact: true }).fill("password1234");
+  await page.getByLabel("Confirm new password").fill("password1234");
+  await page.getByRole("button", { name: "Set password" }).click();
+  await expect(page.locator("p[role=alert]")).toHaveText(
+    "Choose a stronger password \u2014 this one is too common or has appeared in a data breach.",
+  );
+  // Over 72 characters is refused with clear text before anything is sent.
+  const long = "a1".repeat(40);
+  await page.getByLabel("New password", { exact: true }).fill(long);
+  await page.getByLabel("Confirm new password").fill(long);
+  await page.getByRole("button", { name: "Set password" }).click();
+  await expect(page.locator("p[role=alert]")).toHaveText("Use 72 characters or fewer.");
 });
 
 test("student_cannot_open_admin", async ({ page }) => {

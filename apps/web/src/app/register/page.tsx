@@ -23,7 +23,6 @@ export default function RegisterPage() {
       firstName: get("first"),
       lastName: get("last"),
       email: get("email"),
-      password: String(form.get("password") ?? ""),
       dateOfBirth: get("dob"),
       school: get("school"),
       parentName: get("pname"),
@@ -45,7 +44,7 @@ export default function RegisterPage() {
         footer={<Link href="/login" className="font-semibold text-blue-700 hover:underline">Back to sign in</Link>}
       >
         <div className="rounded-xl bg-green-50 p-5 text-sm text-green-900">
-          <p className="font-semibold">Check your email to confirm your address</p>
+          <p className="font-semibold">Check your email to confirm your address and choose your password.</p>
           <p className="mt-1">
             Open the link we sent you. After that an admin will check your details and approve your
             account, and you will get an email with your index number.
@@ -108,23 +107,10 @@ export default function RegisterPage() {
         </fieldset>
 
         <fieldset className="space-y-4">
-          <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-700">Sign-in details</legend>
+          <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-700">Your email</legend>
           <div>
             <label htmlFor="email" className={labelClass}>Your email</label>
             <input id="email" name="email" type="email" required autoComplete="email" className={inputClass} />
-          </div>
-          <div>
-            <label htmlFor="password" className={labelClass}>Password</label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              minLength={8}
-              required
-              autoComplete="new-password"
-              placeholder="At least 8 characters"
-              className={inputClass}
-            />
           </div>
         </fieldset>
 

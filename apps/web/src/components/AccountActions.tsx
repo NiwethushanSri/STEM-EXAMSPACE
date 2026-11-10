@@ -38,10 +38,10 @@ export function ResendConfirmationButton() {
           const supabase = createClient();
           const { data } = await supabase.auth.getUser();
           if (data.user?.email) {
-            const { error } = await supabase.auth.resend({
-              type: "signup",
-              email: data.user.email,
-              options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+            // A recovery link (not a plain sign-up one): it confirms the address and lets the person choose
+            // the password, which sign-ups made without a password still need.
+            const { error } = await supabase.auth.resetPasswordForEmail(data.user.email, {
+              redirectTo: `${window.location.origin}/auth/callback`,
             });
             if (error?.status === 429) {
               setState("limited");

@@ -1,11 +1,15 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { anon, createTestUser, deleteUserIds, deleteUsers, env, service, type TestUser } from "../_shared/test_helpers.ts";
+import { anon, createTestUser, deleteUserIds, deleteUsers, env, service } from "../_shared/test_helpers.ts";
 
 const url = () => `${env("SUPABASE_URL")}/functions/v1/register-student`;
 const svc = service();
 
+// The deployed function may run with EMAIL_PROVIDER unset (fails closed), in which case a brand-new
+// registration is created and then removed again. These tests therefore never rely on a sent email: where a
+// sign-up must exist they create it the way the function does (no password), and links come from generateLink.
+
 async function clearLimits() {
-  const { error } = await svc.from("login_attempts").delete().or("key.like.reg:%,key.like.regx:%");
+  const { error } = await svc.from("login_attempts").delete().or("key.like.reg:%,key.like.regx:%,key.like.rege:%");
   if (error) throw new Error(`limit cleanup failed: ${error.code}`);
 }
 
@@ -14,7 +18,6 @@ function body(email: string, over: Record<string, unknown> = {}) {
     firstName: "Nimal",
     lastName: "Perera",
     email,
-    password: "Password-A-1234",
     dateOfBirth: "2012-03-04",
     school: "Royal College",
     parentName: "Kamal Perera",
@@ -23,22 +26,54 @@ function body(email: string, over: Record<string, unknown> = {}) {
   };
 }
 
-async function register(b: unknown): Promise<{ status: number; json: any }> {
+async function register(b: unknown): Promise<{ status: number; json: any; ms: number }> {
   // No Authorization header at all: the function is public.
+  const t = performance.now();
   const res = await fetch(url(), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
-  return { status: res.status, json: await res.json().catch(() => null) };
+  const json = await res.json().catch(() => null);
+  return { status: res.status, json, ms: performance.now() - t };
 }
 
-const uid = (email: string) => `t17-${crypto.randomUUID()}-${email}@example.test`;
+const uid = (tag: string) => `t17-${crypto.randomUUID()}-${tag}@example.test`;
 
 async function userByEmail(email: string) {
-  const { data } = await svc.from("profiles").select("id, status, role, first_name").eq("email", email).maybeSingle();
+  const { data } = await svc.from("profiles").select("id, status, role, first_name").eq("email", email.toLowerCase()).maybeSingle();
   return data as { id: string; status: string; role: string; first_name: string } | null;
 }
 
 async function signIn(email: string, password: string): Promise<boolean> {
   const { data, error } = await anon().auth.signInWithPassword({ email, password });
   return !error && !!data.session;
+}
+
+/** A self sign-up exactly as the function leaves it: unconfirmed, NO password. */
+async function createSignup(email: string, parentEmail: string, first = "Victim") {
+  const { data, error } = await svc.auth.admin.createUser({
+    email,
+    email_confirm: false,
+    user_metadata: {
+      first_name: first,
+      last_name: "Student",
+      date_of_birth: "2012-03-04",
+      school: "Royal College",
+      parent_name: "Parent",
+      parent_email: parentEmail,
+    },
+  });
+  if (error || !data.user) throw new Error(`createUser failed: ${error?.message}`);
+  return data.user.id;
+}
+
+/** Test-only: auth.users.created_at cannot be set through the API, so run one statement through the CLI. */
+async function backdate(id: string, interval = "2 hours") {
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("bad id");
+  const sql = `update auth.users set created_at = now() - interval '${interval}' where id = '${id}'`;
+  const args = ["npx", "supabase", "db", "query", "--remote", "--yes", sql];
+  const cmd = Deno.build.os === "windows"
+    ? new Deno.Command("cmd", { args: ["/c", ...args], stdout: "null", stderr: "null" })
+    : new Deno.Command(args[0], { args: args.slice(1), stdout: "null", stderr: "null" });
+  const out = await cmd.output();
+  if (!out.success) throw new Error("backdate failed");
 }
 
 async function withCleanup(fn: (track: (email: string) => string) => Promise<void>) {
@@ -57,85 +92,136 @@ async function withCleanup(fn: (track: (email: string) => string) => Promise<voi
   }
 }
 
-Deno.test("register-student: squatter's password and parent email do not survive the real owner registering", async () => {
+Deno.test("register-student: no password is accepted or stored (sign-in impossible before the link)", async () => {
   await withCleanup(async (track) => {
-    const victim = track(uid("victim"));
-    const attackerParent = `attacker-parent-${crypto.randomUUID()}@example.test`;
-    const victimParent = `victim-parent-${crypto.randomUUID()}@example.test`;
+    const email = track(uid("nopw"));
+    // A password in the body is ignored: it is neither required nor used.
+    const r = await register(body(email, { password: "Sent-By-Attacker-1" }));
+    assertEquals(r.status, 200);
+    assertEquals(r.json, { ok: true });
+    assertEquals(await signIn(email, "Sent-By-Attacker-1"), false);
+    const r2 = await register(body(track(uid("nopw2"))));
+    assertEquals(r2.status, 200, "no password field is not an error");
 
-    const a = await register(body(victim, { password: "Attacker-Pass-A1", parentEmail: attackerParent }));
-    assertEquals(a.status, 200);
-    assertEquals(a.json, { ok: true });
-    const first = await userByEmail(victim);
-    assert(first && first.status === "unconfirmed");
-
-    const v = await register(body(victim, { password: "Victim-Pass-B2", parentEmail: victimParent }));
-    assertEquals(v.status, 200);
-    assertEquals(v.json, { ok: true });
-    const second = await userByEmail(victim);
-    assert(second && second.id !== first.id, "the pre-registration is replaced by a new account");
-    assertEquals(second.status, "unconfirmed");
-
-    // The victim follows the confirmation link (same token the email carries).
-    const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "signup", email: victim, password: "Victim-Pass-B2" });
-    assert(!lErr && link.properties?.hashed_token);
-    const verifier = anon();
-    const { error: vErr } = await verifier.auth.verifyOtp({ token_hash: link.properties.hashed_token, type: "signup" });
-    assertEquals(vErr, null);
-
-    assertEquals(await signIn(victim, "Attacker-Pass-A1"), false, "the squatter's password must fail");
-    assertEquals(await signIn(victim, "Victim-Pass-B2"), true);
-    const confirmed = await userByEmail(victim);
-    assertEquals(confirmed?.status, "pending");
-    const { data: det } = await svc.from("student_details").select("signup_parent_email").eq("profile_id", second.id).single();
-    assertEquals(det?.signup_parent_email, victimParent);
-    assert(det?.signup_parent_email !== attackerParent);
+    // The shape the function creates: no usable password.
+    const e2 = track(uid("shape"));
+    await createSignup(e2, "p@example.test");
+    for (const guess of ["Sent-By-Attacker-1", "Password-A-1234", ""]) assertEquals(await signIn(e2, guess), false);
   });
 });
 
-Deno.test("register-student: an already confirmed address gets the neutral answer and nothing changes", async () => {
+Deno.test("register-student: a sign-up under 1 hour old is not replaced by another submitter", async () => {
   await withCleanup(async (track) => {
-    const email = track(uid("confirmed"));
-    const { data, error } = await svc.auth.admin.createUser({
-      email, password: "Original-Pass-1", email_confirm: true, user_metadata: { first_name: "Orig", last_name: "Inal" },
-    });
-    assert(!error && data.user);
-    const before = await userByEmail(email);
+    const victim = track(uid("victim"));
+    const victimParent = `victim-parent-${crypto.randomUUID()}@example.test`;
+    const victimId = await createSignup(victim, victimParent);
 
-    const r = await register(body(email, { password: "Intruder-Pass-9", firstName: "Intruder" }));
+    const a = await register(body(victim, { firstName: "Attacker", parentEmail: `attacker-${crypto.randomUUID()}@example.test` }));
+    assertEquals(a.status, 200);
+    assertEquals(a.json, { ok: true });
+
+    const after = await userByEmail(victim);
+    assertEquals(after?.id, victimId, "same account");
+    assertEquals(after?.first_name, "Victim");
+    const { data: det } = await svc.from("student_details").select("signup_parent_email").eq("profile_id", victimId).single();
+    assertEquals(det?.signup_parent_email, victimParent);
+  });
+});
+
+Deno.test("register-student: after 1 hour the sign-up is replaced, and the inbox owner alone ends up with a password", async () => {
+  await withCleanup(async (track) => {
+    const victim = track(uid("late"));
+    const oldId = await createSignup(victim, `old-parent-${crypto.randomUUID()}@example.test`, "Squatter");
+    await backdate(oldId);
+
+    const r = await register(body(victim, { firstName: "Real" }));
     assertEquals(r.status, 200);
     assertEquals(r.json, { ok: true });
+    const replaced = await userByEmail(victim);
+    assert(!replaced || replaced.id !== oldId, "the stale sign-up no longer exists");
 
-    const after = await userByEmail(email);
-    assertEquals(after?.id, before?.id);
-    assertEquals(after?.first_name, "Orig");
-    assertEquals(await signIn(email, "Original-Pass-1"), true);
-    assertEquals(await signIn(email, "Intruder-Pass-9"), false);
+    // The replacement account as the function creates it (no password, unconfirmed). Whoever controls the
+    // inbox completes the recovery link and chooses the only password.
+    if (replaced) await deleteUserIds(svc, [replaced.id]); // under a fail-closed email provider the function already removed it
+    const realParent = `real-parent-${crypto.randomUUID()}@example.test`;
+    const newId = await createSignup(victim, realParent, "Real");
+    assertEquals(await signIn(victim, "Attacker-Guess-1"), false, "the attacker has no usable password");
+
+    const { data: link, error: lErr } = await svc.auth.admin.generateLink({ type: "recovery", email: victim });
+    assert(!lErr && link.properties?.hashed_token);
+    const victimClient = anon();
+    const { error: vErr } = await victimClient.auth.verifyOtp({ token_hash: link.properties.hashed_token, type: "recovery" });
+    assertEquals(vErr, null);
+    const { error: uErr } = await victimClient.auth.updateUser({ password: "Victim-Chosen-Pw-9" });
+    assertEquals(uErr, null);
+
+    assertEquals(await signIn(victim, "Attacker-Guess-1"), false);
+    assertEquals(await signIn(victim, "Victim-Chosen-Pw-9"), true);
+    const confirmed = await userByEmail(victim);
+    assertEquals(confirmed?.id, newId);
+    assertEquals(confirmed?.status, "pending", "the link confirms the email");
+    const { data: det } = await svc.from("student_details").select("signup_parent_email").eq("profile_id", newId).single();
+    assertEquals(det?.signup_parent_email, realParent);
+  });
+});
+
+Deno.test("register-student: identical status and body, and at least 800 ms, for new / confirmed / staff / young sign-up", async () => {
+  await withCleanup(async (track) => {
+    const fresh = track(uid("new"));
+    const confirmed = track(uid("confirmed"));
+    const { data, error } = await svc.auth.admin.createUser({
+      email: confirmed,
+      password: "Original-Pass-1",
+      email_confirm: true,
+      user_metadata: { first_name: "Orig", last_name: "Inal" },
+    });
+    assert(!error && data.user);
+    const staff = await createTestUser(svc, { role: "admin", status: "active" });
+    const young = track(uid("young"));
+    await createSignup(young, "p@example.test");
+    try {
+      const results = {
+        fresh: await register(body(fresh)),
+        confirmed: await register(body(confirmed, { firstName: "Intruder" })),
+        staff: await register(body(staff.email)),
+        young: await register(body(young)),
+      };
+      for (const [name, r] of Object.entries(results)) {
+        assertEquals(r.status, 200, name);
+        assertEquals(JSON.stringify(r.json), JSON.stringify({ ok: true }), name);
+        assert(r.ms >= 790, `${name} answered in ${Math.round(r.ms)} ms`); // 800 ms floor minus client timer slack
+      }
+      const after = await userByEmail(confirmed);
+      assertEquals(after?.first_name, "Orig");
+      assertEquals(await signIn(confirmed, "Original-Pass-1"), true);
+    } finally {
+      await deleteUsers(svc, [staff]);
+    }
   });
 });
 
 Deno.test("register-student: staff (confirmed or not) are never touched", async () => {
   await withCleanup(async (track) => {
-    const staff: TestUser = await createTestUser(svc, { role: "tutor", status: "active" });
+    const staff = await createTestUser(svc, { role: "tutor", status: "active" });
     try {
       track(staff.email);
-      const r = await register(body(staff.email, { password: "Intruder-Pass-9" }));
+      const r = await register(body(staff.email));
       assertEquals(r.status, 200);
       assertEquals(r.json, { ok: true });
       const p = await userByEmail(staff.email);
       assertEquals(p?.id, staff.id);
       assertEquals(p?.role, "tutor");
-      assertEquals(await signIn(staff.email, "Intruder-Pass-9"), false);
     } finally {
       await deleteUsers(svc, [staff]);
     }
 
-    // An unconfirmed shell that is not a plain student sign-up (here: a tutor) is protected too.
+    // An old unconfirmed shell that is not a plain student sign-up (here: a tutor) is protected too.
     const email = track(uid("unconfirmed-tutor"));
     const { data, error } = await svc.auth.admin.createUser({ email, password: "Shell-Pass-1234", email_confirm: false });
     assert(!error && data.user);
     const { error: uErr } = await svc.from("profiles").update({ role: "tutor", status: "unconfirmed" }).eq("id", data.user.id);
     assertEquals(uErr, null);
+    await backdate(data.user.id); // old enough that only the role protects it
     const r2 = await register(body(email));
     assertEquals(r2.status, 200);
     assertEquals(r2.json, { ok: true });
@@ -145,29 +231,10 @@ Deno.test("register-student: staff (confirmed or not) are never touched", async 
   });
 });
 
-Deno.test("register-student: response is identical for new, replaced and existing addresses", async () => {
-  await withCleanup(async (track) => {
-    const email = track(uid("shape"));
-    const fresh = await register(body(email));
-    const replaced = await register(body(email));
-    const staff = await createTestUser(svc, { role: "admin", status: "active" });
-    try {
-      const existing = await register(body(staff.email));
-      assertEquals(fresh.status, 200);
-      assertEquals(JSON.stringify(replaced), JSON.stringify(fresh));
-      assertEquals(JSON.stringify(existing), JSON.stringify(fresh));
-    } finally {
-      await deleteUsers(svc, [staff]);
-    }
-  });
-});
-
 Deno.test("register-student: validation errors are 400 and create nothing", async () => {
   await withCleanup(async (track) => {
     const email = track(uid("invalid"));
     const cases: Record<string, unknown> = {
-      "short password": body(email, { password: "short" }),
-      "long password": body(email, { password: "x".repeat(201) }),
       "bad email": body("not-an-email"),
       "bad parent email": body(email, { parentEmail: "nope" }),
       "too young": body(email, { dateOfBirth: new Date(Date.now() - 5 * 365.25 * 864e5).toISOString().slice(0, 10) }),
@@ -175,7 +242,7 @@ Deno.test("register-student: validation errors are 400 and create nothing", asyn
       "impossible date": body(email, { dateOfBirth: "2012-02-31" }),
       "empty name": body(email, { firstName: "   " }),
       "long school": body(email, { school: "s".repeat(121) }),
-      "missing field": { email, password: "Password-A-1234" },
+      "missing field": { email },
       "array body": [],
     };
     for (const [name, b] of Object.entries(cases)) {
@@ -187,14 +254,37 @@ Deno.test("register-student: validation errors are 400 and create nothing", asyn
   });
 });
 
-Deno.test("register-student: rate limited per IP (429 on the 6th attempt)", async () => {
+Deno.test("register-student: 4th attempt for one email in 15 minutes is 429", async () => {
   await withCleanup(async (track) => {
-    const email = track(uid("ratelimit"));
+    const email = track(uid("emaillimit"));
     // A confirmed address is the cheapest valid attempt (no email, no account).
     const { data, error } = await svc.auth.admin.createUser({ email, password: "Original-Pass-1", email_confirm: true });
     assert(!error && data.user);
-    for (let i = 0; i < 5; i++) assertEquals((await register(body(email))).status, 200);
-    const limited = await register(body(email));
+    for (let i = 0; i < 3; i++) assertEquals((await register(body(email))).status, 200, `attempt ${i + 1}`);
+    const limited = await register(body(email.toUpperCase()));
+    assertEquals(limited.status, 429, "the key is the lower-cased email");
+    assertEquals(limited.json.error.code, "rate_limited");
+    // Another address from the same IP is still fine.
+    assertEquals((await register(body(track(uid("other"))))).status, 200);
+  });
+});
+
+Deno.test("register-student: 31st attempt from one IP in 15 minutes is 429", async () => {
+  await withCleanup(async (track) => {
+    const confirmed = track(uid("iplimit"));
+    const { data, error } = await svc.auth.admin.createUser({ email: confirmed, password: "Original-Pass-1", email_confirm: true });
+    assert(!error && data.user);
+    assertEquals((await register(body(confirmed))).status, 200);
+    // Learn the key the function recorded for this caller, then fill it to 29 attempts in the window.
+    const { data: rows, error: rErr } = await svc.from("login_attempts").select("key").like("key", "reg:%");
+    assertEquals(rErr, null);
+    assertEquals(rows!.length, 1);
+    const ipKey = rows![0].key as string;
+    const { error: iErr } = await svc.from("login_attempts").insert(Array.from({ length: 28 }, () => ({ key: ipKey })));
+    assertEquals(iErr, null);
+    // The 30th attempt passes, the 31st does not (different addresses, so the email limit is not what trips).
+    assertEquals((await register(body(track(uid("ip30"))))).status, 200);
+    const limited = await register(body(track(uid("ip31"))));
     assertEquals(limited.status, 429);
     assertEquals(limited.json.error.code, "rate_limited");
   });

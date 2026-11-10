@@ -42,7 +42,11 @@ Data and security model
 - Approval, rejection and all account changes write their audit row in the same step as the change; audit rows for rejections, expiry and deletions contain no personal data.
 - Index numbers: `SE-<year>-<4+ digits>`, year in UTC, sequence restarts each year, never truncated above 9,999.
 - Unconfirmed sign-ups deleted after 7 days by a nightly job at 03:00.
-- Student sign-up runs on the server: an unconfirmed sign-up with the same email is replaced by the newest submitter; confirmed or protected accounts are never touched; public Supabase sign-up is off. — Cost: see open risk R1.
+- Student sign-up runs on the server and takes no password: the emailed recovery link confirms the address and the inbox owner chooses the password. An unconfirmed sign-up with the same email is replaced only once it is over 1 hour old; younger, confirmed or protected accounts are never touched; public Supabase sign-up is off. (R1 fixed.)
+- Registration always answers the same 200 `{ ok: true }` (new, replaced, protected, already confirmed, email not sent) after at least 800 ms; 400 and 429 stay unpadded. (R2 fixed.)
+- Set-password page: 8 to 72 characters, with a clear message for weak or breached passwords instead of "Something went wrong". (R3 fixed.)
+- Registration limits: 30 per internet address and 3 per email per 15 minutes, both before any lookup (`login_attempt_begin_n`); index-number login keeps 5 / 5. (R4 fixed.)
+- The "Awaiting approval" screen shows the parent email on record with "Not right? Contact the institution."; "Resend confirmation email" sends a recovery link.
 - Function email fails closed: no email method configured → reported as not sent.
 
 Logins and limits
@@ -60,15 +64,9 @@ Web and tooling
 - GitHub: quick checks on every push (no secrets); full tests started by hand, secrets only in a `integration` environment limited to `main`, given only to the steps that need them.
 - Lint rules relaxed for 15 legacy mock-up files that Parts 2–4 replace.
 
-## 4. Open risks (need a decision)
+## 4. Open risks
 
-R1 — Newest sign-up wins. If a student has registered but not yet confirmed, someone else submitting the same email replaces that sign-up with their own password and parent email. The student's first email link stops working; their second email link would confirm the other person's account. Narrow window, but the harm is a child's account in the wrong hands. Recommended fix (small): make the signup confirmation always go to "set your password" (the inbox owner chooses the password), refuse to replace a sign-up whose link is under 1 hour old, and show the stored parent email on the "Awaiting approval" screen and to the admin.
-
-R2 — Registration responses can reveal whether an email exists (timing; and a 500 when the email fails to send). Fix: pad all responses to a fixed time and return the same status.
-
-R3 — Password-policy errors (weak or leaked password, over 72 characters) show "Something went wrong". Fix: map to a clear message; cap at 72.
-
-R4 — Registration limit is 5 per 15 minutes per internet address: a class registering together on one Wi-Fi hits it.
+None open. R1 to R4 (newest sign-up wins, registration existence oracle, password-policy messages, registration limit) are fixed and listed under Decisions.
 
 ## 5. Parked (waiting on something)
 
@@ -82,9 +80,8 @@ L1. Create a separate test project; repoint `.env.dev.local`, the CLI link and G
 L2. Clean rebuild of `jmhjahwfskhlgagaqlrz` (`db reset --remote`); confirm auth users, photos and audit log are empty and the nightly job exists.
 L3. Resend on your own domain (SPF/DKIM/DMARC); function secrets `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM`, `SITE_URL=https://<live domain>`; redeploy functions; send one of each email.
 L4. Supabase dashboard for the live project: real SMTP on the same domain; token_hash templates; Site URL and redirects = live domain only (remove localhost); public sign-up off; phone sign-in off; leaked-password protection on; minimum password 8; secure password change on; email links expire after 1 hour; raise sign-in and email limits.
-L5. Decide the shared Wi-Fi login and registration limits (suggested: 30 per internet address, keep 5 per index number).
+L5. Decide the shared Wi-Fi login limit (registration is now 30 per internet address and 3 per email; index-number login is still 5 per internet address).
 L6. Rework the Super administrator setup guard (it currently refuses the dev project, which becomes live), then invite the Super administrator once.
 L7. Supabase Pro (backups); privacy notice and terms pages linked from registration; data-processing agreements with email providers.
 L8. Vercel: live domain; preview deployments must not point at the live database; review deployment protection.
 L9. GitHub: repository owner creates the `integration` environment (main only) with the test project's secrets and deletes any repository-level copies.
-L10. Decide and fix R1–R4.

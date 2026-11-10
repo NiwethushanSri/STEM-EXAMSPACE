@@ -96,12 +96,12 @@ describe("helper payloads", () => {
       "registerStudent",
       (c: StemClient) =>
         registerStudent(c, {
-          firstName: "A", lastName: "B", email: "a@b.co", password: "longenough1", dateOfBirth: "2012-01-02",
+          firstName: "A", lastName: "B", email: "a@b.co", dateOfBirth: "2012-01-02",
           school: "S", parentName: "P", parentEmail: "p@b.co",
         }),
       "register-student",
       {
-        firstName: "A", lastName: "B", email: "a@b.co", password: "longenough1", dateOfBirth: "2012-01-02",
+        firstName: "A", lastName: "B", email: "a@b.co", dateOfBirth: "2012-01-02",
         school: "S", parentName: "P", parentEmail: "p@b.co",
       },
     ],

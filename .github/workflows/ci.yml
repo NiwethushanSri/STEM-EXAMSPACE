@@ -115,7 +115,7 @@ jobs:
             if [ "$first" -eq 0 ]; then sleep 120; fi
             first=0
             echo "::group::$f"
-            deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local "$f" || failed=1
+            deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --allow-run --env-file=.env.dev.local "$f" || failed=1
             echo "::endgroup::"
           done < <(find supabase/functions -name '*.test.ts' | sort)
           exit $failed

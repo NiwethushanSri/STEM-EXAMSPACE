@@ -35,7 +35,14 @@ async function Content({ params }: { params: Promise<{ state: string }> }) {
           </div>
         </AuthLayout>
       );
-    case "pending":
+    case "pending": {
+      // Read with the student's own session: row level security lets a student see their own details.
+      const supabase = await createClient();
+      const { data: details } = await supabase
+        .from("student_details")
+        .select("signup_parent_email")
+        .eq("profile_id", me.id)
+        .maybeSingle();
       return (
         <AuthLayout title="Awaiting approval" subtitle={`Hi ${me.firstName}.`} footer={footer}>
           <div className="rounded-xl bg-blue-50 p-5 text-sm text-blue-900">
@@ -44,9 +51,15 @@ async function Content({ params }: { params: Promise<{ state: string }> }) {
               An admin is checking your details. You will get an email with your index number once your
               account is approved.
             </p>
+            {details?.signup_parent_email && (
+              <p className="mt-3">
+                Parent email on record: <strong>{details.signup_parent_email}</strong>. Not right? Contact the institution.
+              </p>
+            )}
           </div>
         </AuthLayout>
       );
+    }
     case "suspended":
       return (
         <AuthLayout title="Account suspended" subtitle={`Hi ${me.firstName}.`} footer={footer}>

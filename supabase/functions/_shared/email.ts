@@ -8,7 +8,7 @@ const SUBJECTS: Record<EmailTemplate, string> = {
   rejected: "Your Stem Examspace registration",
   invite: "You are invited to Stem Examspace",
   child_confirm: "Set up your Stem Examspace account",
-  confirm_signup: "Confirm your Stem Examspace account",
+  confirm_signup: "Confirm your Stem Examspace registration",
 };
 
 const ESCAPES: Record<string, string> = {
@@ -53,8 +53,8 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
       }${expiryNote()}`;
       break;
     case "confirm_signup":
-      html = `<p>Hi ${name},</p><p>Thanks for registering with Stem Examspace. Use this link to confirm your email address. If you did not register, ignore this email.</p>${
-        data.link ? `<p><a href="${esc(data.link)}">Confirm your email</a></p>` : ""
+      html = `<p>Hi ${name},</p><p>Thanks for registering with Stem Examspace. Use this link to confirm your email and choose your password. If you did not register, ignore this email.</p>${
+        data.link ? `<p><a href="${esc(data.link)}">Confirm your email and choose your password</a></p>` : ""
       }${expiryNote(", or register again")}`;
       break;
   }
