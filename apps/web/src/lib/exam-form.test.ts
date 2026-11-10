@@ -90,8 +90,9 @@ describe("parseExamForm kept instants and bad fields", () => {
 });
 
 describe("parseRooms", () => {
-  it("splits lines and commas and drops blanks", () => {
-    expect(parseRooms("Hall A\n Hall B ,\r\n\nLab")).toEqual(["Hall A", "Hall B", "Lab"]);
+  it("splits on lines only, keeps commas, drops blanks", () => {
+    expect(parseRooms("Hall A\n Hall B \r\n\nLab")).toEqual(["Hall A", "Hall B", "Lab"]);
+    expect(parseRooms("Hall A, East\nLab")).toEqual(["Hall A, East", "Lab"]);
     expect(parseRooms("")).toEqual([]);
   });
 });

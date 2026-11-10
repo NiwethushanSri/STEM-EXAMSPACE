@@ -125,7 +125,7 @@ export function parseExamForm(
 /** Rooms typed one per line into a list, blanks dropped (a comma is part of a room name). */
 export function parseRooms(raw: string): string[] {
   return raw
-    .split(/[\r\n,]+/)
+    .split(/\r?\n/)
     .map((r) => r.trim())
     .filter(Boolean);
 }
