@@ -71,6 +71,9 @@ R1 to R4 (newest sign-up wins, registration existence oracle, password-policy me
 - Someone can register an inbox owner's address with details of their choosing. Mitigations: the confirmation email and the pending screen both show the registered details, the inbox owner can ignore the email, and an admin approves every account.
 - The per-email limit (3 in 15 minutes) can be used to delay a target's own registration. No data is exposed by this.
 - The per-IP key trusts the gateway's `x-forwarded-for` header.
+- Because registration always answers "check your email", an internal failure (database or email outage) also shows success; the person simply gets no email and can register again. Failures are logged by code.
+- The registered details (typed by whoever submitted the form) appear in the confirmation email sent to the inbox owner. They are HTML-escaped and length-limited, but a mail client may turn text that looks like a web address into a link.
+- Anyone can extend the 1-hour protection of an unconfirmed sign-up by triggering a new link to that address (bounded by Supabase's own email limits). The inbox owner can still complete their link.
 
 ## 5. Parked (waiting on something)
 
