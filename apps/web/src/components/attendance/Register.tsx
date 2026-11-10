@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Card } from "@/components/AppShell";
 import { closeRegisterAction, lookupAction, markAction } from "./actions";
 import { Scanner } from "./Scanner";
@@ -15,7 +15,14 @@ type Shown =
 const field = "rounded border border-slate-300 bg-white px-3 py-2 text-sm";
 
 /** The scan / type box, the confirmation card, and the close-register control. Counts and lists are server-rendered around it. */
-export function Register({ examId, open, canClose }: { examId: string; open: boolean; canClose: boolean }) {
+export function Register({ examId, open, startsAt }: { examId: string; open: boolean; startsAt: string }) {
+  const startMs = Date.parse(startsAt);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(t);
+  }, []);
+  const canClose = open && now >= startMs;
   const [index, setIndex] = useState("");
   const [shown, setShown] = useState<Shown | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
@@ -23,6 +30,7 @@ export function Register({ examId, open, canClose }: { examId: string; open: boo
   const [pending, start] = useTransition();
   // A scan that arrives while another request is running is dropped rather than queued.
   const running = useRef(false);
+  const shownIndex = useRef("");
 
   function lookup(raw: string) {
     const text = raw.trim();
@@ -31,6 +39,7 @@ export function Register({ examId, open, canClose }: { examId: string; open: boo
     start(async () => {
       try {
         const r = await lookupAction(examId, text);
+        shownIndex.current = r.ok ? text : "";
         setShown(
           r.ok
             ? { kind: "student", studentId: r.studentId, name: r.name, photoUrl: r.photoUrl, status: r.status, justMarked: false }
@@ -105,6 +114,8 @@ export function Register({ examId, open, canClose }: { examId: string; open: boo
             <Scanner
               disabled={pending}
               onCode={(text) => {
+                // The student on screen was just looked up or marked: a repeat read must not reset the card.
+                if (shownIndex.current === text.trim()) return;
                 setIndex(text);
                 lookup(text);
               }}

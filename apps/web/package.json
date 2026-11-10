@@ -31,7 +31,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.4",
     "jsqr": "^1.4.0",
-    "pngjs": "^5.0.0",
+    "pngjs": "^6.0.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3"

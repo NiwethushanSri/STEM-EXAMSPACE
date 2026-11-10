@@ -113,7 +113,7 @@ export async function RegisterView({ area, examId }: { area: Area; examId: strin
         </div>
       </Card>
 
-      <Register examId={exam.id} open={d.open} canClose={d.open && d.started} />
+      <Register examId={exam.id} open={d.open} startsAt={exam.startsAt} />
 
       {closed ? (
         <NameList title="Absent" testId="absent-list" rows={d.absent} names={d.names} empty="Nobody was absent." />

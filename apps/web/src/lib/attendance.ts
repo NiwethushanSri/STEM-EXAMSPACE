@@ -1,6 +1,5 @@
 import "server-only";
 import { chunk } from "@/lib/chunk";
-import { londonLocalToUtc, utcToLondonParts } from "@/lib/london-time";
 import { isUuid } from "@/lib/uuid";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
@@ -51,12 +50,11 @@ async function teacherSubjects(userId: string): Promise<number[]> {
   return (data ?? []).map((l) => l.subject_id);
 }
 
-/** Published exams from the start of today (London) onwards, plus recently completed ones, by start time. */
+/** Published exams from the last 14 days on (so a forgotten, unclosed register stays reachable) and recently completed ones, by start time. */
 export async function loadPicker(area: Area): Promise<PickerExam[]> {
   const me = await requireStaff(ROLES[area]);
   const supabase = await createClient();
   const now = Date.now();
-  const todayStart = londonLocalToUtc(utcToLondonParts(new Date(now).toISOString()).date, "00:00") ?? new Date(now - 86400_000).toISOString();
   const recentFrom = new Date(now - RECENT_DAYS * 86400_000).toISOString();
 
   let subjects: number[] | null = null;
@@ -67,7 +65,7 @@ export async function loadPicker(area: Area): Promise<PickerExam[]> {
   let q = supabase
     .from("exams")
     .select(EXAM_COLUMNS)
-    .or(`and(status.eq.published,starts_at.gte.${todayStart}),and(status.eq.completed,starts_at.gte.${recentFrom})`)
+    .or(`and(status.eq.published,starts_at.gte.${recentFrom}),and(status.eq.completed,starts_at.gte.${recentFrom})`)
     .order("starts_at", { ascending: true })
     .limit(PICKER_CAP);
   if (subjects) q = q.in("subject_id", subjects);
@@ -105,7 +103,6 @@ export type RegisterData = {
   absent: { id: string; name: string }[];
   names: boolean;
   open: boolean;
-  started: boolean;
 };
 
 async function pages<T>(run: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> {
@@ -185,6 +182,5 @@ export async function loadRegister(area: Area, examId: string): Promise<Register
     absent: absentIds.map(label).sort(byName),
     names: canSeeNames,
     open: e.status === "published",
-    started: Date.now() >= Date.parse(e.starts_at),
   };
 }

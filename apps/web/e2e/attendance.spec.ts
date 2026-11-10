@@ -168,10 +168,6 @@ test.beforeAll(async () => {
   await book(started, s4.id);
   await book(cameraExam, s5.id);
   await book(otherSubject, s1.id);
-
-  for (const path of ["/login", "/admin/attendance", "/teacher/attendance", "/cards/x"]) {
-    await fetch(`http://localhost:3005${path}`, { redirect: "manual" }).catch(() => undefined);
-  }
 });
 test.beforeEach(async () => {
   await clearLoginAttempts();
@@ -437,9 +433,9 @@ test("student_opens_own_card_from_home_and_nobody_else_can", async ({ page, brow
   }
 
   // A signed-out visitor.
-  const anon = await browser.newContext();
+  const anon = await browser.newContext({ baseURL: test.info().project.use.baseURL });
   const p = await anon.newPage();
-  await p.goto(`http://localhost:3005/cards/${s3.id}`);
+  await p.goto(`/cards/${s3.id}`);
   await expect(p.getByText("This page could not be found")).toBeVisible();
   await anon.close();
 });

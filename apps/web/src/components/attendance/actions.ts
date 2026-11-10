@@ -38,8 +38,8 @@ function refresh(examId: string) {
  */
 export async function lookupAction(examId: string, index: string): Promise<LookupOutcome> {
   await requireStaff(STAFF);
-  const text = typeof index === "string" ? index.trim().slice(0, 40) : "";
-  if (!isUuid(examId) || text === "") return { ok: false, message: attendanceMessageFor("invalid_input", "lookup") };
+  const text = typeof index === "string" ? index.trim() : "";
+  if (!isUuid(examId) || text === "" || text.length > 40) return { ok: false, message: attendanceMessageFor("invalid_input", "lookup") };
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("attendance_lookup", { p_exam: examId, p_index: text });
   if (error || !isObject(data) || data.ok !== true) return failure(data, error, "lookup");

@@ -16,8 +16,9 @@ const INDEX = /^SE-\d{4}-\d{4,}$/;
  * as a card that does not exist. The QR holds the index number and nothing else.
  */
 async function Card({ params }: { params: Promise<{ studentId: string }> }) {
-  const { studentId } = await params;
-  if (!isUuid(studentId)) notFound();
+  const { studentId: raw } = await params;
+  if (!isUuid(raw)) notFound();
+  const studentId = raw.toLowerCase();
   const me = await getSessionProfile();
   if (!me || me.status !== "active") notFound();
   const isAdmin = me.role === "admin" || me.role === "owner";
@@ -43,8 +44,8 @@ async function Card({ params }: { params: Promise<{ studentId: string }> }) {
   const name = `${profile.first_name} ${profile.last_name}`.trim();
 
   return (
-    <main className="flex min-h-screen flex-col items-center gap-4 bg-slate-100 p-6 print:min-h-0 print:bg-white print:p-0">
-      <style>{`@page { size: A6; margin: 0; } @media print { html, body { width: 105mm; height: 148mm; margin: 0; background: #fff; } }`}</style>
+    <main className="flex min-h-screen flex-col items-center gap-4 bg-slate-100 p-6 print:h-[148mm] print:min-h-0 print:overflow-hidden print:bg-white print:p-0">
+      <style>{`@page { size: A6; margin: 0; } @media print { * { print-color-adjust: exact; -webkit-print-color-adjust: exact; } html, body { width: 105mm; height: 148mm; margin: 0; background: #fff; } }`}</style>
       <PrintButton />
       <article
         aria-label="Index card"
