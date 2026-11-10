@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { messageFor } from "@stem/shared";
 import { callSaveExam, explainSaveConflict, readRpc } from "@/lib/exam-rpc";
-import { isUuid, parseExamForm } from "@/lib/exam-form";
+import { parseExamForm } from "@/lib/exam-form";
+import { isUuid } from "@/lib/uuid";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 

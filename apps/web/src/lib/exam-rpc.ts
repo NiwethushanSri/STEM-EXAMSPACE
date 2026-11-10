@@ -49,10 +49,21 @@ export async function callSaveExam(supabase: Client, v: ExamValues, pricePence: 
  */
 export async function explainSaveConflict(supabase: Client, v: ExamValues): Promise<string> {
   if (!v.id) return examMessageFor("conflict", "save_exam");
-  const { data: exam } = await supabase.from("exams").select("status, price_pence, subject_id").eq("id", v.id).maybeSingle();
+  const { data: exam } = await supabase.from("exams").select("status, price_pence, subject_id, starts_at, booking_deadline").eq("id", v.id).maybeSingle();
   if (!exam) return examMessageFor("not_found", "save_exam");
   if (exam.status === "cancelled" || exam.status === "completed") {
     return `This exam is ${exam.status} and can no longer be edited.`;
+  }
+  if (exam.status === "published") {
+    const same = (a: string, b: string) => new Date(a).getTime() === new Date(b).getTime();
+    const startsChanged = !same(v.startsAt, exam.starts_at);
+    const deadlineChanged = !same(v.bookingDeadline, exam.booking_deadline);
+    if (new Date(exam.starts_at).getTime() <= Date.now() && (startsChanged || deadlineChanged)) {
+      return "This exam has started — its date and deadline can't change.";
+    }
+    if (deadlineChanged && new Date(v.bookingDeadline).getTime() <= Date.now()) {
+      return "The booking deadline can't be moved into the past.";
+    }
   }
   const { count: taken } = await supabase
     .from("bookings")

@@ -15,7 +15,7 @@ import {
 import type { AdminBookingRow, ExamOption, StudentOption } from "@/lib/bookings-admin";
 import { formatLondon, formatMoney, penceToInput, poundsToPence } from "@/lib/money";
 
-const NOTE_HELP = "Visible to the family. Don't include personal details.";
+const NOTE_HELP = "Visible to the family, their tutor and the subject's teachers. Don't include personal details.";
 const CANCELLED_EXAM_WARNING = "This exam was cancelled — the family is owed a full refund.";
 const DELETED_ACCOUNT_WARNING = "This account was deleted — the family is owed a refund.";
 

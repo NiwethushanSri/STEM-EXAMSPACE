@@ -1,6 +1,7 @@
 import "server-only";
 import { chunk } from "@/lib/chunk";
 import { createClient } from "@/lib/supabase/server";
+import { examMoney } from "@/lib/exam-money";
 import { isClosed } from "@/lib/exam-state";
 import { requireStaff } from "@/lib/staff-gate";
 
@@ -28,7 +29,7 @@ export type ExamRow = {
   status: ExamStatus;
   /** Seats taken: bookings awaiting payment, paid or cancel-requested. */
   seatsSold: number;
-  /** Money kept: amount minus refunds over paid and part-refunded bookings. */
+  /** Net taken: amount minus refunds over every booking with paid_at set (matches Finance). */
   moneyPence: number;
   /** Bookings flagged for a refund (the exam was cancelled), with who and how much. */
   refundsDue: { bookingId: string; student: string; pence: number }[];
@@ -67,6 +68,7 @@ type BookingQueryRow = {
   amount_pence: number;
   refunded_pence: number;
   refund_due: boolean;
+  paid_at: string | null;
 };
 
 const SEAT_STATUSES = ["awaiting_payment", "paid", "cancel_requested"];
@@ -75,7 +77,7 @@ const PAGE = 1000;
 export const EXAM_CAP = 500;
 
 const ID_BATCH = 100;
-const BOOKING_COLUMNS = "id, exam_id, status, amount_pence, refunded_pence, refund_due";
+const BOOKING_COLUMNS = "id, exam_id, status, amount_pence, refunded_pence, refund_due, paid_at";
 
 /** Every booking of these exams (no names), in batches of exam ids and a page at a time: the API caps one response and one URL. */
 async function loadBookings(examIds: string[]): Promise<BookingQueryRow[]> {
@@ -149,9 +151,7 @@ function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[], names: Map<s
       status: e.status,
       // A cancelled exam releases its seats.
       seatsSold: cancelled ? 0 : bs.filter((b) => SEAT_STATUSES.includes(b.status)).length,
-      moneyPence: bs
-        .filter((b) => b.status === "paid" || b.status === "part_refunded")
-        .reduce((sum, b) => sum + b.amount_pence - b.refunded_pence, 0),
+      moneyPence: examMoney(bs).net,
       refundsDue: cancelled
         ? bs
             .filter((b) => b.refund_due && b.amount_pence > b.refunded_pence)

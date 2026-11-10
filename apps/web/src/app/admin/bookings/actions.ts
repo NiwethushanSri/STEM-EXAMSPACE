@@ -6,11 +6,11 @@ import { searchStudents, type StudentOption } from "@/lib/bookings-admin";
 import { poundsToPence } from "@/lib/money";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/uuid";
 
 /** What the booking actions send back; they never throw for expected failures. */
 export type BookingActionResult = { ok: true; message: string } | { ok: false; message: string };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NOTE_MAX = 500;
 
 function refresh() {
@@ -57,7 +57,7 @@ export async function searchStudentsAction(q: string): Promise<{ ok: true; stude
 export async function addBookingAction(examId: string, studentId: string, paid: boolean, note: string): Promise<BookingActionResult> {
   await requireStaff(["admin", "owner"]);
   const n = cleanNote(note);
-  if (!UUID.test(String(examId)) || !UUID.test(String(studentId)) || typeof paid !== "boolean" || n === undefined) return badInput;
+  if (!isUuid(String(examId)) || !isUuid(String(studentId)) || typeof paid !== "boolean" || n === undefined) return badInput;
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("admin_add_booking", {
     p_exam: examId,
@@ -75,7 +75,7 @@ export async function addBookingAction(examId: string, studentId: string, paid: 
 export async function markPaidAction(bookingId: string, note: string): Promise<BookingActionResult> {
   await requireStaff(["admin", "owner"]);
   const n = cleanNote(note);
-  if (!UUID.test(String(bookingId)) || n === undefined) return badInput;
+  if (!isUuid(String(bookingId)) || n === undefined) return badInput;
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("mark_booking_paid", { p_booking: bookingId, p_note: n as string });
   const out = read(data, error, "mark_paid");
@@ -87,7 +87,7 @@ export async function markPaidAction(bookingId: string, note: string): Promise<B
 export async function cancelBookingAction(bookingId: string, note: string): Promise<BookingActionResult> {
   await requireStaff(["admin", "owner"]);
   const n = cleanNote(note);
-  if (!UUID.test(String(bookingId)) || n === undefined) return badInput;
+  if (!isUuid(String(bookingId)) || n === undefined) return badInput;
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("cancel_booking_admin", { p_booking: bookingId, p_note: n as string });
   const out = read(data, error, "cancel");
@@ -102,7 +102,7 @@ export async function cancelBookingAction(bookingId: string, note: string): Prom
 export async function decideCancellationAction(bookingId: string, approve: boolean, refund: string, note: string): Promise<BookingActionResult> {
   await requireStaff(["admin", "owner"]);
   const n = cleanNote(note);
-  if (!UUID.test(String(bookingId)) || typeof approve !== "boolean" || n === undefined) return badInput;
+  if (!isUuid(String(bookingId)) || typeof approve !== "boolean" || n === undefined) return badInput;
   let pence = 0;
   if (approve) {
     const p = typeof refund === "string" ? poundsToPence(refund) : null;

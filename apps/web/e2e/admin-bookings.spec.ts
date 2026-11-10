@@ -232,7 +232,7 @@ test("adds_offline_bookings_unpaid_and_paid_and_explains_refusals", async ({ pag
   // Only bookable exams are offered.
   await expect(form.getByLabel("Exam", { exact: true }).locator(`option[value="${open}"]`)).toHaveCount(1);
   await expect(form.getByLabel("Exam", { exact: true }).locator("option", { hasText: `${tag} Draft` })).toHaveCount(0);
-  await expect(form.getByText("Visible to the family. Don't include personal details.")).toBeVisible();
+  await expect(form.getByText("Visible to the family, their tutor and the subject's teachers. Don't include personal details.")).toBeVisible();
 
   async function fill(examId: string, who: TestAccount & { name: string }, byIndex: boolean, payment: "paid" | "unpaid", note = "") {
     await form.getByLabel("Exam", { exact: true }).selectOption(examId);
@@ -310,7 +310,7 @@ test("marks_an_unpaid_booking_paid_and_cancels_another_behind_confirm_steps", as
   await expect(row3.getByRole("button")).toHaveCount(0);
 
   await row1.getByRole("button", { name: "Mark paid" }).click();
-  await expect(dialog(page).getByText("Visible to the family. Don't include personal details.")).toBeVisible();
+  await expect(dialog(page).getByText("Visible to the family, their tutor and the subject's teachers. Don't include personal details.")).toBeVisible();
   await dialog(page).getByRole("button", { name: "Cancel", exact: true }).click();
   expect((await bookingOf(exam, s1.id))?.status).toBe("awaiting_payment");
   await row1.getByRole("button", { name: "Mark paid" }).click();
@@ -365,7 +365,7 @@ test("approves_partial_and_full_refunds_declines_and_warns_before_a_zero_refund_
   await expect(r1).toContainText("Already refunded £0.00");
   await expect(r1).toContainText("Still refundable £20.00");
   await expect(r1.getByLabel("Refund amount (£)")).toHaveValue("20.00");
-  await expect(r1.getByText("Visible to the family. Don't include personal details.")).toBeVisible();
+  await expect(r1.getByText("Visible to the family, their tutor and the subject's teachers. Don't include personal details.")).toBeVisible();
   await expect(r1.getByRole("button", { name: "Decline" })).toBeVisible();
   await r1.getByLabel("Refund amount (£)").fill("30");
   await r1.getByRole("button", { name: "Approve" }).click();

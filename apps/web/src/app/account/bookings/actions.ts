@@ -3,10 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { bookingMessageFor, messageFor } from "@stem/shared";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/uuid";
 
 export type CancelState = { error: string | null; done: boolean };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Cancel an unpaid booking, or ask for a cancellation of a paid one. The database decides which applies. */
 export async function cancelBooking(_prev: CancelState, form: FormData): Promise<CancelState> {
@@ -16,7 +16,7 @@ export async function cancelBooking(_prev: CancelState, form: FormData): Promise
     return { error: messageFor("forbidden"), done: false };
   }
   const booking = String(form.get("booking") ?? "");
-  if (!UUID.test(booking)) return { error: messageFor("invalid_input"), done: false };
+  if (!isUuid(booking)) return { error: messageFor("invalid_input"), done: false };
 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("request_cancellation", { p_booking: booking });

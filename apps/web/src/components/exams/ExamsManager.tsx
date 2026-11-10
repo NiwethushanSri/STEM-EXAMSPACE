@@ -148,7 +148,7 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
             <table className="w-full text-left text-sm">
               <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  {["When (UK time)", "Exam", "Where", "Status", "Seats sold", "Price", "Money taken", "Actions"].map((h) => (
+                  {["When (UK time)", "Exam", "Where", "Status", "Seats sold", "Price", "Net taken", "Actions"].map((h) => (
                     <th key={h} className="py-2 pr-4 font-medium">{h}</th>
                   ))}
                 </tr>

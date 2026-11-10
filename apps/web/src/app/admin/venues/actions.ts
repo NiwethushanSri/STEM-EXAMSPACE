@@ -2,7 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { readRpc } from "@/lib/exam-rpc";
-import { isUuid, parseRooms } from "@/lib/exam-form";
+import { parseRooms } from "@/lib/exam-form";
+import { isUuid } from "@/lib/uuid";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 

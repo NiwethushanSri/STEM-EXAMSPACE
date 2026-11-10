@@ -3,6 +3,7 @@ import { chunk } from "@/lib/chunk";
 import { likePattern, searchWords } from "@/lib/booking-search";
 import { createClient } from "@/lib/supabase/server";
 import { requireStaff } from "@/lib/staff-gate";
+import { isUuid } from "@/lib/uuid";
 import { STATUS_LABEL, type BookingStatus } from "@/components/bookings/status";
 
 type Embedded<T> = T | T[] | null;
@@ -48,7 +49,6 @@ const ID_BATCH = 100;
 const STUDENT_MATCH_CAP = 300;
 
 const STATUSES = Object.keys(STATUS_LABEL) as BookingStatus[];
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const COLUMNS =
   "id, status, amount_pence, refunded_pence, refund_due, paid_offline, paid_at, notes, created_at, exam_id, student_id, " +
@@ -153,7 +153,7 @@ export type BookingFilters = { status?: string; exam?: string; q?: string };
 /** The bookings list under the filters, newest first, at most BOOKING_CAP rows (`capped` when there were more). */
 async function loadList(supabase: Client, f: BookingFilters): Promise<{ rows: AdminBookingRow[]; capped: boolean; truncated: boolean }> {
   const status = f.status && (STATUSES as string[]).includes(f.status) ? f.status : null;
-  const exam = f.exam && UUID.test(f.exam) ? f.exam : null;
+  const exam = f.exam && isUuid(f.exam) ? f.exam : null;
   const q = (f.q ?? "").trim();
 
   const run = async (studentIds: string[] | null) => {

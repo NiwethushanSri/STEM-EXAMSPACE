@@ -4,10 +4,10 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { bookingMessageFor, messageFor } from "@stem/shared";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/uuid";
 
 export type BookState = { error: string | null };
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Book a seat. Runs as the signed-in family member (never the service role); create_booking re-checks everything. */
 export async function bookExam(_prev: BookState, form: FormData): Promise<BookState> {
@@ -18,7 +18,7 @@ export async function bookExam(_prev: BookState, form: FormData): Promise<BookSt
   const examId = String(form.get("exam") ?? "");
   // A student always books for themselves, whatever the form says.
   const studentId = me.role === "student" ? me.id : String(form.get("student") ?? "");
-  if (!UUID.test(examId) || !UUID.test(studentId)) return { error: messageFor("invalid_input") };
+  if (!isUuid(examId) || !isUuid(studentId)) return { error: messageFor("invalid_input") };
 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("create_booking", { p_exam: examId, p_student: studentId });

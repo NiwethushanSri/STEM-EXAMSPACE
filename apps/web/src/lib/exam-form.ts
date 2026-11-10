@@ -1,5 +1,6 @@
 import { londonLocalToUtc, utcToLondonParts } from "./london-time";
 import { poundsToPence } from "./money";
+import { isUuid } from "./uuid";
 
 /** The values save_exam takes, read from the exam form. Times are already UTC instants. */
 export type ExamValues = {
@@ -17,10 +18,6 @@ export type ExamValues = {
   pricePence: number | null;
   bookingDeadline: string;
 };
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-export const isUuid = (v: unknown): v is string => typeof v === "string" && UUID.test(v);
 
 /**
  * The UTC instant for a date and time typed in UK time. When the form says the inputs were left alone

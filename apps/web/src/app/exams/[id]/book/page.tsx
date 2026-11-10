@@ -8,12 +8,12 @@ import { PAY_NOTE } from "@/components/bookings/status";
 import { isClosed } from "@/lib/exam-state";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
+import { isUuid } from "@/lib/uuid";
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function Content({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  if (!UUID.test(id)) notFound();
+  if (!isUuid(id)) notFound();
 
   // Signed-out visitors sign in first and come back here (the return path is a fixed internal path).
   const me = await getSessionProfile();
