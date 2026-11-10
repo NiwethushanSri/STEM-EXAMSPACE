@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(37);
+select plan(48);
 select tests.assert_no_owner();
 
 create temp table c (name text primary key, id uuid not null);
@@ -14,6 +14,11 @@ insert into c values ('s3', tests.create_user('student', 'active'));
 insert into c values ('s4', tests.create_user('student', 'active'));
 insert into c values ('s5', tests.create_user('student', 'active'));
 insert into c values ('s6', tests.create_user('student', 'active'));
+insert into c values ('s7', tests.create_user('student', 'active'));
+insert into c values ('s8', tests.create_user('student', 'active'));
+insert into c values ('s9', tests.create_user('student', 'active'));
+insert into c values ('steacher', tests.create_user('teacher', 'suspended'));
+insert into c values ('teacherb', tests.create_user('teacher', 'active'));
 update public.profiles set first_name = 'Ada', last_name = 'Lovelace' where id = (select id from c where name = 's1');
 update public.student_details
   set index_number = 'SE-2026-9001', photo_path = profile_id::text || '/photo.jpg'
@@ -23,6 +28,10 @@ update public.student_details set index_number = 'SE-2026-9002' where profile_id
 insert into public.subjects (name, kind) values ('ZZ Att A', 'school'), ('ZZ Att B', 'school');
 insert into public.teacher_subjects values
   ((select id from c where name = 'teacher'), (select id from public.subjects where name = 'ZZ Att A'));
+
+insert into public.teacher_subjects values
+  ((select id from c where name = 'steacher'), (select id from public.subjects where name = 'ZZ Att A')),
+  ((select id from c where name = 'teacherb'), (select id from public.subjects where name = 'ZZ Att B'));
 
 create temp table ex (name text primary key, id uuid not null);
 grant select on ex to public;
@@ -51,6 +60,7 @@ select pg_temp.mk_exam('winter', 'ZZ Att A', '2026-12-01 09:00 Europe/London');
 select pg_temp.mk_exam('other', 'ZZ Att B', '2026-07-01 09:00 Europe/London');
 select pg_temp.mk_exam('future', 'ZZ Att A', now() + interval '30 days');
 select pg_temp.mk_exam('draft', 'ZZ Att A', '2026-07-01 09:00 Europe/London', 'draft');
+select pg_temp.mk_exam('edge', 'ZZ Att A', '2026-07-01 09:00 Europe/London');
 select pg_temp.mk_exam('live', 'ZZ Att A', now() - interval '1 hour');
 
 select pg_temp.mk_booking('summer', 's1', 'paid');
@@ -63,6 +73,11 @@ select pg_temp.mk_booking('winter', 's3', 'paid');
 select pg_temp.mk_booking('other', 's1', 'paid');
 select pg_temp.mk_booking('future', 's1', 'paid');
 select pg_temp.mk_booking('live', 's1', 'paid');
+select pg_temp.mk_booking('edge', 's1', 'paid');
+select pg_temp.mk_booking('edge', 's7', 'cancel_requested');
+select pg_temp.mk_booking('edge', 's8', 'refunded');
+select pg_temp.mk_booking('edge', 's9', 'cancelled');
+select pg_temp.mk_booking('draft', 's1', 'paid');
 
 -- normalise_index mirrors the TypeScript rules.
 select is(public.normalise_index(' se 2026-0142 '), 'SE-2026-0142', 'normalise: spaces, case, hyphens');
@@ -113,6 +128,20 @@ select is((select status::text from public.exams where id = (select id from ex w
 select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ex where name = 'summer'), (select id from c where name = 's5'), '2026-07-01 10:05 Europe/London') ->> 'code', 'conflict', 'marking on a completed exam is a conflict');
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ex where name = 'summer'), '2026-07-01 10:10 Europe/London') ->> 'code', 'conflict', 'closing twice is a conflict');
 select is((select count(*)::int from public.audit_log where action = 'register_closed' and target_id = (select id from ex where name = 'summer')), 1, 'close writes an audit row');
+
+-- Fix round 1.
+select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ex where name = 'edge'), (select id from c where name = 's1'), '2026-07-01 09:15 Europe/London'), '{"ok":true,"status":"late","already":false}'::jsonb, 'first mark returns already false; exactly +15:00 is late');
+select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ex where name = 'edge'), (select id from c where name = 's8'), '2026-07-01 09:05 Europe/London') ->> 'code', 'not_booked', 'refunded booking is not_booked');
+select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ex where name = 'edge'), (select id from c where name = 's9'), '2026-07-01 09:05 Europe/London') ->> 'code', 'not_booked', 'cancelled booking is not_booked');
+select is(public.mark_attendance_as((select id from c where name = 'steacher'), (select id from ex where name = 'edge'), (select id from c where name = 's7'), '2026-07-01 09:05 Europe/London') ->> 'code', 'forbidden', 'suspended teacher forbidden');
+select is(public.attendance_lookup_as((select id from c where name = 'teacherb'), (select id from ex where name = 'edge'), 'SE-2026-9001') ->> 'code', 'forbidden', 'lookup by teacher of another subject forbidden');
+select is(public.close_register_as((select id from c where name = 'admin'), (select id from ex where name = 'draft'), '2026-07-01 10:00 Europe/London') ->> 'code', 'conflict', 'close on a draft exam is a conflict');
+select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ex where name = 'edge'), '2026-07-01 10:00 Europe/London'), '{"ok":true,"absent":1}'::jsonb, 'unmarked cancel_requested student counted absent');
+select is((select status::text from public.attendance where exam_id = (select id from ex where name = 'edge') and student_id = (select id from c where name = 's7')), 'absent', 'cancel_requested student is absent');
+select ok(not has_function_privilege('authenticated', 'public.attendance_lookup_as(uuid, uuid, text)', 'execute')
+  and not has_function_privilege('authenticated', 'public.close_register_as(uuid, uuid, timestamptz)', 'execute'), 'internal helpers have no client grant');
+select is(public.mark_attendance_as((select id from c where name = 'admin'), (select id from ex where name = 'nonexistent_x'), (select id from c where name = 's1'), now()) ->> 'code', 'invalid_input', 'null exam id is invalid_input');
+select is(public.mark_attendance_as((select id from c where name = 'admin'), gen_random_uuid(), (select id from c where name = 's1'), now()) ->> 'code', 'not_found', 'missing exam is not_found');
 
 -- Client RPCs: grants and a real call as admin.
 select ok(not has_function_privilege('anon', 'public.mark_attendance(uuid, uuid)', 'execute')
