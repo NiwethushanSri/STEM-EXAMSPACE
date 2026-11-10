@@ -209,6 +209,7 @@ export type Database = {
           format: Database["public"]["Enums"]["exam_format"]
           id: string
           paper: string
+          price_confirmed: boolean
           price_pence: number
           room: string | null
           seat_limit: number
@@ -228,6 +229,7 @@ export type Database = {
           format: Database["public"]["Enums"]["exam_format"]
           id?: string
           paper: string
+          price_confirmed?: boolean
           price_pence: number
           room?: string | null
           seat_limit: number
@@ -247,6 +249,7 @@ export type Database = {
           format?: Database["public"]["Enums"]["exam_format"]
           id?: string
           paper?: string
+          price_confirmed?: boolean
           price_pence?: number
           room?: string | null
           seat_limit?: number

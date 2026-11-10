@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(91);
+select plan(133);
 select tests.assert_no_owner();
 
 -- Fixtures.
@@ -125,7 +125,7 @@ select is(public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 
 select is(public.save_exam(null, -1, 'T', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 0, now() + interval '20 days') ->> 'code', 'invalid_input', 'unknown subject');
 select is(public.save_exam(gen_random_uuid(), (select id from subj where name = 'ZZ Maths'), 'T', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 0, now() + interval '20 days') ->> 'code', 'not_found', 'unknown exam id is not_found');
 select tests.as_postgres();
-select is((select count(*)::int from public.exams where title in ('T', 'ZZ Susp', 'ZZ Other', 'ZZ Hijack', 'ZZ Move')), 0, 'refused saves wrote nothing');
+select is((select count(*)::int from public.exams where created_by in (select id from c) and title in ('T', 'ZZ Susp', 'ZZ Other', 'ZZ Hijack', 'ZZ Move')), 0, 'refused saves wrote nothing');
 
 -- Publishing.
 select tests.as_user((select id from c where name = 'admin'));
@@ -208,6 +208,113 @@ select is((select status::text || '/' || notes from public.bookings where exam_i
 select is((select status::text || '/' || notes from public.bookings where exam_id = (select id from st where name = 'a_draft') and student_id = (select id from c where name = 's3')), E'cancel_requested/student asked\nexam cancelled — refund due', 'cancel_requested booking keeps its note and is flagged');
 select is((select status::text from public.bookings where exam_id = (select id from st where name = 'a_draft') and refunded_pence = 2500), 'refunded', 'refunded booking untouched');
 select is((select count(*)::int from public.audit_log where action = 'exam_cancelled' and target_id = (select id from st where name = 'a_draft')), 1, 'cancel audited');
+
+-- ===== Fix round 1 =====
+insert into c values ('stud', tests.create_user('student', 'active'));
+insert into c values ('par', tests.create_user('parent', 'active'));
+insert into c values ('tut', tests.create_user('tutor', 'active'));
+insert into c values ('s4', tests.create_user('student', 'active'));
+insert into c values ('s5', tests.create_user('student', 'active'));
+insert into c values ('steach', tests.create_user('teacher', 'suspended'));
+insert into public.teacher_subjects values ((select id from c where name = 'steach'), (select id from subj where name = 'ZZ Maths'));
+
+-- Student, parent, tutor and suspended teacher are refused everywhere.
+select tests.as_user((select id from c where name = 'stud'));
+select is((public.save_venue(null, 'ZZ V', array['R'], true) ->> 'code') || (public.save_exam((select id from st where name = 't_draft'), (select id from subj where name = 'ZZ Maths'), 'X', 'P', 'online', null, null, now() + interval '5 days', 60, 5, 0, now() + interval '4 days') ->> 'code') || (public.set_exam_status((select id from st where name = 't_draft'), 'cancelled') ->> 'code'), 'forbiddenforbiddenforbidden', 'student refused everywhere');
+select tests.as_postgres();
+select tests.as_user((select id from c where name = 'par'));
+select is((public.save_venue(null, 'ZZ V', array['R'], true) ->> 'code') || (public.save_exam((select id from st where name = 't_draft'), (select id from subj where name = 'ZZ Maths'), 'X', 'P', 'online', null, null, now() + interval '5 days', 60, 5, 0, now() + interval '4 days') ->> 'code') || (public.set_exam_status((select id from st where name = 't_draft'), 'cancelled') ->> 'code'), 'forbiddenforbiddenforbidden', 'parent refused everywhere');
+select tests.as_postgres();
+select tests.as_user((select id from c where name = 'tut'));
+select is((public.save_venue(null, 'ZZ V', array['R'], true) ->> 'code') || (public.save_exam((select id from st where name = 't_draft'), (select id from subj where name = 'ZZ Maths'), 'X', 'P', 'online', null, null, now() + interval '5 days', 60, 5, 0, now() + interval '4 days') ->> 'code') || (public.set_exam_status((select id from st where name = 't_draft'), 'cancelled') ->> 'code'), 'forbiddenforbiddenforbidden', 'tutor refused everywhere');
+select tests.as_postgres();
+select tests.as_user((select id from c where name = 'steach'));
+select is((public.save_venue(null, 'ZZ V', array['R'], true) ->> 'code') || (public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'X', 'P', 'online', null, null, now() + interval '5 days', 60, 5, 0, now() + interval '4 days') ->> 'code') || (public.set_exam_status((select id from st where name = 't_draft'), 'cancelled') ->> 'code'), 'forbiddenforbiddenforbidden', 'suspended teacher refused everywhere');
+select tests.as_postgres();
+
+-- Teachers get forbidden for a missing exam too.
+select tests.as_user((select id from c where name = 'teacher'));
+select is(public.save_exam(gen_random_uuid(), (select id from subj where name = 'ZZ Maths'), 'X', 'P', 'online', null, null, now() + interval '5 days', 60, 5, 0, now() + interval '4 days') ->> 'code', 'forbidden', 'teacher gets forbidden for a missing exam');
+-- Teacher draft stays unconfirmed.
+insert into st select 'p1', (public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'ZZ Unpriced', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 100, now() + interval '20 days') ->> 'id')::uuid;
+select tests.as_postgres();
+select is((select price_confirmed from public.exams where id = (select id from st where name = 'p1')), false, 'teacher draft is not price-confirmed');
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.set_exam_status((select id from st where name = 'p1'), 'published') ->> 'message', 'Confirm the price first', 'unconfirmed price cannot be published');
+select is(public.set_exam_status((select id from st where name = 'p1'), 'published') ->> 'code', 'invalid_input', 'unconfirmed price code');
+select is(public.save_exam((select id from st where name = 'p1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Unpriced', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 0, now() + interval '20 days') ->> 'ok', 'true', 'admin confirms a free exam');
+select tests.as_postgres();
+select is((select price_confirmed from public.exams where id = (select id from st where name = 'p1')), true, 'admin save confirms the price');
+select tests.as_user((select id from c where name = 'teacher'));
+select is(public.save_exam((select id from st where name = 'p1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Unpriced 2', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 7, now() + interval '20 days') ->> 'ok', 'true', 'teacher edits confirmed draft');
+select tests.as_postgres();
+select is((select price_confirmed::text || price_pence::text from public.exams where id = (select id from st where name = 'p1')), 'true0', 'teacher edit keeps confirmation and price');
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.set_exam_status((select id from st where name = 'p1'), 'published') ->> 'ok', 'true', 'confirmed free exam publishes');
+
+-- Boundary values pass.
+select is(public.save_exam(null, (select id from subj where name = 'ZZ Maths'), repeat('t', 120), repeat('p', 80), 'online', null, null, now() + interval '30 days', 15, 1, 0, now() + interval '30 days') ->> 'ok', 'true', 'minimum boundaries, 120-char title, 80-char paper, deadline == start');
+select is(public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'ZZ Max', '', 'online', null, null, now() + interval '30 days', 600, 1000, 100000, now() + interval '20 days') ->> 'ok', 'true', 'maximum boundaries');
+select is(public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'T', 'P1', 'online', null, null, now() + interval '4 years', 60, 5, 0, now() + interval '3 years 11 months') ->> 'code', 'invalid_input', 'start more than 3 years away');
+select is(public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'T', 'P1', 'online', null, null, 'infinity', 60, 5, 0, now() + interval '20 days') ->> 'code', 'invalid_input', 'infinite start');
+select is(public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'T', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 0, '-infinity') ->> 'code', 'invalid_input', 'infinite deadline');
+
+-- Venue safety.
+insert into st select 'venue2', (public.save_venue(null, 'ZZ Venue 2', array['R1', 'R2'], true) ->> 'id')::uuid;
+select is(public.save_venue(null, 'ZZ Venue 3', array['a', 'A'], true) ->> 'code', 'invalid_input', 'rooms unique case-insensitively');
+insert into st select 'y1', (public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'ZZ Y1', 'P1', 'in_person', (select id from st where name = 'venue2'), 'R1', now() + interval '30 days', 60, 5, 100, now() + interval '20 days') ->> 'id')::uuid;
+insert into st select 'y2', (public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'ZZ Y2', 'P1', 'in_person', (select id from st where name = 'venue2'), 'R2', now() + interval '30 days', 60, 5, 100, now() + interval '20 days') ->> 'id')::uuid;
+select is(public.set_exam_status((select id from st where name = 'y1'), 'published') ->> 'ok', 'true', 'y1 published');
+select is(public.save_venue((select id from st where name = 'venue2'), 'ZZ Venue 2', array['R1', 'R2'], false) ->> 'code', 'conflict', 'cannot deactivate a venue with upcoming exams');
+select is(public.save_venue((select id from st where name = 'venue2'), 'ZZ Venue 2', array['R2'], true) ->> 'code', 'conflict', 'cannot remove a used room');
+select is(public.save_venue((select id from st where name = 'venue2'), 'ZZ Venue 2', array['R9', 'R2'], true) ->> 'code', 'conflict', 'cannot rename a used room');
+select is(public.save_venue((select id from st where name = 'venue2'), 'ZZ Venue 2 renamed', array['R1', 'R2', 'R3'], true) ->> 'ok', 'true', 'adding a room and renaming the venue is fine');
+-- Format switch.
+select is(public.save_exam((select id from st where name = 'y1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Y1', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 100, now() + interval '20 days') ->> 'ok', 'true', 'published exam switches in_person to online');
+select is(public.save_exam((select id from st where name = 'y1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Y1', 'P1', 'in_person', (select id from st where name = 'venue2'), 'R1', now() + interval '30 days', 60, 5, 100, now() + interval '20 days') ->> 'ok', 'true', 'and back to in_person');
+select tests.as_postgres();
+update public.venues set active = false where id = (select id from st where name = 'venue2');
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.save_exam((select id from st where name = 'y1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Y1 retitled', 'P1', 'in_person', (select id from st where name = 'venue2'), 'R1', now() + interval '30 days', 60, 5, 100, now() + interval '20 days') ->> 'ok', 'true', 'published exam at a deactivated venue can be edited without changing venue');
+select is(public.save_exam((select id from st where name = 'y1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Y1 retitled', 'P1', 'in_person', (select id from st where name = 'venue2'), 'R2', now() + interval '30 days', 60, 5, 100, now() + interval '20 days') ->> 'code', 'invalid_input', 'changing the room at a deactivated venue is refused');
+select is(public.set_exam_status((select id from st where name = 'y2'), 'published') ->> 'code', 'invalid_input', 'publish re-validates the venue');
+
+-- Price lock only counts live and refunded bookings.
+insert into st select 'x2', (public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'ZZ X2', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 1000, now() + interval '20 days') ->> 'id')::uuid;
+select is(public.set_exam_status((select id from st where name = 'x2'), 'published') ->> 'ok', 'true', 'x2 published');
+select tests.as_postgres();
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence) values
+  ((select id from st where name = 'x2'), (select id from c where name = 's1'), (select id from c where name = 's1'), 'cancelled', 1000),
+  ((select id from st where name = 'x2'), (select id from c where name = 's1'), (select id from c where name = 's1'), 'expired', 1000);
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.save_exam((select id from st where name = 'x2'), (select id from subj where name = 'ZZ Maths'), 'ZZ X2', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 1200, now() + interval '20 days') ->> 'ok', 'true', 'price change allowed with only cancelled/expired bookings');
+select tests.as_postgres();
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, refunded_pence) values
+  ((select id from st where name = 'x2'), (select id from c where name = 's2'), (select id from c where name = 's2'), 'part_refunded', 1200, 100);
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.save_exam((select id from st where name = 'x2'), (select id from subj where name = 'ZZ Maths'), 'ZZ X2', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 1300, now() + interval '20 days') ->> 'code', 'conflict', 'price change refused once a part-refunded booking exists');
+
+-- Cancelling: part_refunded flagged, closed bookings untouched, seats released, audited.
+insert into st select 'x1', (public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'ZZ X1', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 1000, now() + interval '20 days') ->> 'id')::uuid;
+select is(public.set_exam_status((select id from st where name = 'x1'), 'published') ->> 'ok', 'true', 'x1 published');
+select tests.as_postgres();
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, refunded_pence) values
+  ((select id from st where name = 'x1'), (select id from c where name = 's4'), (select id from c where name = 's4'), 'paid', 1000, 0),
+  ((select id from st where name = 'x1'), (select id from c where name = 's1'), (select id from c where name = 's1'), 'part_refunded', 1000, 400),
+  ((select id from st where name = 'x1'), (select id from c where name = 's1'), (select id from c where name = 's1'), 'expired', 1000, 0),
+  ((select id from st where name = 'x1'), (select id from c where name = 's2'), (select id from c where name = 's2'), 'cancelled', 1000, 0);
+select is(public.seats_taken((select id from st where name = 'x1')), 1, 'one seat taken before cancel');
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.save_exam((select id from st where name = 'x1'), (select id from subj where name = 'ZZ Physics'), 'ZZ X1', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 1000, now() + interval '20 days') ->> 'code', 'conflict', 'subject change refused with seat-taking bookings');
+select is(public.set_exam_status((select id from st where name = 'x1'), 'cancelled') ->> 'ok', 'true', 'x1 cancelled');
+select tests.as_postgres();
+select is((select status::text || '/' || notes from public.bookings where exam_id = (select id from st where name = 'x1') and refunded_pence = 400), 'cancel_requested/exam cancelled — refund due', 'part_refunded booking flagged');
+select is((select count(*)::int from public.bookings where exam_id = (select id from st where name = 'x1') and status in ('expired', 'cancelled') and notes is null), 2, 'expired and cancelled bookings untouched');
+select is(public.seats_taken((select id from st where name = 'x1')), 0, 'seats released after cancel');
+select lives_ok($$insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence)
+  values ((select id from st where name = 'x1'), (select id from c where name = 's5'), (select id from c where name = 's5'), 'awaiting_payment', 1000)$$, 'a fresh booking row can still be inserted');
+select is((select count(*)::int from public.audit_log where action = 'booking_cancelled_by_exam' and target_type = 'booking' and actor_id = (select id from c where name = 'admin') and target_id in (select id from public.bookings where exam_id = (select id from st where name = 'x1'))), 2, 'one audit row per booking changed by the cancel');
+select is((select actor_id from public.audit_log where action = 'exam_cancelled' and target_id = (select id from st where name = 'x1')), (select id from c where name = 'admin'), 'cancel audit has the acting admin');
 
 select * from finish();
 rollback;
