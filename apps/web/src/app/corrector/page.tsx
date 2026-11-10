@@ -6,7 +6,7 @@ export default function CorrectorHome() {
     <GuardedPage roles={["corrector"]}>
       <AppShell role="corrector" title="Exam corrector">
         <Card>
-          <p className="text-sm text-slate-600">Your tools arrive in a later update</p>
+          <p className="text-sm text-slate-600">Marking arrives in the next update</p>
         </Card>
       </AppShell>
     </GuardedPage>
