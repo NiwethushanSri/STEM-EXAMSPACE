@@ -75,3 +75,56 @@ export function examMessageFor(code: string | null | undefined, context: ExamCon
   const table = examMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
 }
+
+/** Which admin booking or finance RPC a failure code came from; the same code reads differently for each. */
+export type AdminBookingContext = "add" | "mark_paid" | "cancel" | "approve" | "decline" | "finance";
+
+const FORBIDDEN = "You do not have permission to do that.";
+const REFRESH = "This booking has already changed. Refresh the page to see where it stands.";
+
+const adminBookingMessages: Record<AdminBookingContext, Record<string, string>> = {
+  add: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Check the student: they must be an active student account. A note can be up to 500 characters.",
+    not_found: "This exam no longer exists. Refresh the page.",
+    not_bookable: "This exam cannot be booked: it must be published, have a confirmed price and not have started.",
+    deadline_passed: "The booking deadline has passed, so an unpaid booking cannot be added. Add it as paid instead.",
+    already_booked: "This student already has a booking for this exam.",
+    fully_booked: "This exam is fully booked",
+  },
+  mark_paid: {
+    forbidden: FORBIDDEN,
+    invalid_input: "A note can be up to 500 characters.",
+    not_found: "This booking no longer exists. Refresh the page.",
+    conflict: REFRESH,
+  },
+  cancel: {
+    forbidden: FORBIDDEN,
+    invalid_input: "A note can be up to 500 characters.",
+    not_found: "This booking no longer exists. Refresh the page.",
+    conflict: REFRESH,
+  },
+  approve: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Enter a refund between £0 and the amount still refundable. A note can be up to 500 characters.",
+    not_found: "This booking no longer exists. Refresh the page.",
+    conflict: REFRESH,
+  },
+  decline: {
+    forbidden: FORBIDDEN,
+    invalid_input: "A note can be up to 500 characters.",
+    not_found: "This booking no longer exists. Refresh the page.",
+    conflict:
+      "This request cannot be declined: it may already be decided, or the exam was cancelled so the family is owed a refund. Refresh the page.",
+  },
+  finance: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Choose a valid date range: both dates are required and the start cannot be after the end.",
+  },
+};
+
+/** Message for an admin booking or finance RPC failure code; unknown codes get the generic message. */
+export function adminBookingMessageFor(code: string | null | undefined, context: AdminBookingContext): string {
+  const table = adminBookingMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}

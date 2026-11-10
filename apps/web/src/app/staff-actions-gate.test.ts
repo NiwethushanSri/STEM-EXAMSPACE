@@ -15,6 +15,7 @@ vi.mock("@/lib/staff-gate", () => ({
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient }));
 vi.mock("@/lib/exam-rpc", () => ({ callSaveExam: vi.fn(), explainSaveConflict: vi.fn(), readRpc: vi.fn() }));
+vi.mock("@/lib/bookings-admin", () => ({ searchStudents: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const raw = {
@@ -53,6 +54,21 @@ describe("admin staff actions called directly by a teacher", () => {
   it("saveVenueAction is refused and touches nothing", async () => {
     const { saveVenueAction } = await import("./admin/venues/actions");
     await expect(saveVenueAction({ id: "", name: "V", rooms: "A", active: true })).rejects.toThrow("NEXT_REDIRECT");
+    expect(createClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("admin booking actions called directly by a teacher", () => {
+  it("every booking action is refused and touches nothing", async () => {
+    const a = await import("./admin/bookings/actions");
+    await expect(a.addBookingAction(UUID, UUID, true, "")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.markPaidAction(UUID, "")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.cancelBookingAction(UUID, "")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.decideCancellationAction(UUID, true, "1", "")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.decideCancellationAction(UUID, false, "0", "")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.searchStudentsAction("ada")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(state.calls).toHaveLength(6);
     expect(createClient).not.toHaveBeenCalled();
   });
 });

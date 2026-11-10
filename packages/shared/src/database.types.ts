@@ -128,6 +128,7 @@ export type Database = {
           hold_expires_at: string | null
           id: string
           notes: string | null
+          paid_at: string | null
           paid_offline: boolean
           refund_due: boolean
           refunded_pence: number
@@ -145,6 +146,7 @@ export type Database = {
           hold_expires_at?: string | null
           id?: string
           notes?: string | null
+          paid_at?: string | null
           paid_offline?: boolean
           refund_due?: boolean
           refunded_pence?: number
@@ -162,6 +164,7 @@ export type Database = {
           hold_expires_at?: string | null
           id?: string
           notes?: string | null
+          paid_at?: string | null
           paid_offline?: boolean
           refund_due?: boolean
           refunded_pence?: number
@@ -802,6 +805,7 @@ export type Database = {
       }
       expire_unconfirmed: { Args: { p_now?: string }; Returns: number }
       expire_unpaid_bookings: { Args: { p_now?: string }; Returns: number }
+      family_has_booking: { Args: { p_exam: string }; Returns: boolean }
       is_staff_admin: { Args: never; Returns: boolean }
       link_children_to_parent: { Args: { p_parent: string }; Returns: number }
       link_student_to_parent: {
@@ -847,6 +851,7 @@ export type Database = {
         Args: { p_booking: string; p_note: string }
         Returns: Json
       }
+      money_totals: { Args: { p_from: string; p_to: string }; Returns: Json }
       my_role: { Args: never; Returns: Database["public"]["Enums"]["app_role"] }
       my_status: {
         Args: never

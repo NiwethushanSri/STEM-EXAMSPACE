@@ -39,3 +39,8 @@ export function poundsToPence(input: string): number | null {
 export function penceToInput(p: number): string {
   return (p / 100).toFixed(2);
 }
+
+/** Money amounts in tables and totals: like formatPence, but zero is "£0.00" rather than "Free". */
+export function formatMoney(p: number): string {
+  return p === 0 ? "£0.00" : formatPence(p);
+}

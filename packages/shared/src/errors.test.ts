@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bannedMessage, bookingMessageFor, examMessageFor, messageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, bannedMessage, bookingMessageFor, examMessageFor, messageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -53,5 +53,24 @@ describe("examMessageFor", () => {
   });
   it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
     expect(examMessageFor(code, "save_exam")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("adminBookingMessageFor", () => {
+  it("maps each code per context", () => {
+    expect(adminBookingMessageFor("deadline_passed", "add")).toContain("Add it as paid instead");
+    expect(adminBookingMessageFor("conflict", "mark_paid")).toContain("already changed");
+    expect(adminBookingMessageFor("conflict", "decline")).toContain("exam was cancelled");
+    expect(adminBookingMessageFor("invalid_input", "approve")).toContain("amount still refundable");
+    expect(adminBookingMessageFor("invalid_input", "finance")).toContain("date range");
+    expect(adminBookingMessageFor("forbidden", "cancel")).toBe("You do not have permission to do that.");
+  });
+  it("falls back to the generic message", () => {
+    expect(adminBookingMessageFor("nope", "add")).toBe("Something went wrong. Please try again.");
+    expect(adminBookingMessageFor(undefined, "finance")).toBe("Something went wrong. Please try again.");
+    expect(adminBookingMessageFor("fully_booked", "finance")).toBe("Something went wrong. Please try again.");
+  });
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
+    expect(adminBookingMessageFor(code, "add")).toBe("Something went wrong. Please try again.");
   });
 });

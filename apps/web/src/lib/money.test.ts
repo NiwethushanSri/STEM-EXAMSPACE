@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLondon, formatPence, penceToInput, poundsToPence } from "./money";
+import { formatLondon, formatMoney, formatPence, penceToInput, poundsToPence } from "./money";
 
 describe("formatPence", () => {
   it("formats pence as pounds", () => {
@@ -55,5 +55,13 @@ describe("penceToInput", () => {
   it("formats pence for an input", () => {
     expect(penceToInput(1500)).toBe("15.00");
     expect(penceToInput(5)).toBe("0.05");
+  });
+});
+
+describe("formatMoney", () => {
+  it("shows zero as £0.00 and otherwise matches formatPence", () => {
+    expect(formatMoney(0)).toBe("£0.00");
+    expect(formatMoney(1250)).toBe("£12.50");
+    expect(formatMoney(-500)).toBe(formatPence(-500));
   });
 });
