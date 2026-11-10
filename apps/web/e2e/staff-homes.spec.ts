@@ -110,7 +110,7 @@ test.beforeAll(async () => {
   const later = await makeExam("Later", LATER, subjectA, "published", 5);
   await makeExam("Draft one", day(10), subjectA, "draft");
   await makeExam("Draft two", day(11), subjectA, "draft");
-  await makeExam("Past", day(-3), subjectA, "completed");
+  const past = await makeExam("Past", day(-3), subjectA, "completed");
   const other = await makeExam("Other subject", SOON, subjectB, "published");
 
   // soon: 3 seats (paid, awaiting, cancel_requested); a cancelled booking takes none.
@@ -120,6 +120,8 @@ test.beforeAll(async () => {
   await book(soon, s4.id, "cancelled");
   // later: 1 seat.
   await book(later, s4.id, "paid");
+  await book(past, s1.id, "paid"); // a past exam: not shown to the tutor
+  await book(past, s2.id, "paid");
   await book(other, s1.id, "paid");
   await book(other, s4.id, "paid");
 });
@@ -169,6 +171,7 @@ test("tutor_sees_exactly_assigned_students_upcoming_bookings", async ({ page }) 
   await expect(rows.filter({ hasText: studentNames.Ada }).filter({ hasText: SUBJECT_B })).toContainText(formatLondon(SOON));
   await expect(page.getByText(studentNames.Dev)).toHaveCount(0);
   await expect(page.getByText("Exam details unavailable")).toHaveCount(0);
+  await expect(page.getByText(`${tag} Past`)).toHaveCount(0);
   await expect(page.getByText("£")).toHaveCount(0);
 });
 

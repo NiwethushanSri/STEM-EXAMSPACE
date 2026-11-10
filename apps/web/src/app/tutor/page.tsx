@@ -19,7 +19,7 @@ async function Body() {
               <span>
                 <span className="font-medium text-slate-900">{r.student}</span>
                 <span className="ml-2 text-slate-500">
-                  {r.exam ? `${r.exam.subject} · ${formatLondon(r.exam.startsAt)}` : "Exam details unavailable"}
+                  {r.exam.subject} · {formatLondon(r.exam.startsAt)}
                 </span>
               </span>
               <Badge tone={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge>

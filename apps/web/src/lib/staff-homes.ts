@@ -62,14 +62,13 @@ export type TutorBookingRow = {
   id: string;
   student: string;
   status: BookingStatus;
-  /** Null when the exam is not readable by a tutor (only published exams are). */
-  exam: { title: string; subject: string; startsAt: string } | null;
+  exam: { title: string; subject: string; startsAt: string };
 };
 
 /**
  * Live bookings of the tutor's assigned students. Everything is read with the tutor's own session, so
- * row-level security decides what is visible. An exam a tutor cannot read (not published) comes back as
- * null and is shown as unavailable; readable exams that have started are dropped.
+ * row-level security decides what is visible. The exam is an inner embed filtered on start time, so past
+ * and unreadable exams drop out on the server and the cap applies to what is left.
  */
 export async function loadTutorHome(): Promise<{ rows: TutorBookingRow[]; students: number; capped: boolean }> {
   const me = await requireStaff(["tutor"]);
@@ -85,14 +84,16 @@ export async function loadTutorHome(): Promise<{ rows: TutorBookingRow[]; studen
     student: Embedded<{ first_name: string; last_name: string }>;
     exam: Embedded<{ title: string; starts_at: string; subject: Embedded<{ name: string }> }>;
   };
+  const nowIso = new Date().toISOString();
   const all: Row[] = [];
   for (const ids of chunk(studentIds, ID_BATCH)) {
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await supabase
         .from("bookings")
-        .select("id, status, student:profiles!bookings_student_id_fkey(first_name, last_name), exam:exams(title, starts_at, subject:subjects(name))")
+        .select("id, status, student:profiles!bookings_student_id_fkey(first_name, last_name), exam:exams!inner(title, starts_at, subject:subjects(name))")
         .in("student_id", ids)
         .in("status", SEAT_STATUSES)
+        .gte("exam.starts_at", nowIso)
         .order("id", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error("bookings could not be loaded");
@@ -101,22 +102,18 @@ export async function loadTutorHome(): Promise<{ rows: TutorBookingRow[]; studen
       if (rows.length < PAGE) break;
     }
   }
-  const now = Date.now();
   const rows: TutorBookingRow[] = [];
   for (const r of all) {
     const ex = one(r.exam);
-    if (ex && Date.parse(ex.starts_at) < now) continue;
+    if (!ex) continue;
     const st = one(r.student);
     rows.push({
       id: r.id,
       status: r.status,
       student: st ? `${st.first_name} ${st.last_name}`.trim() : "Student",
-      exam: ex ? { title: ex.title, subject: one(ex.subject)?.name ?? "", startsAt: ex.starts_at } : null,
+      exam: { title: ex.title, subject: one(ex.subject)?.name ?? "", startsAt: ex.starts_at },
     });
   }
-  rows.sort((a, b) => {
-    if (!a.exam || !b.exam) return a.exam ? -1 : b.exam ? 1 : a.student.localeCompare(b.student);
-    return Date.parse(a.exam.startsAt) - Date.parse(b.exam.startsAt) || a.student.localeCompare(b.student);
-  });
+  rows.sort((a, b) => Date.parse(a.exam.startsAt) - Date.parse(b.exam.startsAt) || a.student.localeCompare(b.student));
   return { rows: rows.slice(0, TUTOR_CAP), students: studentIds.length, capped: rows.length > TUTOR_CAP };
 }
