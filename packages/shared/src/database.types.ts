@@ -704,6 +704,18 @@ export type Database = {
           parent_id: string
         }[]
       }
+      attendance_can_manage: {
+        Args: { p_actor: string; p_subject: number }
+        Returns: boolean
+      }
+      attendance_lookup: {
+        Args: { p_exam: string; p_index: string }
+        Returns: Json
+      }
+      attendance_lookup_as: {
+        Args: { p_actor: string; p_exam: string; p_index: string }
+        Returns: Json
+      }
       booking_create_as: {
         Args: {
           p_actor: string
@@ -746,6 +758,11 @@ export type Database = {
       clear_invite_tx: {
         Args: { p_actor: string; p_email: string }
         Returns: string
+      }
+      close_register: { Args: { p_exam: string }; Returns: Json }
+      close_register_as: {
+        Args: { p_actor: string; p_exam: string; p_now: string }
+        Returns: Json
       }
       complete_profile: {
         Args: {
@@ -813,6 +830,19 @@ export type Database = {
         Args: { p_idx_key: string; p_ip_key: string }
         Returns: undefined
       }
+      mark_attendance: {
+        Args: { p_exam: string; p_student: string }
+        Returns: Json
+      }
+      mark_attendance_as: {
+        Args: {
+          p_actor: string
+          p_exam: string
+          p_now: string
+          p_student: string
+        }
+        Returns: Json
+      }
       mark_booking_paid: {
         Args: { p_booking: string; p_note: string }
         Returns: Json
@@ -822,6 +852,7 @@ export type Database = {
         Args: never
         Returns: Database["public"]["Enums"]["account_status"]
       }
+      normalise_index: { Args: { p_raw: string }; Returns: string }
       purge_student_residue: { Args: { p_user: string }; Returns: undefined }
       register_child_tx: {
         Args: { p_child: string; p_parent: string }
