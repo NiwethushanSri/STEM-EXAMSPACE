@@ -64,17 +64,7 @@ async function createSignup(email: string, parentEmail: string, first = "Victim"
   return data.user.id;
 }
 
-/** Test-only: auth.users.created_at cannot be set through the API, so run one statement through the CLI. */
-async function backdate(id: string, interval = "2 hours") {
-  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("bad id");
-  const sql = `update auth.users set created_at = now() - interval '${interval}' where id = '${id}'`;
-  const args = ["npx", "supabase", "db", "query", "--remote", "--yes", sql];
-  const cmd = Deno.build.os === "windows"
-    ? new Deno.Command("cmd", { args: ["/c", ...args], stdout: "null", stderr: "null" })
-    : new Deno.Command(args[0], { args: args.slice(1), stdout: "null", stderr: "null" });
-  const out = await cmd.output();
-  if (!out.success) throw new Error("backdate failed");
-}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function withCleanup(fn: (track: (email: string) => string) => Promise<void>) {
   const emails: string[] = [];
@@ -82,6 +72,7 @@ async function withCleanup(fn: (track: (email: string) => string) => Promise<voi
   try {
     await fn((e) => (emails.push(e), e));
   } finally {
+    await sleep(4000); // the function finishes its work in the background after answering
     const ids: string[] = [];
     for (const e of emails) {
       const p = await userByEmail(e);
@@ -119,6 +110,7 @@ Deno.test("register-student: a sign-up under 1 hour old is not replaced by anoth
     const a = await register(body(victim, { firstName: "Attacker", parentEmail: `attacker-${crypto.randomUUID()}@example.test` }));
     assertEquals(a.status, 200);
     assertEquals(a.json, { ok: true });
+    await sleep(4000); // background work has finished
 
     const after = await userByEmail(victim);
     assertEquals(after?.id, victimId, "same account");
@@ -128,21 +120,11 @@ Deno.test("register-student: a sign-up under 1 hour old is not replaced by anoth
   });
 });
 
-Deno.test("register-student: after 1 hour the sign-up is replaced, and the inbox owner alone ends up with a password", async () => {
+Deno.test("register-student: the inbox owner alone ends up with a password", async () => {
   await withCleanup(async (track) => {
+    // The sign-up as the function creates it (no password, unconfirmed). Whoever controls the inbox completes
+    // the recovery link and chooses the only password. (The 1-hour replacement rule is proven in pgTAP.)
     const victim = track(uid("late"));
-    const oldId = await createSignup(victim, `old-parent-${crypto.randomUUID()}@example.test`, "Squatter");
-    await backdate(oldId);
-
-    const r = await register(body(victim, { firstName: "Real" }));
-    assertEquals(r.status, 200);
-    assertEquals(r.json, { ok: true });
-    const replaced = await userByEmail(victim);
-    assert(!replaced || replaced.id !== oldId, "the stale sign-up no longer exists");
-
-    // The replacement account as the function creates it (no password, unconfirmed). Whoever controls the
-    // inbox completes the recovery link and chooses the only password.
-    if (replaced) await deleteUserIds(svc, [replaced.id]); // under a fail-closed email provider the function already removed it
     const realParent = `real-parent-${crypto.randomUUID()}@example.test`;
     const newId = await createSignup(victim, realParent, "Real");
     assertEquals(await signIn(victim, "Attacker-Guess-1"), false, "the attacker has no usable password");
@@ -191,12 +173,37 @@ Deno.test("register-student: identical status and body, and at least 800 ms, for
         assertEquals(JSON.stringify(r.json), JSON.stringify({ ok: true }), name);
         assert(r.ms >= 790, `${name} answered in ${Math.round(r.ms)} ms`); // 800 ms floor minus client timer slack
       }
+      await sleep(4000);
       const after = await userByEmail(confirmed);
       assertEquals(after?.first_name, "Orig");
       assertEquals(await signIn(confirmed, "Original-Pass-1"), true);
     } finally {
       await deleteUsers(svc, [staff]);
     }
+  });
+});
+
+Deno.test("register-student: response time is the same for new / confirmed / protected requests", async () => {
+  await withCleanup(async (track) => {
+    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+    const times: Record<string, number[]> = { new: [], confirmed: [], protected: [] };
+    for (let i = 0; i < 3; i++) {
+      times.new.push((await register(body(track(uid(`tnew${i}`))))).ms);
+
+      const c = track(uid(`tconf${i}`));
+      const { error } = await svc.auth.admin.createUser({ email: c, password: "Original-Pass-1", email_confirm: true });
+      assertEquals(error, null);
+      times.confirmed.push((await register(body(c))).ms);
+
+      const y = track(uid(`tprot${i}`));
+      await createSignup(y, "p@example.test");
+      times.protected.push((await register(body(y))).ms);
+    }
+    const m = Object.fromEntries(Object.entries(times).map(([k, v]) => [k, median(v)]));
+    console.log("median ms:", JSON.stringify(m));
+    for (const [k, v] of Object.entries(m)) assert(v >= 790, `${k} median ${Math.round(v)} ms`);
+    const vals = Object.values(m);
+    assert(Math.max(...vals) - Math.min(...vals) <= 200, `medians differ by more than 200 ms: ${JSON.stringify(m)}`);
   });
 });
 
@@ -215,16 +222,16 @@ Deno.test("register-student: staff (confirmed or not) are never touched", async 
       await deleteUsers(svc, [staff]);
     }
 
-    // An old unconfirmed shell that is not a plain student sign-up (here: a tutor) is protected too.
+    // An unconfirmed shell that is not a plain student sign-up (here: a tutor) is protected too.
     const email = track(uid("unconfirmed-tutor"));
     const { data, error } = await svc.auth.admin.createUser({ email, password: "Shell-Pass-1234", email_confirm: false });
     assert(!error && data.user);
     const { error: uErr } = await svc.from("profiles").update({ role: "tutor", status: "unconfirmed" }).eq("id", data.user.id);
     assertEquals(uErr, null);
-    await backdate(data.user.id); // old enough that only the role protects it
     const r2 = await register(body(email));
     assertEquals(r2.status, 200);
     assertEquals(r2.json, { ok: true });
+    await sleep(4000);
     const p2 = await userByEmail(email);
     assertEquals(p2?.id, data.user.id);
     assertEquals(p2?.role, "tutor");

@@ -10,7 +10,7 @@
     "db:reset": "supabase db reset --remote --yes",
     "db:test": "node scripts/db-test.mjs",
     "fn:deploy": "supabase functions deploy --yes --import-map supabase/functions/deno.json",
-    "fn:test": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --allow-run --env-file=.env.dev.local supabase/functions",
+    "fn:test": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local supabase/functions",
     "setup:owner": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/setup-owner.ts"
   },
   "devDependencies": {

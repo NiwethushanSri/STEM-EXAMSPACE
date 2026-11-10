@@ -89,7 +89,7 @@ Status values: `unconfirmed` → `pending` → `profile_incomplete` → `active`
 
 | Status | What the student sees after signing in |
 |---|---|
-| unconfirmed | "Check your email to confirm your address" + resend link |
+| unconfirmed | "Check your email to confirm your address and choose your password". Sign-up takes no password: confirmation is the emailed link, and "Forgot password" (or the resend button, which does the same) sends the link again |
 | pending | "Awaiting approval" |
 | profile_incomplete | Profile form only |
 | active | Full app |

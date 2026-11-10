@@ -52,11 +52,19 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
         data.link ? `<p><a href="${esc(data.link)}">Set up your account</a></p>` : ""
       }${expiryNote()}`;
       break;
-    case "confirm_signup":
+    case "confirm_signup": {
+      const row = (label: string, v: string | undefined) => (v ? `<li>${label}: ${esc(v)}</li>` : "");
+      const details = [
+        row("Student name", data.student_name),
+        row("Date of birth", data.date_of_birth),
+        row("School", data.school),
+        row("Parent email", data.parent_email),
+      ].join("");
       html = `<p>Hi ${name},</p><p>Thanks for registering with Stem Examspace. Use this link to confirm your email and choose your password. If you did not register, ignore this email.</p>${
-        data.link ? `<p><a href="${esc(data.link)}">Confirm your email and choose your password</a></p>` : ""
-      }${expiryNote(", or register again")}`;
+        details ? `<p>This registration was made with these details:</p><ul>${details}</ul><p>If these details are not yours or are wrong, ignore this email and contact the institution.</p>` : ""
+      }${data.link ? `<p><a href="${esc(data.link)}">Confirm your email and choose your password</a></p>` : ""}${expiryNote(", or register again")}`;
       break;
+    }
   }
   return { subject: SUBJECTS[template], html };
 }

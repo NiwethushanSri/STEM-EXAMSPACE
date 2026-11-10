@@ -74,10 +74,9 @@ function LoginForm() {
 
   async function resend() {
     if (!unconfirmedEmail) return;
-    const { error: err } = await createClient().auth.resend({
-      type: "signup",
-      email: unconfirmedEmail,
-      options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
+    // Same as the account page: a recovery link, which confirms the address and lets the person choose a password.
+    const { error: err } = await createClient().auth.resetPasswordForEmail(unconfirmedEmail, {
+      redirectTo: `${window.location.origin}/auth/callback`,
     });
     if (err?.status === 429) setError(messageFor("rate_limited"));
     else setResent(true);

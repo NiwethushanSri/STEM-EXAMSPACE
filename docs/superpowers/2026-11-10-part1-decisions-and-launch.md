@@ -42,8 +42,8 @@ Data and security model
 - Approval, rejection and all account changes write their audit row in the same step as the change; audit rows for rejections, expiry and deletions contain no personal data.
 - Index numbers: `SE-<year>-<4+ digits>`, year in UTC, sequence restarts each year, never truncated above 9,999.
 - Unconfirmed sign-ups deleted after 7 days by a nightly job at 03:00.
-- Student sign-up runs on the server and takes no password: the emailed recovery link confirms the address and the inbox owner chooses the password. An unconfirmed sign-up with the same email is replaced only once it is over 1 hour old; younger, confirmed or protected accounts are never touched; public Supabase sign-up is off. (R1 fixed.)
-- Registration always answers the same 200 `{ ok: true }` (new, replaced, protected, already confirmed, email not sent) after at least 800 ms; 400 and 429 stay unpadded. (R2 fixed.)
+- Student sign-up runs on the server and takes no password: the emailed recovery link confirms the address and the inbox owner chooses the password. An unconfirmed sign-up with the same email is replaced only once creation and the last confirmation or recovery link are all over 1 hour old; younger, confirmed or protected accounts are never touched; public Supabase sign-up is off. (R1 fixed.)
+- Registration always answers the same 200 `{ ok: true }` (new, replaced, protected, already confirmed, email not sent) after a fixed 800 ms (the slow work runs in the background, so timing does not depend on the case); 400 and 429 stay unpadded. (R2 fixed.)
 - Set-password page: 8 to 72 characters, with a clear message for weak or breached passwords instead of "Something went wrong". (R3 fixed.)
 - Registration limits: 30 per internet address and 3 per email per 15 minutes, both before any lookup (`login_attempt_begin_n`); index-number login keeps 5 / 5. (R4 fixed.)
 - The "Awaiting approval" screen shows the parent email on record with "Not right? Contact the institution."; "Resend confirmation email" sends a recovery link.
@@ -66,7 +66,11 @@ Web and tooling
 
 ## 4. Open risks
 
-None open. R1 to R4 (newest sign-up wins, registration existence oracle, password-policy messages, registration limit) are fixed and listed under Decisions.
+R1 to R4 (newest sign-up wins, registration existence oracle, password-policy messages, registration limit) are fixed and listed under Decisions. Residual risks:
+
+- Someone can register an inbox owner's address with details of their choosing. Mitigations: the confirmation email and the pending screen both show the registered details, the inbox owner can ignore the email, and an admin approves every account.
+- The per-email limit (3 in 15 minutes) can be used to delay a target's own registration. No data is exposed by this.
+- The per-IP key trusts the gateway's `x-forwarded-for` header.
 
 ## 5. Parked (waiting on something)
 

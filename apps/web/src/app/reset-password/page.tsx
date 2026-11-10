@@ -48,13 +48,26 @@ function RequestForm() {
   );
 }
 
+type PasswordError = { code?: string; message?: string; reasons?: unknown; weak_password?: { reasons?: unknown } };
+
+/** GoTrue's weak_password reasons (AuthWeakPasswordError.reasons, or the raw body's weak_password.reasons). */
+function weakReasons(err: PasswordError | null): string[] {
+  const r = err?.reasons ?? err?.weak_password?.reasons;
+  return Array.isArray(r) ? r.filter((x): x is string => typeof x === "string") : [];
+}
+
 /** Policy errors get a clear message; only genuine failures fall back to the generic one. */
-function passwordErrorMessage(err: { code?: string; message?: string } | null): string {
+function passwordErrorMessage(err: PasswordError | null): string {
   const code = err?.code ?? "";
   const text = (err?.message ?? "").toLowerCase();
-  if (code === "weak_password" || /pwned|breach|leaked|too common|easy to guess/.test(text)) {
-    return "Choose a stronger password — this one is too common or has appeared in a data breach.";
+  if (code === "weak_password" || err?.weak_password || weakReasons(err).length) {
+    const reasons = weakReasons(err);
+    if (reasons.includes("length")) return "Use at least 8 characters.";
+    if (reasons.includes("characters")) return "Use a mix of letters, numbers and symbols.";
+    if (reasons.includes("pwned")) return "This password has appeared in a data breach — choose another.";
+    return "Choose a stronger password that meets the password policy.";
   }
+  if (/pwned|breach|leaked/.test(text)) return "This password has appeared in a data breach — choose another.";
   if (code === "same_password") return "Choose a password you have not used before.";
   if (/at least|too short|minimum/.test(text)) return "Use at least 8 characters.";
   if (/72|too long|at most|maximum/.test(text)) return "Use 72 characters or fewer.";

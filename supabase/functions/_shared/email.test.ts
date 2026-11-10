@@ -102,3 +102,24 @@ Deno.test("templates: confirm_signup asks the reader to choose a password", asyn
     return Promise.resolve();
   });
 });
+
+Deno.test("templates: confirm_signup lists the registered details (escaped) and tells a wrong recipient to ignore it", async () => {
+  await withEnv({ SITE_URL: "https://stem.example/" }, () => {
+    const { html } = _renderForTest("confirm_signup", {
+      link: "https://stem.example/auth/callback?a=1",
+      name: "Bo",
+      student_name: "<b>Bo</b> Perera",
+      date_of_birth: "2012-03-04",
+      school: "Royal & College",
+      parent_email: "parent@example.test",
+    });
+    assertStringIncludes(html, "Student name: &lt;b&gt;Bo&lt;/b&gt; Perera");
+    assertStringIncludes(html, "Date of birth: 2012-03-04");
+    assertStringIncludes(html, "School: Royal &amp; College");
+    assertStringIncludes(html, "Parent email: parent@example.test");
+    assertStringIncludes(html, "If these details are not yours or are wrong, ignore this email and contact the institution.");
+    assertStringIncludes(html, "This link works for 1 hour");
+    assert(!html.includes("<b>Bo"));
+    return Promise.resolve();
+  });
+});

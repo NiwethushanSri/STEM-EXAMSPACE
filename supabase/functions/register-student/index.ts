@@ -10,16 +10,22 @@ const internal = () => new HttpError("internal", 500, "Something went wrong. Ple
 /** The one answer for a new, replaced, protected, already registered or undeliverable address, so the form never reveals which exist. */
 const neutral = () => jsonResponse({ ok: true });
 
-/** Every answer after validation takes at least this long, so timing does not reveal what happened. */
+/** Every answer after validation and the rate limits takes this long, whatever happened, so timing reveals nothing. */
 const MIN_MS = 800;
+/** Used only when background work is unavailable: the slow work then runs inline and the answer is padded to this. */
+const FALLBACK_MS = 2500;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+declare const EdgeRuntime: { waitUntil?: (p: Promise<unknown>) => void } | undefined;
 
 /**
  * Public student registration (section 6.1). No password is taken here: the account is created without one and
  * the emailed link (a recovery link) confirms the address and lets the inbox owner choose the password. Whoever
  * registers an address therefore never holds a usable password for it. Unconfirmed sign-ups older than 1 hour
  * are replaced by a newer attempt; younger ones, confirmed accounts and any other kind of account are untouched.
- * Every answer after validation is the same 200 { ok: true } after at least 800 ms.
+ * Every answer after validation and the rate limits is the same 200 { ok: true } after 800 ms. The slow work
+ * (look-up, createUser, generateLink, email, undo) runs in the background via EdgeRuntime.waitUntil so the
+ * response time does not depend on it; without waitUntil it runs inline and the answer is padded to 2500 ms.
  * Deploy with --no-verify-jwt (the caller has no session).
  */
 Deno.serve(handle(async (req) => {
@@ -63,17 +69,23 @@ Deno.serve(handle(async (req) => {
   }
   if (allowed !== true) throw new HttpError("rate_limited", 429, "Too many attempts. Try again later.");
 
-  const pad = async () => {
+  const input: Input = { firstName, lastName, school, parentName, email, parentEmail, dob: String(dob) };
+  const work = createSignup(svc, input).catch((e) => {
+    // Codes only: never the address, names or the error text.
+    console.error("register background failed:", e instanceof HttpError ? e.code : "unknown");
+  });
+
+  if (typeof EdgeRuntime !== "undefined" && typeof EdgeRuntime.waitUntil === "function") {
+    EdgeRuntime.waitUntil(work);
     const left = MIN_MS - (performance.now() - started);
     if (left > 0) await sleep(left);
-  };
-  try {
-    await createSignup(svc, { firstName, lastName, school, parentName, email, parentEmail, dob: String(dob) });
-  } catch (e) {
-    await pad();
-    throw e;
+    return neutral();
   }
-  await pad();
+  // Fallback: wait for the work, but never answer before FALLBACK_MS.
+  await work;
+  const elapsed = performance.now() - started;
+  if (elapsed > FALLBACK_MS) console.error("register inline work exceeded", FALLBACK_MS, "ms");
+  else await sleep(FALLBACK_MS - elapsed);
   return neutral();
 }));
 
@@ -135,7 +147,14 @@ async function createSignup(svc: ReturnType<typeof serviceClient>, i: Input): Pr
   }
   let sent = false;
   try {
-    sent = await sendEmail(i.email, "confirm_signup", { link: buildAuthLink(hashed, "recovery"), name: i.firstName });
+    sent = await sendEmail(i.email, "confirm_signup", {
+      link: buildAuthLink(hashed, "recovery"),
+      name: i.firstName,
+      student_name: `${i.firstName} ${i.lastName}`,
+      date_of_birth: i.dob,
+      school: i.school,
+      parent_email: i.parentEmail,
+    });
   } catch (e) {
     console.error("confirm link failed:", e instanceof Error ? e.message : "unknown"); // e.g. SITE_URL missing
   }

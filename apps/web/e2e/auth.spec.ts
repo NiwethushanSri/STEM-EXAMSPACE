@@ -191,7 +191,7 @@ test("set_password_shows_a_clear_message_for_weak_passwords", async ({ page }) =
   await page.getByLabel("Confirm new password").fill("password1234");
   await page.getByRole("button", { name: "Set password" }).click();
   await expect(page.locator("p[role=alert]")).toHaveText(
-    "Choose a stronger password \u2014 this one is too common or has appeared in a data breach.",
+    "This password has appeared in a data breach \u2014 choose another.",
   );
   // Over 72 characters is refused with clear text before anything is sent.
   const long = "a1".repeat(40);
