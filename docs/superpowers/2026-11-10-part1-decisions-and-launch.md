@@ -92,3 +92,23 @@ L6. Rework the Super administrator setup guard (it currently refuses the dev pro
 L7. Supabase Pro (backups); privacy notice and terms pages linked from registration; data-processing agreements with email providers.
 L8. Vercel: live domain; preview deployments must not point at the live database; review deployment protection.
 L9. GitHub: repository owner creates the `integration` environment (main only) with the test project's secrets and deletes any repository-level copies.
+
+## 7. Part 2 additions (exams and bookings, before the payment gateway)
+
+Delivered stages 1–5 of `specs/2026-11-10-part2-exams-bookings-design.md` §9: venues and exams, bookings with offline payment, cancellations and recorded refunds, finance totals, attendance with QR/typed index numbers, index cards, and teacher/tutor/corrector home pages. Migrations 0029–0042.
+
+Decisions taken on the owner's behalf (cost if wrong):
+- Unpaid bookings hold a seat until the booking deadline; a family can have at most 3 unpaid bookings and can cancel an unpaid one itself. — A large family must pay before booking a fourth.
+- Deleting an account releases only bookings on upcoming published exams (paid ones are flagged for refund); bookings on exams already sat stay for the records, anonymised.
+- An admin can add an unpaid booking only before the booking deadline; after it, only as paid.
+- Attendance: "booked" means paid or cancellation requested; present before start + 15 minutes, late after; closing the register marks the rest absent, releases leftover unpaid bookings and completes the exam.
+- Teachers looking up an index number for a student not booked on that exam see only "No paid booking" (no name or photo).
+- Teachers see "Photo unavailable" and no names in register lists; only admins can open student photos (owner decision pending).
+- Index cards: the student and owner/admin only; the QR holds the index number only.
+- Finance counts money by the London month it was paid (`paid_at`); refunds are shown against that month. Default range is the academic year 1 Sep – 31 Aug.
+- Booking notes are visible to the family (the note box says so).
+
+Launch checklist additions:
+L10. Confirm both scheduled jobs exist on the live project after the clean rebuild: `expire-unpaid-bookings` (every 5 minutes) and the nightly unconfirmed sign-up clean-up.
+L11. Stripe (Part 2 stage 6) is not built yet: the owner creates a Stripe account (test mode first) and sets `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as function secrets; webhook endpoint `<SUPABASE_URL>/functions/v1/stripe-webhook`. Live mode only after this checklist.
+L12. The dev `paid_at` backfill is an estimate; the clean rebuild (L2) removes it.
