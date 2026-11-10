@@ -782,10 +782,43 @@ export type Database = {
         Args: { p_dob: string; p_index: string; p_parent: string }
         Returns: boolean
       }
+      save_exam: {
+        Args: {
+          p_booking_deadline: string
+          p_duration_minutes: number
+          p_format: Database["public"]["Enums"]["exam_format"]
+          p_id: string
+          p_paper: string
+          p_price_pence: number
+          p_room: string
+          p_seat_limit: number
+          p_starts_at: string
+          p_subject_id: number
+          p_title: string
+          p_venue_id: string
+        }
+        Returns: Json
+      }
+      save_venue: {
+        Args: {
+          p_active: boolean
+          p_id: string
+          p_name: string
+          p_rooms: string[]
+        }
+        Returns: Json
+      }
       seats_taken: { Args: { p_exam: string }; Returns: number }
       set_account_status_tx: {
         Args: { p_action: string; p_actor: string; p_target: string }
         Returns: string
+      }
+      set_exam_status: {
+        Args: {
+          p_id: string
+          p_status: Database["public"]["Enums"]["exam_status"]
+        }
+        Returns: Json
       }
     }
     Enums: {
