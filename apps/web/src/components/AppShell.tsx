@@ -13,9 +13,11 @@ export function ShellUserProvider({ user, children }: { user: ShellUser; childre
   return <ShellUserContext.Provider value={user}>{children}</ShellUserContext.Provider>;
 }
 
+const LIVE_ADMIN = ["/admin/accounts", "/admin/exams", "/admin/venues"];
+
 /** Admin pages that still show sample data until their part of the build. */
 function isPreviewPath(pathname: string) {
-  return pathname.startsWith("/admin/") && !pathname.startsWith("/admin/accounts");
+  return pathname.startsWith("/admin/") && !LIVE_ADMIN.some((p) => pathname.startsWith(p));
 }
 
 function SignOut() {
@@ -78,9 +80,17 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/owner", label: "Dashboard" },
       { href: "/owner/accounts", label: "Accounts" },
       { href: "/owner/staff", label: "Staff" },
+      { href: "/admin/exams", label: "Exams" },
+      { href: "/admin/venues", label: "Venues" },
     ],
   },
-  teacher: { name: "Teacher", items: [{ href: "/teacher", label: "Home" }] },
+  teacher: {
+    name: "Teacher",
+    items: [
+      { href: "/teacher", label: "Home" },
+      { href: "/teacher/exams", label: "Exams" },
+    ],
+  },
   tutor: { name: "Tutor", items: [{ href: "/tutor", label: "Home" }] },
   corrector: { name: "Exam corrector", items: [{ href: "/corrector", label: "Home" }] },
   admin: {
@@ -88,7 +98,8 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
     items: [
       { href: "/admin", label: "Dashboard" },
       { href: "/admin/accounts", label: "Accounts" },
-      { href: "/admin/exams", label: "Exams & timetable" },
+      { href: "/admin/exams", label: "Exams" },
+      { href: "/admin/venues", label: "Venues" },
       { href: "/admin/results", label: "Results sheets" },
       { href: "/admin/bookings", label: "Bookings & payments" },
       { href: "/admin/papers", label: "Paper allocation" },

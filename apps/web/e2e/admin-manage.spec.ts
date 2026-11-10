@@ -138,6 +138,6 @@ test("mock_student_page_redirects", async ({ page }) => {
   await expect(page).toHaveURL(/\/admin$/);
   await page.goto("/examiner");
   await expect(page).toHaveURL(/\/admin$/);
-  await page.goto("/admin/exams");
+  await page.goto("/admin/results");
   await expect(page.getByText("Preview — sample data")).toBeVisible();
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLondon, formatPence } from "./money";
+import { formatLondon, formatPence, penceToInput, poundsToPence } from "./money";
 
 describe("formatPence", () => {
   it("formats pence as pounds", () => {
@@ -31,5 +31,29 @@ describe("formatLondon", () => {
   });
   it("returns empty text for an invalid timestamp", () => {
     expect(formatLondon("nope")).toBe("");
+  });
+});
+
+describe("poundsToPence", () => {
+  it("converts whole and fractional pounds", () => {
+    expect(poundsToPence("15")).toBe(1500);
+    expect(poundsToPence("15.5")).toBe(1550);
+    expect(poundsToPence("15.50")).toBe(1550);
+    expect(poundsToPence("0.99")).toBe(99);
+    expect(poundsToPence("0")).toBe(0);
+    expect(poundsToPence(" 7.05 ")).toBe(705);
+    expect(poundsToPence("1000.00")).toBe(100000);
+  });
+  it("rejects negatives, extra decimals and junk", () => {
+    for (const bad of ["", "-1", "-0", "+5", "1.234", "1.", ".5", "1e3", "£5", "5,00", "abc", "1 000", "0x10"]) {
+      expect(poundsToPence(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("penceToInput", () => {
+  it("formats pence for an input", () => {
+    expect(penceToInput(1500)).toBe("15.00");
+    expect(penceToInput(5)).toBe("0.05");
   });
 });

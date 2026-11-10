@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bannedMessage, bookingMessageFor, messageFor, type ErrorCode } from "./errors";
+import { bannedMessage, bookingMessageFor, examMessageFor, messageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -37,5 +37,21 @@ describe("bookingMessageFor", () => {
 describe("bookingMessageFor (prototype keys)", () => {
   it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
     expect(bookingMessageFor(code)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("examMessageFor", () => {
+  it("maps each code per context", () => {
+    expect(examMessageFor("conflict", "save_venue")).toContain("upcoming exam still uses this venue");
+    expect(examMessageFor("conflict", "set_status")).toContain("status has already changed");
+    expect(examMessageFor("invalid_input", "save_exam")).toContain("seat limit (1 to 1000)");
+    expect(examMessageFor("not_found", "set_status")).toBe("This exam no longer exists. Refresh the page.");
+  });
+  it("falls back to the generic message", () => {
+    expect(examMessageFor("nope", "save_exam")).toBe("Something went wrong. Please try again.");
+    expect(examMessageFor(undefined, "set_status")).toBe("Something went wrong. Please try again.");
+  });
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
+    expect(examMessageFor(code, "save_exam")).toBe("Something went wrong. Please try again.");
   });
 });
