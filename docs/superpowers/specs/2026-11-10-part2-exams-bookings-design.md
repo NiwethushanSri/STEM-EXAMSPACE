@@ -97,6 +97,14 @@ Staff:
 - Deno: create-booking (parent/student/forbidden cases, free exam), webhook (signature, duplicate, late payment with and without seat, refund events) using Stripe test mode and signed test payloads.
 - Playwright (Stripe test mode): publish exam → parent books with test card → booking paid → admin sees money → request cancellation → admin partial refund; attendance by typed index number; index card renders.
 
-## 9. Delivery
+## 9. Delivery (owner decision 2026-11-10: payment gateway last)
 
-Built in stages, each reviewed: (1) venues + exams + timetable; (2) bookings + Stripe; (3) refunds + finance; (4) attendance + index cards; (5) staff home pages.
+Built in stages, each reviewed:
+1. Venues + exams + timetable (public `/exams`, admin/teacher exam editing).
+2. Bookings without a gateway: "Book" creates a booking with status `awaiting_payment` that holds the seat (seat checks, deadline and one-per-student rules as in §4). Admin/owner marks it paid ("paid offline") or cancels it. Unpaid `awaiting_payment` bookings are released automatically at the booking deadline. "My bookings" for families; admin bookings page.
+3. Cancellations, manual refunds (recorded by admin, amount and note; no gateway call) and money totals (`/admin/finance`).
+4. Attendance + index cards.
+5. Staff home pages (teacher, tutor, corrector).
+6. LAST — Stripe Checkout: adds `reserved` with the 30-minute hold, `create-booking` Stripe session, `stripe-webhook`, Stripe refunds and automatic refunds on institution cancellation, exactly as in §4. Existing `awaiting_payment`/offline flows remain for admins.
+
+Until stage 6, booking status values used are `awaiting_payment`, `paid`, `cancel_requested`, `refunded`, `part_refunded`, `cancelled`, `expired`; the status set in §3 gains `awaiting_payment`.
