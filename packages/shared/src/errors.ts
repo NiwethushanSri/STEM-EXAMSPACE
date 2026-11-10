@@ -38,5 +38,5 @@ const bookingMessages: Record<string, string> = {
 
 /** Message for a booking RPC failure code; unknown codes get the generic message. */
 export function bookingMessageFor(code: string | null | undefined): string {
-  return (code && bookingMessages[code]) || messages.internal;
+  return code && Object.hasOwn(bookingMessages, code) ? bookingMessages[code] : messages.internal;
 }

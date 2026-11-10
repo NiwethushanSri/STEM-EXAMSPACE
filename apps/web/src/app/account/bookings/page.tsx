@@ -63,6 +63,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
 
   const renderRow = (r: Row) => {
     const subject = one(r.exam?.subject)?.name ?? "Exam";
+    const examCancelled = r.exam?.status === "cancelled";
     const venue = one(r.exam?.venue)?.name;
     const future = !!r.exam && new Date(r.exam.starts_at) > now && r.exam.status !== "cancelled";
     return (
@@ -76,6 +77,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
         </div>
         {r.exam ? (
           <div className="text-slate-600">
+            {examCancelled && <span className="mr-2 font-medium text-red-700">Exam cancelled</span>}
             {formatLondon(r.exam.starts_at)} · {r.exam.duration_minutes} min · {r.exam.format === "online" ? "Online" : (venue ?? "Venue to be confirmed")}
           </div>
         ) : (

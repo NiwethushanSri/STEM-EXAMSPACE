@@ -16,7 +16,7 @@ export async function cancelBooking(_prev: CancelState, form: FormData): Promise
     return { error: messageFor("forbidden"), done: false };
   }
   const booking = String(form.get("booking") ?? "");
-  if (!UUID.test(booking)) return { error: bookingMessageFor("invalid_input"), done: false };
+  if (!UUID.test(booking)) return { error: messageFor("invalid_input"), done: false };
 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("request_cancellation", { p_booking: booking });

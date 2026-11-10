@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useState, useSyncExternalStore, type FormEvent } from "react";
 import { homeFor, indexLogin, messageFor } from "@stem/shared";
 import { AuthLayout, inputClass, labelClass } from "@/components/AuthLayout";
 import { createClient } from "@/lib/supabase/client";
@@ -19,6 +19,12 @@ function LoginForm() {
   const [unconfirmedEmail, setUnconfirmedEmail] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Until hydration the form would submit natively; method="post" plus a disabled button keeps credentials out of the URL.
+  const ready = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -86,7 +92,7 @@ function LoginForm() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form method="post" onSubmit={handleSubmit} className="space-y-5">
       {deleted && (
         <p role="status" className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-800">
           Your account and data have been deleted.
@@ -126,7 +132,7 @@ function LoginForm() {
 
       <button
         type="submit"
-        disabled={busy}
+        disabled={busy || !ready}
         className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white shadow-md transition hover:bg-blue-700 disabled:opacity-60"
       >
         {busy ? "Signing in..." : "Sign in"}

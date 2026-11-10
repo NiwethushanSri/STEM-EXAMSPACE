@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Frame } from "@/components/bookings/Frame";
+import { isClosed } from "@/lib/exam-state";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 
@@ -30,7 +31,8 @@ async function Timetable({ searchParams }: { searchParams: Promise<{ subject?: s
     .from("exams_public")
     .select(COLUMNS)
     .gt("starts_at", now.toISOString())
-    .order("starts_at", { ascending: true });
+    .order("starts_at", { ascending: true })
+    .limit(200);
 
   const all = ((data ?? []) as unknown as Row[]).filter((r) => r.id);
   const subjects = [...new Set(all.map((r) => r.subject))].sort();
@@ -73,7 +75,7 @@ async function Timetable({ searchParams }: { searchParams: Promise<{ subject?: s
       ) : (
         <ul className="mt-6 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
           {rows.map((e) => {
-            const closed = now >= new Date(e.booking_deadline);
+            const closed = isClosed(e, now);
             const full = e.seats_left <= 0;
             return (
               <li key={e.id} data-testid="exam-row" className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">

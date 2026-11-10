@@ -5,6 +5,7 @@ import { homeFor } from "@stem/shared";
 import { BookForm, type Child } from "@/components/bookings/BookForm";
 import { Frame } from "@/components/bookings/Frame";
 import { PAY_NOTE } from "@/components/bookings/status";
+import { isClosed } from "@/lib/exam-state";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 
@@ -38,7 +39,7 @@ async function Content({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const now = new Date();
-  const closed = now >= new Date(exam.booking_deadline) || now >= new Date(exam.starts_at);
+  const closed = isClosed({ booking_deadline: exam.booking_deadline, starts_at: exam.starts_at }, now);
   const full = (exam.seats_left ?? 0) <= 0;
   const price = exam.price_pence ?? 0;
 

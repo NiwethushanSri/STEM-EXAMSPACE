@@ -33,3 +33,9 @@ describe("bookingMessageFor", () => {
     expect(bookingMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });
+
+describe("bookingMessageFor (prototype keys)", () => {
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
+    expect(bookingMessageFor(code)).toBe("Something went wrong. Please try again.");
+  });
+});

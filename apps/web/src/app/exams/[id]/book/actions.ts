@@ -18,7 +18,7 @@ export async function bookExam(_prev: BookState, form: FormData): Promise<BookSt
   const examId = String(form.get("exam") ?? "");
   // A student always books for themselves, whatever the form says.
   const studentId = me.role === "student" ? me.id : String(form.get("student") ?? "");
-  if (!UUID.test(examId) || !UUID.test(studentId)) return { error: bookingMessageFor("invalid_input") };
+  if (!UUID.test(examId) || !UUID.test(studentId)) return { error: messageFor("invalid_input") };
 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("create_booking", { p_exam: examId, p_student: studentId });
