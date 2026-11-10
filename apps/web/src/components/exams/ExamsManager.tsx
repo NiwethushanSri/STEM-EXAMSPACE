@@ -17,12 +17,16 @@ type Notice = { ok: boolean; message: string } | null;
 type Confirm = { kind: "publish" | "cancel"; exam: ExamRow } | null;
 
 /** The admin exams screen: list with seats and money, create or edit form, publish and cancel. */
-export function ExamsManager({ exams, subjects, venues }: { exams: ExamRow[]; subjects: SubjectOption[]; venues: VenueOption[] }) {
+export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamRow[]; subjects: SubjectOption[]; venues: VenueOption[]; capped: boolean }) {
   const [editing, setEditing] = useState<ExamRow | "new" | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [busy, setBusy] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("");
+  const [whenFilter, setWhenFilter] = useState("");
+  const [nowMs] = useState(() => Date.now());
   const [, startTransition] = useTransition();
 
   function run(fn: () => Promise<ExamActionResult>): Promise<ExamActionResult> {
@@ -61,6 +65,13 @@ export function ExamsManager({ exams, subjects, venues }: { exams: ExamRow[]; su
   }
 
   const noSubjects = subjects.length === 0;
+  // Upcoming and past are judged against the time the page loaded.
+  const shown = exams.filter(
+    (e) =>
+      (!statusFilter || e.status === statusFilter) &&
+      (!subjectFilter || String(e.subjectId) === subjectFilter) &&
+      (!whenFilter || (whenFilter === "upcoming") === (Date.parse(e.startsAt) > nowMs)),
+  );
 
   return (
     <div className="space-y-5">
@@ -101,8 +112,37 @@ export function ExamsManager({ exams, subjects, venues }: { exams: ExamRow[]; su
       )}
 
       <Card title="All exams">
-        {exams.length === 0 ? (
-          <p className="text-sm text-slate-500">No exams yet. Create one to get started.</p>
+        <div className="mb-3 flex flex-wrap gap-3 text-sm">
+          <label className="flex items-center gap-2">
+            Status
+            <select aria-label="Filter by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1">
+              <option value="">All</option>
+              {(Object.keys(STATUS_LABEL) as (keyof typeof STATUS_LABEL)[]).map((s) => (
+                <option key={s} value={s}>{STATUS_LABEL[s]}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            Subject
+            <select aria-label="Filter by subject" value={subjectFilter} onChange={(e) => setSubjectFilter(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1">
+              <option value="">All</option>
+              {subjects.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            When
+            <select aria-label="Filter by date" value={whenFilter} onChange={(e) => setWhenFilter(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1">
+              <option value="">All</option>
+              <option value="upcoming">Upcoming</option>
+              <option value="past">Past</option>
+            </select>
+          </label>
+        </div>
+        {capped && <p className="mb-3 text-xs text-slate-500">Showing the newest 500 exams.</p>}
+        {shown.length === 0 ? (
+          <p className="text-sm text-slate-500">{exams.length === 0 ? "No exams yet. Create one to get started." : "No exams match these filters."}</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -114,7 +154,7 @@ export function ExamsManager({ exams, subjects, venues }: { exams: ExamRow[]; su
                 </tr>
               </thead>
               <tbody>
-                {exams.map((e) => (
+                {shown.map((e) => (
                   <ExamTableRow
                     key={e.id}
                     e={e}

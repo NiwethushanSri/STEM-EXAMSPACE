@@ -1,4 +1,5 @@
 import "server-only";
+import { chunk } from "@/lib/chunk";
 import { createClient } from "@/lib/supabase/server";
 import { isClosed } from "@/lib/exam-state";
 import { requireStaff } from "@/lib/staff-gate";
@@ -66,33 +67,64 @@ type BookingQueryRow = {
   amount_pence: number;
   refunded_pence: number;
   refund_due: boolean;
-  student: Embedded<{ first_name: string; last_name: string }>;
 };
 
 const SEAT_STATUSES = ["awaiting_payment", "paid", "cancel_requested"];
 const PAGE = 1000;
+/** The admin list shows this many exams, newest first. */
+export const EXAM_CAP = 500;
 
-/** Every booking of these exams, read a page at a time because the API caps one response. */
+const ID_BATCH = 100;
+const BOOKING_COLUMNS = "id, exam_id, status, amount_pence, refunded_pence, refund_due";
+
+/** Every booking of these exams (no names), in batches of exam ids and a page at a time: the API caps one response and one URL. */
 async function loadBookings(examIds: string[]): Promise<BookingQueryRow[]> {
-  if (examIds.length === 0) return [];
   const supabase = await createClient();
   const out: BookingQueryRow[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from("bookings")
-      .select("id, exam_id, status, amount_pence, refunded_pence, refund_due, student:profiles!bookings_student_id_fkey(first_name, last_name)")
-      .in("exam_id", examIds)
-      .order("created_at", { ascending: true })
-      .order("id", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw new Error("bookings could not be loaded");
-    const rows = (data ?? []) as unknown as BookingQueryRow[];
-    out.push(...rows);
-    if (rows.length < PAGE) return out;
+  for (const ids of chunk(examIds, ID_BATCH)) {
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("bookings")
+        .select(BOOKING_COLUMNS)
+        .in("exam_id", ids)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error("bookings could not be loaded");
+      const rows = (data ?? []) as unknown as BookingQueryRow[];
+      out.push(...rows);
+      if (rows.length < PAGE) break;
+    }
   }
+  return out;
 }
 
-function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[]): ExamRow[] {
+/** Student names for the bookings flagged for refund only (a second, narrow query), keyed by booking id. */
+async function loadRefundNames(examIds: string[]): Promise<Map<string, string>> {
+  const supabase = await createClient();
+  const names = new Map<string, string>();
+  for (const ids of chunk(examIds, ID_BATCH)) {
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("bookings")
+        .select("id, student:profiles!bookings_student_id_fkey(first_name, last_name)")
+        .in("exam_id", ids)
+        .eq("refund_due", true)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error("refund names could not be loaded");
+      const rows = (data ?? []) as unknown as { id: string; student: Embedded<{ first_name: string; last_name: string }> }[];
+      for (const r of rows) {
+        const st = one(r.student);
+        names.set(r.id, st ? `${st.first_name} ${st.last_name}`.trim() : "Student removed");
+      }
+      if (rows.length < PAGE) break;
+    }
+  }
+  return names;
+}
+
+function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[], names: Map<string, string> = new Map()): ExamRow[] {
   const byExam = new Map<string, BookingQueryRow[]>();
   for (const b of bookings) byExam.set(b.exam_id, [...(byExam.get(b.exam_id) ?? []), b]);
   return exams.map((e) => {
@@ -123,14 +155,11 @@ function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[]): ExamRow[] {
       refundsDue: cancelled
         ? bs
             .filter((b) => b.refund_due && b.amount_pence > b.refunded_pence)
-            .map((b) => {
-              const s = one(b.student);
-              return {
+            .map((b) => ({
                 bookingId: b.id,
-                student: s ? `${s.first_name} ${s.last_name}`.trim() : "Student removed",
+                student: names.get(b.id) ?? "Student removed",
                 pence: b.amount_pence - b.refunded_pence,
-              };
-            })
+              }))
         : [],
       bookingClosed: e.status === "published" && isClosed({ booking_deadline: e.booking_deadline, starts_at: e.starts_at }, new Date()),
       hasBookings: bs.length > 0,
@@ -163,15 +192,17 @@ export async function loadAdminExams() {
     .from("exams")
     .select(ADMIN_COLUMNS)
     .order("starts_at", { ascending: false })
-    .limit(500);
+    .limit(EXAM_CAP);
   if (error) throw new Error("exams could not be loaded");
   const exams = (data ?? []) as unknown as ExamQueryRow[];
-  const [bookings, subjects, venues] = await Promise.all([
+  const cancelledIds = exams.filter((e) => e.status === "cancelled").map((e) => e.id);
+  const [bookings, names, subjects, venues] = await Promise.all([
     loadBookings(exams.map((e) => e.id)),
+    loadRefundNames(cancelledIds),
     loadSubjects(),
     loadVenues(),
   ]);
-  return { exams: toRows(exams, bookings), subjects, venues };
+  return { exams: toRows(exams, bookings, names), subjects, venues, capped: exams.length >= EXAM_CAP };
 }
 
 /**

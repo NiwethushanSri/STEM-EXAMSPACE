@@ -1,4 +1,4 @@
-import { londonLocalToUtc } from "./london-time";
+import { londonLocalToUtc, utcToLondonParts } from "./london-time";
 import { poundsToPence } from "./money";
 
 /** The values save_exam takes, read from the exam form. Times are already UTC instants. */
@@ -22,6 +22,23 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const isUuid = (v: unknown): v is string => typeof v === "string" && UUID.test(v);
 
+/**
+ * The UTC instant for a date and time typed in UK time. When the form says the inputs were left alone
+ * ("keep" holds the stored instant) and that instant still reads as exactly this date and time, the
+ * stored instant is kept: a time in the repeated October hour could otherwise move by an hour.
+ */
+function resolveInstant(date: string, time: string, keep: string): string | null {
+  if (keep) {
+    const ms = Date.parse(keep);
+    if (!Number.isNaN(ms)) {
+      const iso = new Date(ms).toISOString();
+      const p = utcToLondonParts(iso);
+      if (p.date === date && p.time === time) return iso;
+    }
+  }
+  return londonLocalToUtc(date, time);
+}
+
 const WHOLE = /^\d{1,6}$/;
 
 /**
@@ -32,6 +49,11 @@ export function parseExamForm(
   raw: Record<string, string>,
   opts: { withPrice: boolean },
 ): { ok: true; value: ExamValues } | { ok: false; error: string } {
+  if (!raw || typeof raw !== "object") return { ok: false, error: "Please check the details you entered." };
+  // Anything that is not text (for example an uploaded file) is not a valid answer.
+  for (const v of Object.values(raw)) {
+    if (typeof v !== "string") return { ok: false, error: "Please check the details you entered." };
+  }
   const get = (k: string) => (raw[k] ?? "").trim();
   const fail = (error: string) => ({ ok: false as const, error });
 
@@ -59,10 +81,10 @@ export function parseExamForm(
   }
 
   if (!get("startDate") || !get("startTime")) return fail("Choose the exam date and time.");
-  const startsAt = londonLocalToUtc(get("startDate"), get("startTime"));
+  const startsAt = resolveInstant(get("startDate"), get("startTime"), get("startsAtKeep"));
   if (!startsAt) return fail("The exam start is not a valid UK time. If the clocks change that night, pick a time that exists.");
   if (!get("deadlineDate") || !get("deadlineTime")) return fail("Choose the booking deadline date and time.");
-  const bookingDeadline = londonLocalToUtc(get("deadlineDate"), get("deadlineTime"));
+  const bookingDeadline = resolveInstant(get("deadlineDate"), get("deadlineTime"), get("deadlineKeep"));
   if (!bookingDeadline) return fail("The booking deadline is not a valid UK time. If the clocks change that night, pick a time that exists.");
   if (Date.parse(bookingDeadline) > Date.parse(startsAt)) return fail("The booking deadline must be no later than the exam start.");
 
@@ -100,7 +122,7 @@ export function parseExamForm(
   };
 }
 
-/** Rooms typed one per line (or separated by commas) into a list, blanks dropped. */
+/** Rooms typed one per line into a list, blanks dropped (a comma is part of a room name). */
 export function parseRooms(raw: string): string[] {
   return raw
     .split(/[\r\n,]+/)

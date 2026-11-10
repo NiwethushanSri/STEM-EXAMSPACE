@@ -55,7 +55,10 @@ export function ExamForm({
 
   function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    onSubmit({ id: exam?.id ?? "", ...f });
+    // Untouched date and time inputs keep the stored instant (see resolveInstant on the server).
+    const keepStart = exam && f.startDate === start.date && f.startTime === start.time ? exam.startsAt : "";
+    const keepDeadline = exam && f.deadlineDate === deadline.date && f.deadlineTime === deadline.time ? exam.bookingDeadline : "";
+    onSubmit({ id: exam?.id ?? "", ...f, startsAtKeep: keepStart, deadlineKeep: keepDeadline });
   }
 
   const unconfirmed = withPrice && exam && !exam.priceConfirmed;

@@ -11,6 +11,9 @@ export type VenueActionResult = { ok: true; message: string } | { ok: false; mes
 /** Create or edit a venue (owner and admin). `rooms` is the textarea text, one room per line. */
 export async function saveVenueAction(input: { id: string; name: string; rooms: string; active: boolean }): Promise<VenueActionResult> {
   await requireStaff(["admin", "owner"]);
+  if (!input || typeof input.id !== "string" || typeof input.name !== "string" || typeof input.rooms !== "string") {
+    return { ok: false, message: "Please check the details you entered." };
+  }
   const id = typeof input?.id === "string" && input.id ? input.id : null;
   if (id && !isUuid(id)) return { ok: false, message: "This venue could not be found. Refresh the page." };
   const name = String(input?.name ?? "").trim();

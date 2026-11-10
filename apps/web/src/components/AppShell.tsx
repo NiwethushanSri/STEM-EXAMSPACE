@@ -17,7 +17,7 @@ const LIVE_ADMIN = ["/admin/accounts", "/admin/exams", "/admin/venues"];
 
 /** Admin pages that still show sample data until their part of the build. */
 function isPreviewPath(pathname: string) {
-  return pathname.startsWith("/admin/") && !LIVE_ADMIN.some((p) => pathname.startsWith(p));
+  return pathname.startsWith("/admin/") && !LIVE_ADMIN.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
 function SignOut() {

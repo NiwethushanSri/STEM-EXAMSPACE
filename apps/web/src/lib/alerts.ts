@@ -117,17 +117,6 @@ export function publishNotice(input: { title: string; body: string; type: Notice
   return notifyEveryone("notice", `notice-${notice.id}`, notice.title, notice.body);
 }
 
-// Admin changes an exam in the calendar: the timetable is saved and everyone is alerted.
-export function updateExam(subject: string, date: string, time: string): number {
-  const current = getTimetable();
-  const exam: Exam = { subject, date, time, type: current.find((e) => e.subject === subject)?.type ?? "Online" };
-  const next = current.some((e) => e.subject === subject)
-    ? current.map((e) => (e.subject === subject ? exam : e))
-    : [...current, exam];
-  write(KEYS.timetable, next);
-  return notifyEveryone("exam-update", `exam-${subject}-${Date.now()}`, `${subject} exam calendar updated`, `${subject} is now on ${date} at ${time}.`);
-}
-
 function reportId(childId: string, termName: string): string {
   return `report-${termName.replace(/\s+/g, "-")}-${childId}`;
 }

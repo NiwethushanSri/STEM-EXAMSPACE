@@ -4,8 +4,8 @@ import { ExamsManager } from "@/components/exams/ExamsManager";
 import { loadAdminExams } from "@/lib/exams-staff";
 
 async function Body() {
-  const { exams, subjects, venues } = await loadAdminExams();
-  return <ExamsManager exams={exams} subjects={subjects} venues={venues} />;
+  const { exams, subjects, venues, capped } = await loadAdminExams();
+  return <ExamsManager exams={exams} subjects={subjects} venues={venues} capped={capped} />;
 }
 
 export default function AdminExams() {

@@ -62,6 +62,33 @@ describe("parseExamForm", () => {
   });
 });
 
+describe("parseExamForm kept instants and bad fields", () => {
+  // 01:30 on 31 Oct 2027 happens twice; 01:30Z is the second (GMT) one, 00:30Z the first (BST).
+  const repeated = { ...base, startDate: "2027-10-31", startTime: "01:30", deadlineDate: "2027-10-25", deadlineTime: "09:00" };
+  it("keeps the stored instant when the inputs were not changed", () => {
+    const r = parseExamForm({ ...repeated, startsAtKeep: "2027-10-31T01:30:00+00:00" }, { withPrice: true });
+    expect(r).toMatchObject({ ok: true, value: { startsAt: "2027-10-31T01:30:00.000Z" } });
+  });
+  it("converts normally without a kept instant", () => {
+    const r = parseExamForm(repeated, { withPrice: true });
+    expect(r).toMatchObject({ ok: true, value: { startsAt: "2027-10-31T00:30:00.000Z" } });
+  });
+  it("ignores a kept instant that does not match the inputs", () => {
+    const r = parseExamForm({ ...repeated, startsAtKeep: "2027-11-05T10:00:00Z" }, { withPrice: true });
+    expect(r).toMatchObject({ ok: true, value: { startsAt: "2027-10-31T00:30:00.000Z" } });
+  });
+  it("keeps the deadline instant too", () => {
+    const r = parseExamForm({ ...base, startDate: "2027-10-31", startTime: "09:00", deadlineDate: "2027-10-31", deadlineTime: "01:30", deadlineKeep: "2027-10-31T01:30:00Z" }, { withPrice: true });
+    expect(r).toMatchObject({ ok: true, value: { bookingDeadline: "2027-10-31T01:30:00.000Z" } });
+  });
+  it("treats non-text fields as invalid input instead of throwing", () => {
+    const file = new Blob(["x"]) as unknown as string;
+    expect(parseExamForm({ ...base, title: file }, { withPrice: true }).ok).toBe(false);
+    expect(parseExamForm({ ...base, price: 15 as unknown as string }, { withPrice: true }).ok).toBe(false);
+    expect(parseExamForm(null as unknown as Record<string, string>, { withPrice: true }).ok).toBe(false);
+  });
+});
+
 describe("parseRooms", () => {
   it("splits lines and commas and drops blanks", () => {
     expect(parseRooms("Hall A\n Hall B ,\r\n\nLab")).toEqual(["Hall A", "Hall B", "Lab"]);

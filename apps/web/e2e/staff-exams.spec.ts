@@ -438,3 +438,26 @@ test("owner_reaches_the_exam_pages_from_the_nav", async ({ page }) => {
   await page.goto("/admin/venues");
   await expect(page.getByRole("button", { name: "New venue" })).toBeVisible();
 });
+
+test("admin_filters_the_exam_list_by_status_subject_and_date", async ({ page }) => {
+  await makeExam({ title: "F draft", status: "draft" });
+  await makeExam({ title: "F future" });
+  await makeExam({ title: "F other subject", subject: subjectBId });
+  await makeExam({ title: "F past", status: "draft", starts: inDays(-30) });
+  await signInAdmin(page);
+  await page.goto("/admin/exams");
+  const ours = page.getByTestId("exam-row").filter({ hasText: `${tag} F ` });
+  await expect(ours).toHaveCount(4);
+  await page.getByLabel("Filter by status").selectOption("draft");
+  await expect(ours).toHaveCount(2);
+  await page.getByLabel("Filter by status").selectOption("");
+  await page.getByLabel("Filter by subject").selectOption({ label: SUBJECT_B });
+  await expect(ours).toHaveCount(1);
+  await expect(ours).toContainText("F other subject");
+  await page.getByLabel("Filter by subject").selectOption("");
+  await page.getByLabel("Filter by date").selectOption("past");
+  await expect(ours).toHaveCount(1);
+  await expect(ours).toContainText("F past");
+  await page.getByLabel("Filter by date").selectOption("upcoming");
+  await expect(ours).toHaveCount(3);
+});

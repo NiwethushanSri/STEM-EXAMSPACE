@@ -46,6 +46,7 @@ function VenueForm({
         <div>
           <label htmlFor="v-rooms" className={labelClass}>Rooms (one per line)</label>
           <textarea id="v-rooms" rows={4} value={rooms} onChange={(e) => setRooms(e.target.value)} className={inputClass} />
+          <p className="mt-1 text-xs text-slate-500">Press Enter between rooms. Commas are part of a room name.</p>
         </div>
       </div>
       <div className="flex justify-end gap-2">
