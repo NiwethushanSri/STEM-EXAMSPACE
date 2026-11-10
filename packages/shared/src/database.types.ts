@@ -39,6 +39,59 @@ export type Database = {
   }
   public: {
     Tables: {
+      attendance: {
+        Row: {
+          exam_id: string
+          marked_at: string
+          marked_by: string
+          status: Database["public"]["Enums"]["attendance_status"]
+          student_id: string
+        }
+        Insert: {
+          exam_id: string
+          marked_at?: string
+          marked_by: string
+          status: Database["public"]["Enums"]["attendance_status"]
+          student_id: string
+        }
+        Update: {
+          exam_id?: string
+          marked_at?: string
+          marked_by?: string
+          status?: Database["public"]["Enums"]["attendance_status"]
+          student_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attendance_exam_id_fkey"
+            columns: ["exam_id"]
+            isOneToOne: false
+            referencedRelation: "exams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attendance_exam_id_fkey"
+            columns: ["exam_id"]
+            isOneToOne: false
+            referencedRelation: "exams_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attendance_marked_by_fkey"
+            columns: ["marked_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attendance_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_log: {
         Row: {
           action: string
@@ -65,6 +118,168 @@ export type Database = {
           target_type?: string | null
         }
         Relationships: []
+      }
+      bookings: {
+        Row: {
+          amount_pence: number
+          booked_by: string
+          created_at: string
+          exam_id: string
+          hold_expires_at: string | null
+          id: string
+          notes: string | null
+          paid_offline: boolean
+          refunded_pence: number
+          status: Database["public"]["Enums"]["booking_status"]
+          stripe_checkout_session_id: string | null
+          stripe_payment_intent_id: string | null
+          student_id: string
+          updated_at: string
+        }
+        Insert: {
+          amount_pence: number
+          booked_by: string
+          created_at?: string
+          exam_id: string
+          hold_expires_at?: string | null
+          id?: string
+          notes?: string | null
+          paid_offline?: boolean
+          refunded_pence?: number
+          status: Database["public"]["Enums"]["booking_status"]
+          stripe_checkout_session_id?: string | null
+          stripe_payment_intent_id?: string | null
+          student_id: string
+          updated_at?: string
+        }
+        Update: {
+          amount_pence?: number
+          booked_by?: string
+          created_at?: string
+          exam_id?: string
+          hold_expires_at?: string | null
+          id?: string
+          notes?: string | null
+          paid_offline?: boolean
+          refunded_pence?: number
+          status?: Database["public"]["Enums"]["booking_status"]
+          stripe_checkout_session_id?: string | null
+          stripe_payment_intent_id?: string | null
+          student_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bookings_booked_by_fkey"
+            columns: ["booked_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_exam_id_fkey"
+            columns: ["exam_id"]
+            isOneToOne: false
+            referencedRelation: "exams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_exam_id_fkey"
+            columns: ["exam_id"]
+            isOneToOne: false
+            referencedRelation: "exams_public"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_student_id_fkey"
+            columns: ["student_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      exams: {
+        Row: {
+          booking_deadline: string
+          created_at: string
+          created_by: string
+          currency: string
+          duration_minutes: number
+          format: Database["public"]["Enums"]["exam_format"]
+          id: string
+          paper: string
+          price_pence: number
+          room: string | null
+          seat_limit: number
+          starts_at: string
+          status: Database["public"]["Enums"]["exam_status"]
+          subject_id: number
+          title: string
+          updated_at: string
+          venue_id: string | null
+        }
+        Insert: {
+          booking_deadline: string
+          created_at?: string
+          created_by: string
+          currency?: string
+          duration_minutes: number
+          format: Database["public"]["Enums"]["exam_format"]
+          id?: string
+          paper: string
+          price_pence: number
+          room?: string | null
+          seat_limit: number
+          starts_at: string
+          status?: Database["public"]["Enums"]["exam_status"]
+          subject_id: number
+          title: string
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Update: {
+          booking_deadline?: string
+          created_at?: string
+          created_by?: string
+          currency?: string
+          duration_minutes?: number
+          format?: Database["public"]["Enums"]["exam_format"]
+          id?: string
+          paper?: string
+          price_pence?: number
+          room?: string | null
+          seat_limit?: number
+          starts_at?: string
+          status?: Database["public"]["Enums"]["exam_status"]
+          subject_id?: number
+          title?: string
+          updated_at?: string
+          venue_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "exams_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "exams_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "subjects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "exams_venue_id_fkey"
+            columns: ["venue_id"]
+            isOneToOne: false
+            referencedRelation: "venues"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       index_counters: {
         Row: {
@@ -420,9 +635,49 @@ export type Database = {
           },
         ]
       }
+      venues: {
+        Row: {
+          active: boolean
+          created_at: string
+          id: string
+          name: string
+          rooms: string[]
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name: string
+          rooms?: string[]
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          id?: string
+          name?: string
+          rooms?: string[]
+        }
+        Relationships: []
+      }
     }
     Views: {
-      [_ in never]: never
+      exams_public: {
+        Row: {
+          booking_deadline: string | null
+          duration_minutes: number | null
+          format: Database["public"]["Enums"]["exam_format"] | null
+          id: string | null
+          paper: string | null
+          price_pence: number | null
+          room: string | null
+          seats_left: number | null
+          starts_at: string | null
+          subject: string | null
+          title: string | null
+          venue: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       approve_student_tx: {
@@ -438,6 +693,7 @@ export type Database = {
         Args: { p_action: string; p_actor: string; p_target: string }
         Returns: string
       }
+      can_reject_student: { Args: { p_student: string }; Returns: string }
       claim_invite: {
         Args: {
           p_email: string
@@ -447,7 +703,6 @@ export type Database = {
         }
         Returns: string
       }
-      can_reject_student: { Args: { p_student: string }; Returns: string }
       clear_invite_tx: {
         Args: { p_actor: string; p_email: string }
         Returns: string
@@ -471,6 +726,10 @@ export type Database = {
         Returns: string
       }
       delete_own_account_tx: { Args: { p_user: string }; Returns: string }
+      edit_parent_email_tx: {
+        Args: { p_actor: string; p_email: string; p_target: string }
+        Returns: string
+      }
       expire_unconfirmed: { Args: { p_now?: string }; Returns: number }
       is_staff_admin: { Args: never; Returns: boolean }
       link_children_to_parent: { Args: { p_parent: string }; Returns: number }
@@ -480,6 +739,15 @@ export type Database = {
       }
       login_attempt_begin: {
         Args: { p_idx_key: string; p_ip_key: string }
+        Returns: boolean
+      }
+      login_attempt_begin_n: {
+        Args: {
+          p_key_a: string
+          p_key_b: string
+          p_limit_a: number
+          p_limit_b: number
+        }
         Returns: boolean
       }
       login_attempt_refund: {
@@ -496,7 +764,6 @@ export type Database = {
         Args: never
         Returns: Database["public"]["Enums"]["account_status"]
       }
-      replace_unconfirmed_signup: { Args: { p_email: string }; Returns: string }
       purge_student_residue: { Args: { p_user: string }; Returns: undefined }
       register_child_tx: {
         Args: { p_child: string; p_parent: string }
@@ -510,10 +777,12 @@ export type Database = {
         Args: { p_actor: string; p_target: string }
         Returns: string
       }
+      replace_unconfirmed_signup: { Args: { p_email: string }; Returns: string }
       request_parent_link_tx: {
         Args: { p_dob: string; p_index: string; p_parent: string }
         Returns: boolean
       }
+      seats_taken: { Args: { p_exam: string }; Returns: number }
       set_account_status_tx: {
         Args: { p_action: string; p_actor: string; p_target: string }
         Returns: string
@@ -534,6 +803,17 @@ export type Database = {
         | "corrector"
         | "student"
         | "parent"
+      attendance_status: "present" | "late" | "absent"
+      booking_status:
+        | "awaiting_payment"
+        | "paid"
+        | "cancel_requested"
+        | "refunded"
+        | "part_refunded"
+        | "cancelled"
+        | "expired"
+      exam_format: "in_person" | "online"
+      exam_status: "draft" | "published" | "cancelled" | "completed"
       subject_kind: "school" | "entrance"
     }
     CompositeTypes: {
@@ -681,6 +961,18 @@ export const Constants = {
         "student",
         "parent",
       ],
+      attendance_status: ["present", "late", "absent"],
+      booking_status: [
+        "awaiting_payment",
+        "paid",
+        "cancel_requested",
+        "refunded",
+        "part_refunded",
+        "cancelled",
+        "expired",
+      ],
+      exam_format: ["in_person", "online"],
+      exam_status: ["draft", "published", "cancelled", "completed"],
       subject_kind: ["school", "entrance"],
     },
   },
