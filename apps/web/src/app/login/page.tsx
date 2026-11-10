@@ -6,6 +6,7 @@ import { Suspense, useState, type FormEvent } from "react";
 import { homeFor, indexLogin, messageFor } from "@stem/shared";
 import { AuthLayout, inputClass, labelClass } from "@/components/AuthLayout";
 import { createClient } from "@/lib/supabase/client";
+import { safeNext } from "@/lib/safe-path";
 
 function LoginForm() {
   const router = useRouter();
@@ -68,7 +69,9 @@ function LoginForm() {
       ? await supabase.from("profiles").select("role, status").eq("id", auth.user.id).maybeSingle()
       : { data: null };
     if (!profile) return fail(messageFor("internal"));
-    router.replace(homeFor(profile.role, profile.status, "web-staff"));
+    // Return to the page that sent the user here, but only for an active family account and only an internal path.
+    const back = profile.status === "active" && (profile.role === "student" || profile.role === "parent") ? safeNext(params.get("next")) : null;
+    router.replace(back ?? homeFor(profile.role, profile.status, "web-staff"));
     router.refresh();
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bannedMessage, messageFor, type ErrorCode } from "./errors";
+import { bannedMessage, bookingMessageFor, messageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -20,5 +20,16 @@ describe("messageFor", () => {
   });
   it("bannedMessage", () => {
     expect(bannedMessage).toBe("Your account is suspended, contact the institution");
+  });
+});
+
+describe("bookingMessageFor", () => {
+  it("maps booking codes", () => {
+    expect(bookingMessageFor("fully_booked")).toBe("This exam is fully booked");
+    expect(bookingMessageFor("too_many_unpaid")).toBe("You have 3 unpaid bookings. Pay or cancel one before booking another.");
+  });
+  it("falls back to the generic message", () => {
+    expect(bookingMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(bookingMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });

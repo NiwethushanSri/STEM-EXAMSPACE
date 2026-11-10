@@ -71,7 +71,9 @@ export async function proxy(request: NextRequest) {
   const home = homeFor(role, status, "web-staff");
 
   // Each account holds exactly one valid /account page (its status page); everything else goes there.
-  if (area === "/account") return pathname === home ? response : redirectTo(home);
+  // The one extra page: active students and parents also reach My bookings (the page re-checks the account itself).
+  const bookings = pathname === "/account/bookings" && status === "active" && (role === "student" || role === "parent");
+  if (area === "/account") return pathname === home || bookings ? response : redirectTo(home);
 
   const allowed = AREAS[area].includes(role) && status !== "suspended";
   return allowed ? response : redirectTo(home);

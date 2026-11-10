@@ -22,3 +22,21 @@ const messages: Record<ErrorCode, string> = {
 export function messageFor(code: ErrorCode): string {
   return messages[code] ?? messages.internal;
 }
+
+/** Failure codes returned by the booking RPCs (create_booking, request_cancellation). */
+const bookingMessages: Record<string, string> = {
+  fully_booked: "This exam is fully booked",
+  deadline_passed: "The booking deadline for this exam has passed.",
+  not_bookable: "This exam cannot be booked.",
+  already_booked: "This student already has a booking for this exam.",
+  too_many_unpaid: "You have 3 unpaid bookings. Pay or cancel one before booking another.",
+  forbidden: "You do not have permission to do that.",
+  invalid_input: "This student cannot be booked. Check that their account is active.",
+  conflict: "This booking can no longer be changed. Refresh the page and check its status.",
+  not_found: "Not found.",
+};
+
+/** Message for a booking RPC failure code; unknown codes get the generic message. */
+export function bookingMessageFor(code: string | null | undefined): string {
+  return (code && bookingMessages[code]) || messages.internal;
+}
