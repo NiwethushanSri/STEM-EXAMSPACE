@@ -686,6 +686,15 @@ export type Database = {
       }
     }
     Functions: {
+      admin_add_booking: {
+        Args: {
+          p_exam: string
+          p_note: string
+          p_paid: boolean
+          p_student: string
+        }
+        Returns: Json
+      }
       approve_student_tx: {
         Args: { p_actor: string; p_student: string; p_year?: number }
         Returns: {
@@ -695,11 +704,36 @@ export type Database = {
           parent_id: string
         }[]
       }
+      booking_create_as: {
+        Args: {
+          p_actor: string
+          p_exam: string
+          p_now: string
+          p_student: string
+        }
+        Returns: Json
+      }
+      booking_create_core: {
+        Args: {
+          p_by: string
+          p_enforce_deadline: boolean
+          p_exam: string
+          p_note: string
+          p_now: string
+          p_paid: boolean
+          p_student: string
+        }
+        Returns: Json
+      }
       can_manage_account: {
         Args: { p_action: string; p_actor: string; p_target: string }
         Returns: string
       }
       can_reject_student: { Args: { p_student: string }; Returns: string }
+      cancel_booking_admin: {
+        Args: { p_booking: string; p_note: string }
+        Returns: Json
+      }
       claim_invite: {
         Args: {
           p_email: string
@@ -723,6 +757,19 @@ export type Database = {
         }
         Returns: undefined
       }
+      create_booking: {
+        Args: { p_exam: string; p_student: string }
+        Returns: Json
+      }
+      decide_cancellation: {
+        Args: {
+          p_approve: boolean
+          p_booking: string
+          p_note: string
+          p_refund_pence: number
+        }
+        Returns: Json
+      }
       decide_parent_link_tx: {
         Args: { p_actor: string; p_approve: boolean; p_request: string }
         Returns: string
@@ -737,6 +784,7 @@ export type Database = {
         Returns: string
       }
       expire_unconfirmed: { Args: { p_now?: string }; Returns: number }
+      expire_unpaid_bookings: { Args: { p_now?: string }; Returns: number }
       is_staff_admin: { Args: never; Returns: boolean }
       link_children_to_parent: { Args: { p_parent: string }; Returns: number }
       link_student_to_parent: {
@@ -765,6 +813,10 @@ export type Database = {
         Args: { p_idx_key: string; p_ip_key: string }
         Returns: undefined
       }
+      mark_booking_paid: {
+        Args: { p_booking: string; p_note: string }
+        Returns: Json
+      }
       my_role: { Args: never; Returns: Database["public"]["Enums"]["app_role"] }
       my_status: {
         Args: never
@@ -784,6 +836,11 @@ export type Database = {
         Returns: string
       }
       replace_unconfirmed_signup: { Args: { p_email: string }; Returns: string }
+      request_cancellation: { Args: { p_booking: string }; Returns: Json }
+      request_cancellation_as: {
+        Args: { p_actor: string; p_booking: string; p_now: string }
+        Returns: Json
+      }
       request_parent_link_tx: {
         Args: { p_dob: string; p_index: string; p_parent: string }
         Returns: boolean
