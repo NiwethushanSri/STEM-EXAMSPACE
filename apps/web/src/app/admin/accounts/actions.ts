@@ -15,6 +15,7 @@ import {
 } from "@stem/shared";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 import { WARNING_TEXT } from "@/lib/account-rules";
+import { isUuid } from "@/lib/uuid";
 
 /** What every action returns to the client; never throws for expected failures. */
 export type ActionResult =
@@ -50,8 +51,7 @@ function finish<T>(res: FunctionResult<T>, ok: (data: T) => ActionResult, regist
   return ok(res.data);
 }
 
-const isId = (v: unknown): v is string =>
-  typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+const isId = isUuid;
 
 /** Everything the admin must follow up after an approval, in one line each (undefined when all went well). */
 function approvalWarnings(d: {
