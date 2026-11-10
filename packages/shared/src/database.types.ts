@@ -129,6 +129,7 @@ export type Database = {
           id: string
           notes: string | null
           paid_offline: boolean
+          refund_due: boolean
           refunded_pence: number
           status: Database["public"]["Enums"]["booking_status"]
           stripe_checkout_session_id: string | null
@@ -145,6 +146,7 @@ export type Database = {
           id?: string
           notes?: string | null
           paid_offline?: boolean
+          refund_due?: boolean
           refunded_pence?: number
           status: Database["public"]["Enums"]["booking_status"]
           stripe_checkout_session_id?: string | null
@@ -161,6 +163,7 @@ export type Database = {
           id?: string
           notes?: string | null
           paid_offline?: boolean
+          refund_due?: boolean
           refunded_pence?: number
           status?: Database["public"]["Enums"]["booking_status"]
           stripe_checkout_session_id?: string | null

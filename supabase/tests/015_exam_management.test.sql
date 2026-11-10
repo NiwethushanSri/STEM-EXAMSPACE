@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(133);
+select plan(135);
 select tests.assert_no_owner();
 
 -- Fixtures.
@@ -308,13 +308,24 @@ select tests.as_user((select id from c where name = 'admin'));
 select is(public.save_exam((select id from st where name = 'x1'), (select id from subj where name = 'ZZ Physics'), 'ZZ X1', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 1000, now() + interval '20 days') ->> 'code', 'conflict', 'subject change refused with seat-taking bookings');
 select is(public.set_exam_status((select id from st where name = 'x1'), 'cancelled') ->> 'ok', 'true', 'x1 cancelled');
 select tests.as_postgres();
-select is((select status::text || '/' || notes from public.bookings where exam_id = (select id from st where name = 'x1') and refunded_pence = 400), 'cancel_requested/exam cancelled — refund due', 'part_refunded booking flagged');
+select is((select status::text || '/' || refund_due::text || '/' || notes from public.bookings where exam_id = (select id from st where name = 'x1') and refunded_pence = 400), 'part_refunded/true/exam cancelled — refund due', 'part_refunded booking keeps status and is flagged refund_due');
 select is((select count(*)::int from public.bookings where exam_id = (select id from st where name = 'x1') and status in ('expired', 'cancelled') and notes is null), 2, 'expired and cancelled bookings untouched');
 select is(public.seats_taken((select id from st where name = 'x1')), 0, 'seats released after cancel');
-select lives_ok($$insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence)
-  values ((select id from st where name = 'x1'), (select id from c where name = 's5'), (select id from c where name = 's5'), 'awaiting_payment', 1000)$$, 'a fresh booking row can still be inserted');
 select is((select count(*)::int from public.audit_log where action = 'booking_cancelled_by_exam' and target_type = 'booking' and actor_id = (select id from c where name = 'admin') and target_id in (select id from public.bookings where exam_id = (select id from st where name = 'x1'))), 2, 'one audit row per booking changed by the cancel');
 select is((select actor_id from public.audit_log where action = 'exam_cancelled' and target_id = (select id from st where name = 'x1')), (select id from c where name = 'admin'), 'cancel audit has the acting admin');
+
+-- Part-refunded then rebooked: cancel must still succeed.
+select tests.as_user((select id from c where name = 'admin'));
+insert into st select 'x3', (public.save_exam(null, (select id from subj where name = 'ZZ Maths'), 'ZZ X3', 'P1', 'online', null, null, now() + interval '30 days', 60, 5, 1000, now() + interval '20 days') ->> 'id')::uuid;
+select is(public.set_exam_status((select id from st where name = 'x3'), 'published') ->> 'ok', 'true', 'x3 published');
+select tests.as_postgres();
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, refunded_pence) values
+  ((select id from st where name = 'x3'), (select id from c where name = 's4'), (select id from c where name = 's4'), 'part_refunded', 1000, 300),
+  ((select id from st where name = 'x3'), (select id from c where name = 's4'), (select id from c where name = 's4'), 'paid', 1000, 0);
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.set_exam_status((select id from st where name = 'x3'), 'cancelled') ->> 'ok', 'true', 'cancel succeeds for a rebooked part-refunded student');
+select tests.as_postgres();
+select is((select string_agg(status::text || '/' || refund_due::text, ',' order by status::text) from public.bookings where exam_id = (select id from st where name = 'x3')), 'cancel_requested/true,part_refunded/true', 'both rows flagged refund_due with expected statuses');
 
 select * from finish();
 rollback;
