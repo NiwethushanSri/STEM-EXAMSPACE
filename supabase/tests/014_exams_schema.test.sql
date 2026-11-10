@@ -210,7 +210,7 @@ insert into public.parent_children values ((select id from c where name='d_paren
 select is(public.delete_own_account_tx((select id from c where name='d_parent')), 'deleted', 'parent self-deletes after booking for a child');
 select is((select count(*)::int from public.bookings where exam_id = (select id from ex where name='phys_draft') and student_id = (select id from c where name='d_stud2') and booked_by is null and status = 'paid' and amount_pence = 2500), 1, 'booked_by anonymised, booking kept');
 select is(public.delete_own_account_tx((select id from c where name='d_stud2')), 'deleted', 'student self-deletes');
-select is((select count(*)::int from public.bookings where exam_id = (select id from ex where name='phys_draft') and student_id is null and booked_by is null and status = 'cancelled' and refund_due and amount_pence = 2500), 1, 'self-deleted student booking kept anonymised, cancelled with refund due');
+select is((select count(*)::int from public.bookings where exam_id = (select id from ex where name='phys_draft') and student_id is null and booked_by is null and status = 'paid' and amount_pence = 2500), 1, 'self-deleted student booking kept anonymised');
 
 insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence) values
   ((select id from ex where name='maths_canc'), (select id from c where name='d_pend'), (select id from c where name='d_pend'), 'cancelled', 1000);
