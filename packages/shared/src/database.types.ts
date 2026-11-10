@@ -43,21 +43,21 @@ export type Database = {
         Row: {
           exam_id: string
           marked_at: string
-          marked_by: string
+          marked_by: string | null
           status: Database["public"]["Enums"]["attendance_status"]
           student_id: string
         }
         Insert: {
           exam_id: string
           marked_at?: string
-          marked_by: string
+          marked_by?: string | null
           status: Database["public"]["Enums"]["attendance_status"]
           student_id: string
         }
         Update: {
           exam_id?: string
           marked_at?: string
-          marked_by?: string
+          marked_by?: string | null
           status?: Database["public"]["Enums"]["attendance_status"]
           student_id?: string
         }
@@ -122,7 +122,7 @@ export type Database = {
       bookings: {
         Row: {
           amount_pence: number
-          booked_by: string
+          booked_by: string | null
           created_at: string
           exam_id: string
           hold_expires_at: string | null
@@ -133,12 +133,12 @@ export type Database = {
           status: Database["public"]["Enums"]["booking_status"]
           stripe_checkout_session_id: string | null
           stripe_payment_intent_id: string | null
-          student_id: string
+          student_id: string | null
           updated_at: string
         }
         Insert: {
           amount_pence: number
-          booked_by: string
+          booked_by?: string | null
           created_at?: string
           exam_id: string
           hold_expires_at?: string | null
@@ -149,12 +149,12 @@ export type Database = {
           status: Database["public"]["Enums"]["booking_status"]
           stripe_checkout_session_id?: string | null
           stripe_payment_intent_id?: string | null
-          student_id: string
+          student_id?: string | null
           updated_at?: string
         }
         Update: {
           amount_pence?: number
-          booked_by?: string
+          booked_by?: string | null
           created_at?: string
           exam_id?: string
           hold_expires_at?: string | null
@@ -165,7 +165,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["booking_status"]
           stripe_checkout_session_id?: string | null
           stripe_payment_intent_id?: string | null
-          student_id?: string
+          student_id?: string | null
           updated_at?: string
         }
         Relationships: [
@@ -203,7 +203,7 @@ export type Database = {
         Row: {
           booking_deadline: string
           created_at: string
-          created_by: string
+          created_by: string | null
           currency: string
           duration_minutes: number
           format: Database["public"]["Enums"]["exam_format"]
@@ -222,7 +222,7 @@ export type Database = {
         Insert: {
           booking_deadline: string
           created_at?: string
-          created_by: string
+          created_by?: string | null
           currency?: string
           duration_minutes: number
           format: Database["public"]["Enums"]["exam_format"]
@@ -241,7 +241,7 @@ export type Database = {
         Update: {
           booking_deadline?: string
           created_at?: string
-          created_by?: string
+          created_by?: string | null
           currency?: string
           duration_minutes?: number
           format?: Database["public"]["Enums"]["exam_format"]
