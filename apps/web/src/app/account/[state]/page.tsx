@@ -89,6 +89,9 @@ async function Content({ params }: { params: Promise<{ state: string }> }) {
           <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">Your dashboard is coming soon</p>
           <nav aria-label="Exams" className="mt-4 flex flex-col gap-2 text-sm font-medium">
             <Link href="/account/bookings" className="rounded-lg border border-slate-200 px-4 py-3 text-blue-700 hover:bg-slate-50">My bookings</Link>
+            {me.role === "student" && data?.index_number && (
+              <Link href={`/cards/${me.id}`} className="rounded-lg border border-slate-200 px-4 py-3 text-blue-700 hover:bg-slate-50">My index card</Link>
+            )}
             <Link href="/exams" className="rounded-lg border border-slate-200 px-4 py-3 text-blue-700 hover:bg-slate-50">Exam timetable</Link>
           </nav>
         </AuthLayout>

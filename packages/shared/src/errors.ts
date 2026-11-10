@@ -128,3 +128,31 @@ export function adminBookingMessageFor(code: string | null | undefined, context:
   const table = adminBookingMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
 }
+
+/** Which attendance RPC a failure code came from. */
+export type AttendanceContext = "lookup" | "mark" | "close";
+
+const attendanceMessages: Record<AttendanceContext, Record<string, string>> = {
+  lookup: {
+    not_found: "Not found",
+    invalid_input: "Enter an index number.",
+    forbidden: "You do not have permission to use this register.",
+  },
+  mark: {
+    not_booked: "No paid booking",
+    not_found: "Not found",
+    conflict: "This register is closed. Only a published exam can be marked.",
+    forbidden: "You do not have permission to use this register.",
+  },
+  close: {
+    conflict: "The register cannot be closed yet. The exam must be published and already started.",
+    not_found: "Not found",
+    forbidden: "You do not have permission to use this register.",
+  },
+};
+
+/** Message for an attendance RPC failure code; unknown codes get the generic message. */
+export function attendanceMessageFor(code: string | null | undefined, context: AttendanceContext): string {
+  const table = attendanceMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}

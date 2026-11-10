@@ -159,6 +159,11 @@ export function AccountsTable({
                   <td className="py-2.5 pr-4">{r.indexNumber ?? "—"}</td>
                   <td className="py-2.5 pr-4">
                     <span className="flex flex-wrap gap-2">
+                      {r.role === "student" && r.status === "active" && r.indexNumber && (
+                        <Link href={`/cards/${r.id}`} className={btn}>
+                          Index card
+                        </Link>
+                      )}
                       {a.toggleStatus && (
                         <button type="button" disabled={busy} className={btn} onClick={() => go(a.toggleStatus!)}>
                           {a.toggleStatus === "suspend" ? "Suspend" : "Reactivate"}

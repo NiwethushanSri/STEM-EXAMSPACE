@@ -82,3 +82,16 @@ describe("teacher action called by an admin", () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 });
+
+describe("attendance actions called by a student or parent", () => {
+  it("every attendance action is refused and touches nothing", async () => {
+    state.role = "student";
+    const a = await import("@/components/attendance/actions");
+    await expect(a.lookupAction(UUID, "SE-2026-0001")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.markAction(UUID, UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.closeRegisterAction(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(3);
+    expect(state.calls.every((c) => c.join() === "admin,owner,teacher")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+});

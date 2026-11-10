@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, bannedMessage, bookingMessageFor, examMessageFor, messageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, bookingMessageFor, examMessageFor, messageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -72,5 +72,22 @@ describe("adminBookingMessageFor", () => {
   });
   it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
     expect(adminBookingMessageFor(code, "add")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("attendanceMessageFor", () => {
+  it("maps each code per context", () => {
+    expect(attendanceMessageFor("not_found", "lookup")).toBe("Not found");
+    expect(attendanceMessageFor("not_booked", "mark")).toBe("No paid booking");
+    expect(attendanceMessageFor("conflict", "mark")).toContain("register is closed");
+    expect(attendanceMessageFor("conflict", "close")).toContain("already started");
+  });
+  it("falls back to the generic message", () => {
+    expect(attendanceMessageFor("nope", "lookup")).toBe("Something went wrong. Please try again.");
+    expect(attendanceMessageFor(undefined, "close")).toBe("Something went wrong. Please try again.");
+    expect(attendanceMessageFor("not_booked", "close")).toBe("Something went wrong. Please try again.");
+  });
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
+    expect(attendanceMessageFor(code, "mark")).toBe("Something went wrong. Please try again.");
   });
 });
