@@ -17,6 +17,7 @@ import { formatLondon, formatMoney, penceToInput, poundsToPence } from "@/lib/mo
 
 const NOTE_HELP = "Visible to the family. Don't include personal details.";
 const CANCELLED_EXAM_WARNING = "This exam was cancelled — the family is owed a full refund.";
+const DELETED_ACCOUNT_WARNING = "This account was deleted — the family is owed a refund.";
 
 type Notice = { ok: boolean; message: string } | null;
 type Confirm =
@@ -246,11 +247,12 @@ function AddForm({ exams, busy, onSubmit }: {
 }
 
 /** The admin bookings screen: refund decisions, add an offline booking, and the filtered list with mark paid and cancel. */
-export function AdminBookingsManager({ rows, decidable, exams, capped, cap }: {
+export function AdminBookingsManager({ rows, decidable, exams, capped, truncated, cap }: {
   rows: AdminBookingRow[];
   decidable: AdminBookingRow[];
   exams: ExamOption[];
   capped: boolean;
+  truncated: boolean;
   cap: number;
 }) {
   const [notice, setNotice] = useState<Notice>(null);
@@ -352,7 +354,7 @@ export function AdminBookingsManager({ rows, decidable, exams, capped, cap }: {
                 No money is sent from here: pay the family back yourself.
               </p>
               {confirm.pence === 0 && owedFull(confirm.row) && (
-                <p role="alert" className="rounded border border-red-200 bg-red-50 p-2 font-medium text-red-800">{CANCELLED_EXAM_WARNING}</p>
+                <p role="alert" className="rounded border border-red-200 bg-red-50 p-2 font-medium text-red-800">{confirm.row.examStatus === "cancelled" ? CANCELLED_EXAM_WARNING : DELETED_ACCOUNT_WARNING}</p>
               )}
             </div>
           ),
@@ -404,6 +406,7 @@ export function AdminBookingsManager({ rows, decidable, exams, capped, cap }: {
       </Card>
 
       <Card title="Bookings">
+        {truncated && <p className="mb-3 text-xs text-slate-500">Showing the first results — refine your search.</p>}
         {capped && <p className="mb-3 text-xs text-slate-500">Showing the newest {cap} bookings that match. Narrow the filters to see others.</p>}
         {rows.length === 0 ? (
           <p className="text-sm text-slate-500">No bookings match these filters.</p>

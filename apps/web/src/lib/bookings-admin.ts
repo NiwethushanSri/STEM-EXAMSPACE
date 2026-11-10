@@ -97,9 +97,10 @@ function toRow(r: QueryRow): AdminBookingRow {
  * Active students whose first name, last name or index number contains every word of the search. Each word is
  * one parameterised `ilike` filter value (wildcards escaped), so commas and brackets cannot change the query.
  */
-export async function findStudentIds(supabase: Client, raw: string, limit = STUDENT_MATCH_CAP): Promise<string[]> {
+export async function findStudentIds(supabase: Client, raw: string, limit = STUDENT_MATCH_CAP): Promise<{ ids: string[]; truncated: boolean }> {
   const words = searchWords(raw);
-  if (words.length === 0) return [];
+  if (words.length === 0) return { ids: [], truncated: false };
+  let truncated = false;
   let acc: Set<string> | null = null as Set<string> | null;
   for (const w of words) {
     const pat = likePattern(w);
@@ -109,6 +110,7 @@ export async function findStudentIds(supabase: Client, raw: string, limit = STUD
       supabase.from("student_details").select("profile_id").ilike("index_number", pat).limit(1000),
     ]);
     if (first.error || last.error || idx.error) throw new Error("students could not be searched");
+    if ((first.data ?? []).length >= 1000 || (last.data ?? []).length >= 1000 || (idx.data ?? []).length >= 1000) truncated = true;
     const hit = new Set<string>([...(first.data ?? []).map((r) => r.id), ...(last.data ?? []).map((r) => r.id)]);
     // An index-number match must also be an active student.
     const idxIds = (idx.data ?? []).map((r) => r.profile_id);
@@ -119,16 +121,17 @@ export async function findStudentIds(supabase: Client, raw: string, limit = STUD
     }
     const prev: Set<string> | null = acc;
     acc = prev ? new Set([...prev].filter((id) => hit.has(id))) : hit;
-    if (acc.size === 0) return [];
+    if (acc.size === 0) return { ids: [], truncated };
   }
-  return [...(acc ?? [])].slice(0, limit);
+  const all = [...(acc ?? [])];
+  return { ids: all.slice(0, limit), truncated: truncated || all.length > limit };
 }
 
 /** Active students for the add-booking form, with their index numbers. */
 export async function searchStudents(raw: string): Promise<StudentOption[]> {
   await requireStaff(["admin", "owner"]);
   const supabase = await createClient();
-  const ids = await findStudentIds(supabase, raw, 20);
+  const { ids } = await findStudentIds(supabase, raw, 20);
   if (ids.length === 0) return [];
   const { data, error } = await supabase
     .from("profiles")
@@ -148,7 +151,7 @@ export async function searchStudents(raw: string): Promise<StudentOption[]> {
 export type BookingFilters = { status?: string; exam?: string; q?: string };
 
 /** The bookings list under the filters, newest first, at most BOOKING_CAP rows (`capped` when there were more). */
-async function loadList(supabase: Client, f: BookingFilters): Promise<{ rows: AdminBookingRow[]; capped: boolean }> {
+async function loadList(supabase: Client, f: BookingFilters): Promise<{ rows: AdminBookingRow[]; capped: boolean; truncated: boolean }> {
   const status = f.status && (STATUSES as string[]).includes(f.status) ? f.status : null;
   const exam = f.exam && UUID.test(f.exam) ? f.exam : null;
   const q = (f.q ?? "").trim();
@@ -167,16 +170,19 @@ async function loadList(supabase: Client, f: BookingFilters): Promise<{ rows: Ad
   };
 
   let rows: QueryRow[];
+  let truncated = false;
   if (q) {
-    const ids = await findStudentIds(supabase, q);
-    if (ids.length === 0) return { rows: [], capped: false };
+    const found = await findStudentIds(supabase, q);
+    const ids = found.ids;
+    truncated = found.truncated;
+    if (ids.length === 0) return { rows: [], capped: false, truncated };
     rows = (await Promise.all(chunk(ids, ID_BATCH).map(run))).flat();
     rows.sort((a, b) => (a.created_at === b.created_at ? (a.id < b.id ? 1 : -1) : a.created_at < b.created_at ? 1 : -1));
   } else {
     rows = await run(null);
   }
   const capped = rows.length > BOOKING_CAP;
-  return { rows: rows.slice(0, BOOKING_CAP).map(toRow), capped };
+  return { rows: rows.slice(0, BOOKING_CAP).map(toRow), capped, truncated };
 }
 
 /** Every booking an admin can decide on: cancellation requests, and refund-due rows still part refunded or cancelled. */
@@ -230,5 +236,5 @@ export async function loadAdminBookings(filters: BookingFilters) {
   await requireStaff(["admin", "owner"]);
   const supabase = await createClient();
   const [list, decidable, exams] = await Promise.all([loadList(supabase, filters), loadDecidable(supabase), loadExamOptions(supabase)]);
-  return { rows: list.rows, capped: list.capped, decidable, exams };
+  return { rows: list.rows, capped: list.capped, truncated: list.truncated, decidable, exams };
 }

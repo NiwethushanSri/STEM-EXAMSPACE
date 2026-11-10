@@ -9,6 +9,10 @@ describe("searchWords", () => {
     expect(searchWords(undefined)).toEqual([]);
     expect(searchWords("   ")).toEqual([]);
   });
+  it("strips * (a PostgREST wildcard)", () => {
+    expect(searchWords("Al*pha *")).toEqual(["Alpha"]);
+    expect(searchWords("***")).toEqual([]);
+  });
   it("keeps commas and brackets as plain characters", () => {
     expect(searchWords("a,b),(c")).toEqual(["a,b),(c"]);
   });

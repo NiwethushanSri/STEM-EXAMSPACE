@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(30);
+select plan(31);
 select tests.assert_no_owner();
 
 create temp table c (name text primary key, id uuid not null);
@@ -126,7 +126,9 @@ select tests.as_postgres();
 select is((select paid_at from public.bookings where id = (select id from bk where name = 'g1')), now(), 'mark_booking_paid sets paid_at');
 
 -- A later cancellation request and full refund do not clear or move paid_at.
+alter table public.bookings disable trigger bookings_set_paid_at;
 update public.bookings set paid_at = '2031-10-20 10:00+00' where id = (select id from bk where name = 'f1');
+alter table public.bookings enable trigger bookings_set_paid_at;
 update public.bookings set status = 'cancel_requested' where id = (select id from bk where name = 'f1');
 select tests.as_user((select id from c where name = 'admin'));
 select is(public.decide_cancellation((select id from bk where name = 'f1'), true, 1000, 'refund') ->> 'ok', 'true', 'full refund recorded');
@@ -136,6 +138,8 @@ update public.bookings set paid_at = null where id = (select id from bk where na
 select is((select paid_at from public.bookings where id = (select id from bk where name = 'f1')), '2031-10-20 10:00:00+00'::timestamptz, 'paid_at cannot be cleared');
 update public.bookings set status = 'cancelled' where id = (select id from bk where name = 'g1');
 select is((select paid_at from public.bookings where id = (select id from bk where name = 'g1')), now(), 'cancelling keeps paid_at');
+update public.bookings set paid_at = '2031-12-25 10:00+00' where id = (select id from bk where name = 'f1');
+select is((select paid_at from public.bookings where id = (select id from bk where name = 'f1')), '2031-10-20 10:00:00+00'::timestamptz, 'a later update cannot move paid_at');
 
 select * from finish();
 rollback;

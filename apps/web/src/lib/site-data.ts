@@ -156,13 +156,6 @@ export const attendance = [
   { date: "22 Sep 2026", exam: "Biology Mock 1", status: "Absent" },
 ];
 
-export const bookings = [
-  { id: "BK-2041", student: "Amara Perera", exam: "Physics Mock 3", amount: "£25", status: "Paid" },
-  { id: "BK-2042", student: "Kasun Silva", exam: "UCAT Practice", amount: "£40", status: "Pending" },
-  { id: "BK-2043", student: "Lena Fernando", exam: "TMUA Practice", amount: "£35", status: "Paid" },
-  { id: "BK-2044", student: "Ravi Kumar", exam: "Maths Mock 3", amount: "£25", status: "Refund requested" },
-];
-
 export const pendingApprovals = [
   { name: "Dilan Jayawardena", role: "Student", school: "Royal College", submitted: "31 Oct 2026" },
   { name: "Sachini Ranasinghe", role: "Student", school: "St. Joseph's", submitted: "30 Oct 2026" },

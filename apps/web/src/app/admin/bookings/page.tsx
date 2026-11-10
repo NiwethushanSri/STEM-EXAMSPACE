@@ -14,7 +14,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
   const status = first(p.status);
   const exam = first(p.exam);
   const q = first(p.q).slice(0, 200);
-  const { rows, capped, decidable, exams } = await loadAdminBookings({ status, exam, q });
+  const { rows, capped, truncated, decidable, exams } = await loadAdminBookings({ status, exam, q });
   const filtered = Boolean(status || exam || q);
 
   return (
@@ -49,7 +49,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
           )}
         </form>
       </Card>
-      <AdminBookingsManager rows={rows} decidable={decidable} exams={exams} capped={capped} cap={BOOKING_CAP} />
+      <AdminBookingsManager rows={rows} decidable={decidable} exams={exams} capped={capped} truncated={truncated} cap={BOOKING_CAP} />
     </div>
   );
 }

@@ -6,12 +6,13 @@ export function escapeLike(s: string): string {
 }
 
 /**
- * Splits search text into at most 4 words of up to 40 characters. Every word must match the student's first
+ * Splits search text (minus `*`, which PostgREST treats as a wildcard) into at most 4 words of up to 40 characters. Every word must match the student's first
  * name, last name or index number. Commas, brackets and quotes are kept as ordinary characters: each word goes
  * to PostgREST as the value of a single `ilike` filter, never inside an `or(...)` string.
  */
 export function searchWords(raw: string | undefined | null): string[] {
   return (raw ?? "")
+    .replace(/\*/g, "")
     .trim()
     .split(/\s+/)
     .filter(Boolean)
