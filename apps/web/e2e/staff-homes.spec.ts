@@ -120,6 +120,8 @@ test.beforeAll(async () => {
   await book(soon, s4.id, "cancelled");
   // later: 1 seat.
   await book(later, s4.id, "paid");
+  const started = await makeExam("Started", day(-2), subjectA, "published"); // readable by RLS, so only the start-time filter hides it
+  await book(started, s1.id, "paid");
   await book(past, s1.id, "paid"); // a past exam: not shown to the tutor
   await book(past, s2.id, "paid");
   await book(other, s1.id, "paid");
@@ -172,6 +174,7 @@ test("tutor_sees_exactly_assigned_students_upcoming_bookings", async ({ page }) 
   await expect(page.getByText(studentNames.Dev)).toHaveCount(0);
   await expect(page.getByText("Exam details unavailable")).toHaveCount(0);
   await expect(page.getByText(`${tag} Past`)).toHaveCount(0);
+  await expect(page.getByText(`${tag} Started`)).toHaveCount(0);
   await expect(page.getByText("£")).toHaveCount(0);
 });
 

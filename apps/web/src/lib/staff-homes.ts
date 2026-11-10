@@ -17,15 +17,28 @@ export type TeacherHomeExam = { id: string; title: string; paper: string; subjec
 
 /** The teacher's own subjects: upcoming published exams with seats taken (counts only, no names, no prices) and the draft count. */
 export async function loadTeacherHome(): Promise<{ upcoming: TeacherHomeExam[]; drafts: number }> {
-  await requireStaff(["teacher"]);
+  const me = await requireStaff(["teacher"]);
   const { exams } = await loadTeacherExams();
   const now = Date.now();
-  const drafts = exams.filter((e) => e.status === "draft").length;
   const upcoming = exams
     .filter((e) => e.status === "published" && Date.parse(e.startsAt) >= now)
     .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
 
   const supabase = await createClient();
+  // A head count, so it does not depend on how many exams the list loader returns.
+  const { data: links, error: le } = await supabase.from("teacher_subjects").select("subject_id").eq("teacher_id", me.id);
+  if (le) throw new Error("subjects could not be loaded");
+  const subjectIds = (links ?? []).map((l) => l.subject_id);
+  let drafts = 0;
+  if (subjectIds.length > 0) {
+    const { count, error: de } = await supabase
+      .from("exams")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "draft")
+      .in("subject_id", subjectIds);
+    if (de) throw new Error("drafts could not be counted");
+    drafts = count ?? 0;
+  }
   const counts = new Map<string, number>();
   for (const ids of chunk(
     upcoming.map((e) => e.id),
