@@ -112,3 +112,4 @@ Launch checklist additions:
 L10. Confirm both scheduled jobs exist on the live project after the clean rebuild: `expire-unpaid-bookings` (every 5 minutes) and the nightly unconfirmed sign-up clean-up.
 L11. Stripe (Part 2 stage 6) is not built yet: the owner creates a Stripe account (test mode first) and sets `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as function secrets; webhook endpoint `<SUPABASE_URL>/functions/v1/stripe-webhook`. Live mode only after this checklist.
 L12. The dev `paid_at` backfill is an estimate; the clean rebuild (L2) removes it.
+- 2026-11-11 (owner decision): the site was made public again at https://stem-examspace.vercel.app (production build of commit a7989bd), still running on the live Supabase project with test data and with function email off. Earlier decision 11 ("team-only until launch") is replaced.
