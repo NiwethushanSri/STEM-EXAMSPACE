@@ -54,9 +54,9 @@ export function Papers({ exams, now, error }: { exams: PublicExam[]; now: Date; 
             <SubjectLinks />
             <div className={s.empty}>
               <p className={s.emptyTitle}>No papers are published yet</p>
-              <p>The next mock series is being set. Make a family account now and you can book the moment the dates go up.</p>
+              <p>The next mock series is being set. Register now and you can book the moment the dates go up.</p>
               <Link href="/register" className={s.btn}>
-                Create an account
+                Register a student
               </Link>
             </div>
           </>

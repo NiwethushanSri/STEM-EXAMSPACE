@@ -6,7 +6,7 @@ import s from "./home.module.css";
 const FAQ = [
   {
     q: "Who can book a seat?",
-    a: "A parent or guardian books for their child from a family account. Older students can also book for themselves from their own account.",
+    a: "A parent or guardian books from their own parent account, which is linked to their child. Older students can also book for themselves from their own account.",
   },
   {
     q: "Do I need an account?",

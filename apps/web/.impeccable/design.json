@@ -1055,7 +1055,7 @@
       "kind": "button",
       "refersTo": "button-ghost",
       "description": "Secondary action beside a primary button.",
-      "html": "<button class=\"ds-btn-ghost\">Create a family account</button>",
+      "html": "<button class=\"ds-btn-ghost\">Register a student</button>",
       "css": ".ds-btn-ghost{display:inline-flex;align-items:center;min-height:48px;padding:12px 26px;border:0;border-radius:999px;background:#ffffff;color:#1f64ae;box-shadow:inset 0 0 0 2px #1f64ae;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;font-weight:700;font-size:17px;line-height:1.2;cursor:pointer;transition:background-color 160ms ease-out}.ds-btn-ghost:hover{background:#eaf1fb}.ds-btn-ghost:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}"
     },
     {
@@ -1079,7 +1079,7 @@
       "kind": "card",
       "refersTo": "role-card",
       "description": "Hero routing card for parents, students and visitors.",
-      "html": "<a class=\"ds-role\" href=\"#\"><span class=\"ds-ri\"></span><span><b>I am a parent</b><small>Make a family account and book a seat</small></span><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg></a>",
+      "html": "<a class=\"ds-role\" href=\"#\"><span class=\"ds-ri\"></span><span><b>I am a parent</b><small>Register a student and book a seat</small></span><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg></a>",
       "css": ".ds-role{display:grid;grid-template-columns:48px 1fr 22px;align-items:center;gap:16px;max-width:420px;padding:18px 20px;border:1px solid #e3e6ec;border-radius:16px;background:#ffffff;text-decoration:none;color:#2b3550;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;box-shadow:0 1px 2px rgb(16 34 79 / 0.05),0 8px 24px -6px rgb(16 34 79 / 0.1);transition:border-color 160ms ease-out,translate 160ms ease-out}.ds-role:hover{border-color:#1f64ae;translate:0 -2px}.ds-role:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}.ds-ri{width:48px;height:48px;border-radius:12px;background:#e3f4ec}.ds-role b{display:block;color:#10224f;font-size:18px;line-height:1.3}.ds-role small{display:block;color:#5a6382;font-size:15px;line-height:1.4}.ds-role svg{width:22px;height:22px;color:#10224f}"
     },
     {

@@ -82,7 +82,7 @@ export function Closing({ bookHref }: { bookHref: string }) {
             Book a seat
           </Link>
           <Link href="/register" className={`${s.btn} ${s.btnGhost}`}>
-            Create a family account
+            Register a student
           </Link>
         </div>
       </div>
@@ -124,7 +124,7 @@ export function Footer() {
                 <Link href="/login">Sign in</Link>
               </li>
               <li>
-                <Link href="/register">Create an account</Link>
+                <Link href="/register">Register a student</Link>
               </li>
               <li>
                 <Link href="/account/bookings">My bookings</Link>
