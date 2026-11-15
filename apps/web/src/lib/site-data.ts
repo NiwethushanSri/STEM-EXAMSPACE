@@ -7,7 +7,6 @@ export const subjects = [
   "Computer Science",
 ];
 
-export const entranceExams = ["TMUA", "FSAT", "UCAT"];
 
 import type { TestResult } from "@stem/shared";
 
@@ -146,7 +145,7 @@ export const notices = [
 export const upcomingExams = [
   { subject: "Physics", date: "14 Nov 2026", time: "09:00", type: "Physical", venue: "Hall B" },
   { subject: "Maths", date: "18 Nov 2026", time: "13:00", type: "Online", venue: "Online" },
-  { subject: "UCAT", date: "2 Dec 2026", time: "08:30", type: "Online", venue: "Online" },
+  { subject: "Further Maths", date: "2 Dec 2026", time: "08:30", type: "Online", venue: "Online" },
 ];
 
 export const attendance = [
@@ -192,5 +191,5 @@ export const timetable = [
   { date: "14 Nov 2026", subject: "Physics", time: "09:00–11:00", type: "Physical" },
   { date: "18 Nov 2026", subject: "Maths", time: "13:00–15:00", type: "Online" },
   { date: "21 Nov 2026", subject: "Chemistry", time: "10:00–12:00", type: "Online" },
-  { date: "2 Dec 2026", subject: "UCAT", time: "08:30–10:30", type: "Online" },
+  { date: "2 Dec 2026", subject: "Further Maths", time: "08:30–10:30", type: "Online" },
 ];
