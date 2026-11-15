@@ -1,0 +1,1196 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-15T10:59:32.749Z",
+  "title": "Design System: Stem Examspace",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Logo Blue",
+        "canonical": "#1f64ae",
+        "tonalRamp": [
+          "#091e34",
+          "#103257",
+          "#16467a",
+          "#1b5899",
+          "#578bc2",
+          "#8fb2d7",
+          "#c7d8eb",
+          "#edf3f9"
+        ]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "Pressed Blue",
+        "canonical": "#17508d",
+        "tonalRamp": [
+          "#07182a",
+          "#0c2847",
+          "#103863",
+          "#14467c",
+          "#517caa",
+          "#8ba8c6",
+          "#c5d3e3",
+          "#ecf1f6"
+        ]
+      },
+      "primary-tint": {
+        "role": "primary",
+        "displayName": "Blue Mist",
+        "canonical": "#eaf1fb",
+        "tonalRamp": [
+          "#46484b",
+          "#75797e",
+          "#a4a9b0",
+          "#ced4dd",
+          "#eff5fc",
+          "#f5f8fd",
+          "#fafcfe",
+          "#fdfeff"
+        ]
+      },
+      "hero-wash": {
+        "role": "primary",
+        "displayName": "Hero Wash",
+        "canonical": "#eef4fc",
+        "tonalRamp": [
+          "#47494c",
+          "#777a7e",
+          "#a7abb0",
+          "#d1d7de",
+          "#f2f7fd",
+          "#f7fafe",
+          "#fbfcfe",
+          "#fefeff"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Logo Navy",
+        "canonical": "#10224f",
+        "tonalRamp": [
+          "#050a18",
+          "#081128",
+          "#0b1837",
+          "#0e1e46",
+          "#4c597b",
+          "#8891a7",
+          "#c3c8d3",
+          "#ecedf1"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Slate Text",
+        "canonical": "#2b3550",
+        "tonalRamp": [
+          "#0d1018",
+          "#161b28",
+          "#1e2538",
+          "#262f46",
+          "#60687c",
+          "#959aa8",
+          "#cacdd3",
+          "#eeeff1"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Slate",
+        "canonical": "#5a6382",
+        "tonalRamp": [
+          "#1b1e27",
+          "#2d3241",
+          "#3f455b",
+          "#4f5772",
+          "#838aa1",
+          "#adb1c1",
+          "#d6d8e0",
+          "#f2f3f5"
+        ]
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "White",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#4d4d4d",
+          "#808080",
+          "#b3b3b3",
+          "#e0e0e0",
+          "#ffffff",
+          "#ffffff",
+          "#ffffff",
+          "#ffffff"
+        ]
+      },
+      "bg-soft": {
+        "role": "neutral",
+        "displayName": "Soft Grey",
+        "canonical": "#f7f8fa",
+        "tonalRamp": [
+          "#4a4a4b",
+          "#7c7c7d",
+          "#adaeaf",
+          "#d9dadc",
+          "#f9fafb",
+          "#fbfcfd",
+          "#fdfdfe",
+          "#fefeff"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e3e6ec",
+        "tonalRamp": [
+          "#444547",
+          "#727376",
+          "#9fa1a5",
+          "#c8cad0",
+          "#eaecf1",
+          "#f1f3f6",
+          "#f8f9fa",
+          "#fdfdfd"
+        ]
+      },
+      "border-dashed": {
+        "role": "neutral",
+        "displayName": "Dashed Line",
+        "canonical": "#c9cfda",
+        "tonalRamp": [
+          "#3c3e41",
+          "#65686d",
+          "#8d9199",
+          "#b1b6c0",
+          "#d7dbe3",
+          "#e4e7ed",
+          "#f2f3f6",
+          "#fbfbfc"
+        ]
+      },
+      "switch-off": {
+        "role": "neutral",
+        "displayName": "Switch Off",
+        "canonical": "#c9d0dc",
+        "tonalRamp": [
+          "#3c3e42",
+          "#65686e",
+          "#8d929a",
+          "#b1b7c2",
+          "#d7dce5",
+          "#e4e8ee",
+          "#f2f3f6",
+          "#fbfbfc"
+        ]
+      },
+      "bar-track": {
+        "role": "neutral",
+        "displayName": "Bar Track",
+        "canonical": "#edf0f5",
+        "tonalRamp": [
+          "#47484a",
+          "#77787b",
+          "#a6a8ac",
+          "#d1d3d8",
+          "#f2f4f8",
+          "#f6f8fa",
+          "#fbfbfd",
+          "#fefefe"
+        ]
+      },
+      "green": {
+        "role": "secondary",
+        "displayName": "Emblem Green",
+        "canonical": "#1e8f62",
+        "tonalRamp": [
+          "#092b1d",
+          "#0f4831",
+          "#156445",
+          "#1a7e56",
+          "#56ab89",
+          "#8fc7b1",
+          "#c7e3d8",
+          "#edf6f2"
+        ]
+      },
+      "green-tint": {
+        "role": "secondary",
+        "displayName": "Green Tint",
+        "canonical": "#e3f4ec",
+        "tonalRamp": [
+          "#444947",
+          "#727a76",
+          "#9faba5",
+          "#c8d7d0",
+          "#eaf7f1",
+          "#f1faf6",
+          "#f8fcfa",
+          "#fdfefd"
+        ]
+      },
+      "green-deep": {
+        "role": "secondary",
+        "displayName": "Deep Green",
+        "canonical": "#13623f",
+        "tonalRamp": [
+          "#061d13",
+          "#0a3120",
+          "#0d452c",
+          "#115637",
+          "#4e896f",
+          "#89b19f",
+          "#c4d8cf",
+          "#ecf2f0"
+        ]
+      },
+      "teal": {
+        "role": "secondary",
+        "displayName": "Emblem Teal",
+        "canonical": "#2c9a97",
+        "tonalRamp": [
+          "#0d2e2d",
+          "#164d4c",
+          "#1f6c6a",
+          "#278885",
+          "#61b3b1",
+          "#96cdcb",
+          "#cae6e5",
+          "#eef7f7"
+        ]
+      },
+      "teal-tint": {
+        "role": "secondary",
+        "displayName": "Teal Tint",
+        "canonical": "#e3f4f3",
+        "tonalRamp": [
+          "#444949",
+          "#727a7a",
+          "#9fabaa",
+          "#c8d7d6",
+          "#eaf7f6",
+          "#f1faf9",
+          "#f8fcfc",
+          "#fdfefe"
+        ]
+      },
+      "teal-deep": {
+        "role": "secondary",
+        "displayName": "Deep Teal",
+        "canonical": "#16605e",
+        "tonalRamp": [
+          "#071d1c",
+          "#0b302f",
+          "#0f4342",
+          "#135453",
+          "#508886",
+          "#8bb0af",
+          "#c5d7d7",
+          "#ecf2f2"
+        ]
+      },
+      "orange": {
+        "role": "tertiary",
+        "displayName": "Emblem Orange",
+        "canonical": "#ee9330",
+        "tonalRamp": [
+          "#472c0e",
+          "#774a18",
+          "#a76722",
+          "#d1812a",
+          "#f2ae64",
+          "#f7c998",
+          "#fbe4cb",
+          "#fef6ee"
+        ]
+      },
+      "orange-tint": {
+        "role": "tertiary",
+        "displayName": "Orange Tint",
+        "canonical": "#fdf0e1",
+        "tonalRamp": [
+          "#4c4844",
+          "#7f7871",
+          "#b1a89e",
+          "#dfd3c6",
+          "#fef4e9",
+          "#fef8f0",
+          "#fffbf8",
+          "#fffefd"
+        ]
+      },
+      "orange-deep": {
+        "role": "tertiary",
+        "displayName": "Deep Orange",
+        "canonical": "#8a4a0b",
+        "tonalRamp": [
+          "#291603",
+          "#452506",
+          "#613408",
+          "#79410a",
+          "#a77748",
+          "#c5a585",
+          "#e2d2c2",
+          "#f6f1eb"
+        ]
+      },
+      "orange-ink": {
+        "role": "tertiary",
+        "displayName": "Orange Ink",
+        "canonical": "#5c3a0e",
+        "tonalRamp": [
+          "#1c1104",
+          "#2e1d07",
+          "#40290a",
+          "#51330c",
+          "#856b4a",
+          "#ae9d87",
+          "#d6cec3",
+          "#f2efec"
+        ]
+      },
+      "red-tint": {
+        "role": "tertiary",
+        "displayName": "Booked Red Tint",
+        "canonical": "#fdeceb",
+        "tonalRamp": [
+          "#4c4747",
+          "#7f7676",
+          "#b1a5a5",
+          "#dfd0cf",
+          "#fef1f0",
+          "#fef6f5",
+          "#fffafa",
+          "#fffdfd"
+        ]
+      },
+      "red-deep": {
+        "role": "tertiary",
+        "displayName": "Booked Red",
+        "canonical": "#a32a1f",
+        "tonalRamp": [
+          "#310d09",
+          "#521510",
+          "#721d16",
+          "#8f251b",
+          "#ba5f57",
+          "#d1958f",
+          "#e8cac7",
+          "#f8eeed"
+        ]
+      },
+      "artefact-pen-red": {
+        "role": "artefact",
+        "displayName": "Examiner Pen Red",
+        "canonical": "#c8261b",
+        "tonalRamp": [
+          "#3c0b08",
+          "#64130e",
+          "#8c1b13",
+          "#b02118",
+          "#d65c54",
+          "#e4938d",
+          "#f1c9c6",
+          "#fbeeed"
+        ]
+      },
+      "artefact-pen-blue": {
+        "role": "artefact",
+        "displayName": "Student Pen Blue",
+        "canonical": "#1d3c8f",
+        "tonalRamp": [
+          "#09122b",
+          "#0f1e48",
+          "#142a64",
+          "#1a357e",
+          "#566dab",
+          "#8e9ec7",
+          "#c7cee3",
+          "#edeff6"
+        ]
+      },
+      "artefact-paper-ink": {
+        "role": "artefact",
+        "displayName": "Paper Ink",
+        "canonical": "#1b1b1b",
+        "tonalRamp": [
+          "#080808",
+          "#0e0e0e",
+          "#131313",
+          "#181818",
+          "#545454",
+          "#8d8d8d",
+          "#c6c6c6",
+          "#ededed"
+        ]
+      },
+      "artefact-print": {
+        "role": "artefact",
+        "displayName": "Print Black",
+        "canonical": "#222222",
+        "tonalRamp": [
+          "#0a0a0a",
+          "#111111",
+          "#181818",
+          "#1e1e1e",
+          "#595959",
+          "#919191",
+          "#c8c8c8",
+          "#ededed"
+        ]
+      },
+      "artefact-print-muted": {
+        "role": "artefact",
+        "displayName": "Print Grey",
+        "canonical": "#4a5568",
+        "tonalRamp": [
+          "#161a1f",
+          "#252b34",
+          "#343c49",
+          "#414b5c",
+          "#77808e",
+          "#a5aab4",
+          "#d2d5d9",
+          "#f1f1f3"
+        ]
+      },
+      "artefact-rule": {
+        "role": "artefact",
+        "displayName": "Script Rule",
+        "canonical": "#e1e5eb",
+        "tonalRamp": [
+          "#444547",
+          "#717376",
+          "#9ea0a5",
+          "#c6cacf",
+          "#e9ecf0",
+          "#f0f2f5",
+          "#f8f9fa",
+          "#fdfdfd"
+        ]
+      },
+      "artefact-panel-line": {
+        "role": "artefact",
+        "displayName": "Panel Line",
+        "canonical": "#dde1e8",
+        "tonalRamp": [
+          "#424446",
+          "#6f7174",
+          "#9b9ea2",
+          "#c2c6cc",
+          "#e6e9ee",
+          "#eef0f4",
+          "#f7f8f9",
+          "#fcfdfd"
+        ]
+      },
+      "artefact-screen": {
+        "role": "artefact",
+        "displayName": "Tablet Screen",
+        "canonical": "#eef0f4",
+        "tonalRamp": [
+          "#474849",
+          "#77787a",
+          "#a7a8ab",
+          "#d1d3d7",
+          "#f2f4f7",
+          "#f7f8fa",
+          "#fbfbfc",
+          "#fefefe"
+        ]
+      },
+      "artefact-photo": {
+        "role": "artefact",
+        "displayName": "ID Photo Grey",
+        "canonical": "#eef1f6",
+        "tonalRamp": [
+          "#47484a",
+          "#77797b",
+          "#a7a9ac",
+          "#d1d4d8",
+          "#f2f5f8",
+          "#f7f8fb",
+          "#fbfcfd",
+          "#fefefe"
+        ]
+      },
+      "artefact-silhouette": {
+        "role": "artefact",
+        "displayName": "Silhouette",
+        "canonical": "#c5cede",
+        "tonalRamp": [
+          "#3b3e43",
+          "#63676f",
+          "#8a909b",
+          "#adb5c3",
+          "#d4dae6",
+          "#e2e7ef",
+          "#f1f3f7",
+          "#fafbfc"
+        ]
+      },
+      "artefact-highlight": {
+        "role": "artefact",
+        "displayName": "Answer Highlight",
+        "canonical": "#fff8e8",
+        "tonalRamp": [
+          "#4d4a46",
+          "#807c74",
+          "#b3aea2",
+          "#e0dacc",
+          "#fffaee",
+          "#fffcf4",
+          "#fffdf9",
+          "#fffefd"
+        ]
+      },
+      "artefact-highlight-edge": {
+        "role": "artefact",
+        "displayName": "Highlight Edge",
+        "canonical": "#f2c14e",
+        "tonalRamp": [
+          "#493a17",
+          "#796127",
+          "#a98737",
+          "#d5aa45",
+          "#f5d17a",
+          "#f9e0a7",
+          "#fcf0d3",
+          "#fefaf1"
+        ]
+      },
+      "artefact-bezel": {
+        "role": "artefact",
+        "displayName": "Device Black",
+        "canonical": "#0b0c0f",
+        "tonalRamp": [
+          "#08090b",
+          "#0d0f12",
+          "#121419",
+          "#171a20",
+          "#53565b",
+          "#8d8e92",
+          "#c6c7c8",
+          "#ededed"
+        ]
+      },
+      "artefact-device-edge": {
+        "role": "artefact",
+        "displayName": "Aluminium Edge",
+        "canonical": "#3b3e46",
+        "tonalRamp": [
+          "#121315",
+          "#1f2024",
+          "#292b31",
+          "#34373e",
+          "#6c6e74",
+          "#9d9fa3",
+          "#cecfd1",
+          "#f1f1f2"
+        ]
+      },
+      "artefact-device-edge-dark": {
+        "role": "artefact",
+        "displayName": "Aluminium Shadow",
+        "canonical": "#1c1e23",
+        "tonalRamp": [
+          "#08090b",
+          "#0f1012",
+          "#141519",
+          "#191a1f",
+          "#55565a",
+          "#8e8f91",
+          "#c6c7c8",
+          "#efeff0"
+        ]
+      },
+      "artefact-camera": {
+        "role": "artefact",
+        "displayName": "Camera Lens",
+        "canonical": "#1b1d22",
+        "tonalRamp": [
+          "#08090a",
+          "#0e0f12",
+          "#131418",
+          "#181a1e",
+          "#545659",
+          "#8d8e91",
+          "#c6c7c8",
+          "#efeff0"
+        ]
+      },
+      "artefact-camera-ring": {
+        "role": "artefact",
+        "displayName": "Camera Ring",
+        "canonical": "#2f333b",
+        "tonalRamp": [
+          "#0e0f12",
+          "#181b1f",
+          "#212429",
+          "#292d34",
+          "#63666c",
+          "#97999d",
+          "#cbccce",
+          "#f0f1f1"
+        ]
+      },
+      "artefact-phone-glass": {
+        "role": "artefact",
+        "displayName": "Phone Glass",
+        "canonical": "#050506",
+        "tonalRamp": [
+          "#020202",
+          "#030303",
+          "#040404",
+          "#040405",
+          "#444444",
+          "#828283",
+          "#c1c1c1",
+          "#eeeeee"
+        ]
+      },
+      "artefact-titanium-inner": {
+        "role": "artefact",
+        "displayName": "Titanium Inner",
+        "canonical": "#48484d",
+        "tonalRamp": [
+          "#161617",
+          "#252528",
+          "#323236",
+          "#3f3f44",
+          "#76767a",
+          "#a4a4a6",
+          "#d1d1d3",
+          "#f2f2f3"
+        ]
+      },
+      "artefact-titanium-shadow": {
+        "role": "artefact",
+        "displayName": "Titanium Shadow",
+        "canonical": "#2a2a2e",
+        "tonalRamp": [
+          "#0d0d0e",
+          "#161618",
+          "#1d1d20",
+          "#252528",
+          "#5f5f62",
+          "#959597",
+          "#cacacb",
+          "#f0f0f0"
+        ]
+      },
+      "artefact-titanium": {
+        "role": "artefact",
+        "displayName": "Titanium",
+        "canonical": "#75757b",
+        "tonalRamp": [
+          "#232325",
+          "#3d3d40",
+          "#525256",
+          "#67676c",
+          "#98989c",
+          "#bababd",
+          "#ddddde",
+          "#f5f5f6"
+        ]
+      },
+      "artefact-button-shade": {
+        "role": "artefact",
+        "displayName": "Side Button Shade",
+        "canonical": "#3a3a3e",
+        "tonalRamp": [
+          "#111113",
+          "#1e1e20",
+          "#29292b",
+          "#333337",
+          "#6b6b6e",
+          "#9d9d9f",
+          "#cececf",
+          "#f1f1f1"
+        ]
+      },
+      "artefact-button-light": {
+        "role": "artefact",
+        "displayName": "Side Button Light",
+        "canonical": "#6b6b70",
+        "tonalRamp": [
+          "#202022",
+          "#38383a",
+          "#4b4b4e",
+          "#5e5e63",
+          "#909094",
+          "#b5b5b8",
+          "#dadadb",
+          "#f5f5f5"
+        ]
+      },
+      "artefact-island": {
+        "role": "artefact",
+        "displayName": "Camera Island",
+        "canonical": "#000000",
+        "tonalRamp": [
+          "#000000",
+          "#000000",
+          "#000000",
+          "#000000",
+          "#404040",
+          "#808080",
+          "#bfbfbf",
+          "#ededed"
+        ]
+      },
+      "artefact-stylus-body": {
+        "role": "artefact",
+        "displayName": "Pen Body",
+        "canonical": "#f4f5f7",
+        "tonalRamp": [
+          "#494a4a",
+          "#7f7f80",
+          "#abacad",
+          "#d7d8d9",
+          "#f7f8f9",
+          "#fafafb",
+          "#fcfdfd",
+          "#fefefe"
+        ]
+      },
+      "artefact-stylus-band": {
+        "role": "artefact",
+        "displayName": "Pen Band",
+        "canonical": "#e2e5ea",
+        "tonalRamp": [
+          "#444546",
+          "#76777a",
+          "#9ea0a4",
+          "#c7cace",
+          "#e9ecef",
+          "#f1f2f5",
+          "#f8f9fa",
+          "#fdfdfe"
+        ]
+      },
+      "artefact-stylus-edge": {
+        "role": "artefact",
+        "displayName": "Pen Edge",
+        "canonical": "#d3d7de",
+        "tonalRamp": [
+          "#3f4143",
+          "#6e7073",
+          "#94979b",
+          "#babdc3",
+          "#dee1e6",
+          "#e9ebef",
+          "#f4f5f7",
+          "#fcfcfd"
+        ]
+      },
+      "artefact-stylus-cone": {
+        "role": "artefact",
+        "displayName": "Pen Cone",
+        "canonical": "#eceef1",
+        "tonalRamp": [
+          "#474748",
+          "#7b7c7d",
+          "#a5a7a9",
+          "#d0d1d4",
+          "#f1f2f5",
+          "#f6f7f8",
+          "#fafbfc",
+          "#fefefe"
+        ]
+      },
+      "artefact-stylus-nib": {
+        "role": "artefact",
+        "displayName": "Pen Nib",
+        "canonical": "#5b616b",
+        "tonalRamp": [
+          "#1b1d20",
+          "#2f3238",
+          "#40444b",
+          "#50555e",
+          "#848990",
+          "#adb0b5",
+          "#d6d8da",
+          "#f4f4f5"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Hero headline only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "One per section, one ringed word."
+      },
+      "figure": {
+        "displayName": "Figure",
+        "purpose": "Marking score and dashboard KPI figures."
+      },
+      "figure-sm": {
+        "displayName": "Figure Small",
+        "purpose": "KPI figures under 760px."
+      },
+      "title-lg": {
+        "displayName": "Title Large",
+        "purpose": "Step, audience-card and empty-state titles; prices."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Paper and results titles."
+      },
+      "lead": {
+        "displayName": "Lead",
+        "purpose": "Hero paragraph."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Copy and ledes; 17px under 760px."
+      },
+      "body-sm": {
+        "displayName": "Body Small",
+        "purpose": "Step and list text."
+      },
+      "button": {
+        "displayName": "Button",
+        "purpose": "Pill buttons."
+      },
+      "button-sm": {
+        "displayName": "Button Compact",
+        "purpose": "Header and paper-card buttons."
+      },
+      "nav": {
+        "displayName": "Nav",
+        "purpose": "Header links and Sign in."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Chips, subject tabs, segments, facts, topic names, focus text, sub-lines, footer."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Figure captions, badge, KPI labels, chart legend and notes, footer note."
+      },
+      "pill": {
+        "displayName": "Pill",
+        "purpose": "Seat status, counts, subject-tab percentages."
+      },
+      "chart-value": {
+        "displayName": "Chart Value",
+        "purpose": "Point values inside the analysis chart (SVG)."
+      },
+      "chart-axis": {
+        "displayName": "Chart Axis",
+        "purpose": "Axis and month labels inside the analysis chart (SVG)."
+      },
+      "artefact-card-index": {
+        "displayName": "Card Index Number",
+        "purpose": "Pictured index card only."
+      },
+      "artefact-question": {
+        "displayName": "Printed Question",
+        "purpose": "Pictured script only."
+      },
+      "artefact-meta": {
+        "displayName": "Script Header",
+        "purpose": "Pictured script only."
+      },
+      "artefact-card-brand": {
+        "displayName": "Card Brand Line",
+        "purpose": "Printed brand on the pictured index card only."
+      },
+      "artefact-fine": {
+        "displayName": "Card Fine Print",
+        "purpose": "Pictured index card only."
+      },
+      "artefact-store-badge": {
+        "displayName": "Store Badge",
+        "purpose": "Store name on the coming-soon badges."
+      },
+      "artefact-store-badge-small": {
+        "displayName": "Store Badge Line",
+        "purpose": "\"Coming soon to\" line on the store badges."
+      },
+      "artefact-handwriting": {
+        "displayName": "Handwritten Answer",
+        "purpose": "Kalam, pictured script only."
+      },
+      "artefact-margin-mark": {
+        "displayName": "Margin Mark",
+        "purpose": "Kalam bold examiner mark, pictured script only."
+      },
+      "artefact-phone-large-title": {
+        "displayName": "Phone Large Title",
+        "purpose": "Pictured phone screen only; phone system stack."
+      },
+      "artefact-phone-headline": {
+        "displayName": "Phone Headline",
+        "purpose": "Pictured phone: marks line."
+      },
+      "artefact-phone-nav": {
+        "displayName": "Phone Nav",
+        "purpose": "Pictured phone: back link and card titles."
+      },
+      "artefact-phone-status": {
+        "displayName": "Phone Status Bar",
+        "purpose": "Pictured phone: time in the status bar."
+      },
+      "artefact-phone-body": {
+        "displayName": "Phone Body",
+        "purpose": "Pictured phone: base text."
+      },
+      "artefact-phone-footnote": {
+        "displayName": "Phone Footnote",
+        "purpose": "Pictured phone: sub-lines, bars, note."
+      },
+      "artefact-phone-tab": {
+        "displayName": "Phone Tab Label",
+        "purpose": "Pictured phone: tab bar labels."
+      }
+    },
+    "shadows": [
+      {
+        "name": "card",
+        "value": "0 1px 2px rgb(16 34 79 / 0.05), 0 8px 24px -6px rgb(16 34 79 / 0.1)",
+        "purpose": "Ambient lift for every content card and the analysis dashboard."
+      },
+      {
+        "name": "segment-thumb",
+        "value": "0 1px 3px rgb(16 34 79 / 0.16)",
+        "purpose": "Selected segment option."
+      },
+      {
+        "name": "switch-knob",
+        "value": "0 1px 2px rgb(0 0 0 / 0.2)",
+        "purpose": "Switch knob."
+      },
+      {
+        "name": "artefact-tablet",
+        "value": "0 0 0 2px #3b3e46, 0 0 0 3.5px #1c1e23, 0 36px 60px -28px rgb(16 34 79 / 0.6)",
+        "purpose": "Pictured tablet: aluminium edge rings and drop shadow."
+      },
+      {
+        "name": "artefact-phone",
+        "value": "0 0 0 2px #48484d, 0 0 0 3.5px #2a2a2e, 0 0 0 4.5px #75757b, 0 50px 80px -32px rgb(16 34 79 / 0.55), 0 12px 24px -12px rgb(16 34 79 / 0.3)",
+        "purpose": "Pictured phone: titanium band rings and drop shadow."
+      },
+      {
+        "name": "artefact-pen-dock",
+        "value": "drop-shadow(0 3px 3px rgb(16 34 79 / 0.25))",
+        "purpose": "Docked pen on the tablet (filter)."
+      },
+      {
+        "name": "artefact-index-card",
+        "value": "0 24px 40px -18px rgb(16 34 79 / 0.35)",
+        "purpose": "Pictured index card."
+      },
+      {
+        "name": "artefact-sheet",
+        "value": "0 1px 4px rgb(0 0 0 / 0.1)",
+        "purpose": "Script paper on the tablet screen."
+      },
+      {
+        "name": "artefact-app-card",
+        "value": "0 1px 2px rgb(16 34 79 / 0.06)",
+        "purpose": "Cards on the pictured phone screen."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state",
+        "value": "160ms ease-out",
+        "purpose": "Hover and selection colour, border and lift changes, including subject tabs."
+      },
+      {
+        "name": "highlight",
+        "value": "220ms ease-out",
+        "purpose": "Marking-screen answer highlight."
+      },
+      {
+        "name": "faq-toggle",
+        "value": "rotate 200ms ease-out",
+        "purpose": "FAQ plus to minus."
+      },
+      {
+        "name": "draw-in",
+        "value": "scroll-driven view() timeline, entry 15% to entry 100%, linear",
+        "purpose": "Hand-drawn rings and step drawings draw on scroll; off under reduced motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "tablet",
+        "value": "1024px"
+      },
+      {
+        "name": "audience-stack",
+        "value": "900px"
+      },
+      {
+        "name": "nav-collapse",
+        "value": "860px"
+      },
+      {
+        "name": "phone",
+        "value": "760px"
+      },
+      {
+        "name": "small-phone",
+        "value": "560px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Every main action: Book a seat, Book on a paper card. Full pill in Logo Blue.",
+      "html": "<button class=\"ds-btn\">Book a seat <svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg></button>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;gap:8px;min-height:48px;padding:12px 26px;border:0;border-radius:999px;background:#1f64ae;color:#ffffff;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;font-weight:700;font-size:17px;line-height:1.2;cursor:pointer;transition:background-color 160ms ease-out}.ds-btn svg{width:18px;height:18px}.ds-btn:hover{background:#17508d}.ds-btn:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary action beside a primary button.",
+      "html": "<button class=\"ds-btn-ghost\">Create a family account</button>",
+      "css": ".ds-btn-ghost{display:inline-flex;align-items:center;min-height:48px;padding:12px 26px;border:0;border-radius:999px;background:#ffffff;color:#1f64ae;box-shadow:inset 0 0 0 2px #1f64ae;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;font-weight:700;font-size:17px;line-height:1.2;cursor:pointer;transition:background-color 160ms ease-out}.ds-btn-ghost:hover{background:#eaf1fb}.ds-btn-ghost:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}"
+    },
+    {
+      "name": "Subject Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Subject filters with tinted icon and count; selected fills navy.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip\" aria-pressed=\"true\">All subjects <span class=\"ds-count\">6</span></button><button class=\"ds-chip\"><span class=\"ds-chip-ico\"></span>Maths <span class=\"ds-count\">2</span></button></div>",
+      "css": ".ds-chips{display:flex;gap:10px;flex-wrap:wrap}.ds-chip{display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:8px 16px 8px 10px;border-radius:999px;border:1px solid #e3e6ec;background:#ffffff;color:#2b3550;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;font-size:15px;font-weight:600;cursor:pointer;transition:border-color 160ms ease-out,background-color 160ms ease-out}.ds-chip[aria-pressed=true]{padding-left:16px;background:#10224f;border-color:#10224f;color:#ffffff}.ds-chip:hover:not([aria-pressed=true]){border-color:#1f64ae;background:#eaf1fb}.ds-chip:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}.ds-chip-ico{width:26px;height:26px;border-radius:999px;background:#e3f4ec}.ds-count{display:inline-grid;place-items:center;min-width:24px;height:22px;padding:0 7px;border-radius:999px;background:#f7f8fa;color:#5a6382;font-size:13px;font-weight:700}.ds-chip[aria-pressed=true] .ds-count{background:rgb(255 255 255 / 0.18);color:#ffffff}"
+    },
+    {
+      "name": "Paper Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "One upcoming paper: tinted subject tile, facts, price, seat pill and Book.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-top\"><span class=\"ds-tile\"></span><div><p class=\"ds-t\">GCSE Maths</p><p class=\"ds-s\">Paper 1 Higher</p></div></div><div class=\"ds-foot\"><span class=\"ds-price\">£35.00</span><span class=\"ds-pill\">14 seats left</span></div></div>",
+      "css": ".ds-card{max-width:340px;border:1px solid #e3e6ec;border-radius:18px;background:#ffffff;box-shadow:0 1px 2px rgb(16 34 79 / 0.05),0 8px 24px -6px rgb(16 34 79 / 0.1);padding:22px 22px 20px;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;color:#2b3550}.ds-top{display:grid;grid-template-columns:44px 1fr;gap:14px}.ds-tile{width:44px;height:44px;border-radius:12px;background:#e3f4ec}.ds-t{margin:0;color:#10224f;font-size:19px;font-weight:800;line-height:1.25}.ds-s{margin:2px 0 0;color:#5a6382;font-size:15px}.ds-foot{display:flex;justify-content:space-between;align-items:center;margin-top:18px}.ds-price{color:#10224f;font-size:22px;font-weight:800;font-variant-numeric:tabular-nums}.ds-pill{padding:4px 11px;border-radius:999px;background:#e3f4ec;color:#13623f;font-size:13px;font-weight:700}"
+    },
+    {
+      "name": "Role Card",
+      "kind": "card",
+      "refersTo": "role-card",
+      "description": "Hero routing card for parents, students and visitors.",
+      "html": "<a class=\"ds-role\" href=\"#\"><span class=\"ds-ri\"></span><span><b>I am a parent</b><small>Make a family account and book a seat</small></span><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M5 12h14M13 6l6 6-6 6\"/></svg></a>",
+      "css": ".ds-role{display:grid;grid-template-columns:48px 1fr 22px;align-items:center;gap:16px;max-width:420px;padding:18px 20px;border:1px solid #e3e6ec;border-radius:16px;background:#ffffff;text-decoration:none;color:#2b3550;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;box-shadow:0 1px 2px rgb(16 34 79 / 0.05),0 8px 24px -6px rgb(16 34 79 / 0.1);transition:border-color 160ms ease-out,translate 160ms ease-out}.ds-role:hover{border-color:#1f64ae;translate:0 -2px}.ds-role:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}.ds-ri{width:48px;height:48px;border-radius:12px;background:#e3f4ec}.ds-role b{display:block;color:#10224f;font-size:18px;line-height:1.3}.ds-role small{display:block;color:#5a6382;font-size:15px;line-height:1.4}.ds-role svg{width:22px;height:22px;color:#10224f}"
+    },
+    {
+      "name": "Analysis Dashboard",
+      "kind": "custom",
+      "refersTo": "dashboard",
+      "description": "Working example of the student analysis: subject tabs, KPI tiles, topic bars graded by performance and a focus box.",
+      "html": "<div class=\"ds-dash\"><div class=\"ds-tabs\"><button>Maths <span>84%</span></button><button aria-selected=\"true\">Physics <span>71%</span></button></div><dl class=\"ds-kpis\"><div><dt>Latest mock</dt><dd>71%</dd></div><div><dt>Since last mock</dt><dd class=\"ds-up\">+10 pts</dd></div><div><dt>Forecast, next mock</dt><dd class=\"ds-fore\">76%</dd></div></dl><ul class=\"ds-topics\"><li><span>Mechanics</span><i><b class=\"ds-strong\" style=\"width:84%\"></b></i><em>84%</em></li><li><span>Waves</span><i><b class=\"ds-mid\" style=\"width:69%\"></b></i><em>69%</em></li><li><span>Circular motion</span><i><b class=\"ds-weak\" style=\"width:42%\"></b></i><em>42%</em></li></ul><div class=\"ds-focus\"><b>Focus next</b>Circular motion and Energy transfer</div></div>",
+      "css": ".ds-dash{max-width:620px;padding:22px;border:1px solid #e3e6ec;border-radius:22px;background:#ffffff;box-shadow:0 1px 2px rgb(16 34 79 / 0.05),0 8px 24px -6px rgb(16 34 79 / 0.1);font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;color:#2b3550}.ds-tabs{display:flex;gap:8px}.ds-tabs button{display:inline-flex;align-items:center;gap:10px;min-height:44px;padding:8px 16px;border:1px solid #e3e6ec;border-radius:999px;background:#ffffff;font:inherit;font-size:15px;font-weight:700;color:#10224f;cursor:pointer;transition:border-color 160ms ease-out,background-color 160ms ease-out}.ds-tabs button span{font-size:13px;color:#5a6382;font-variant-numeric:tabular-nums}.ds-tabs button:hover{border-color:#1f64ae}.ds-tabs button:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}.ds-tabs button[aria-selected=true]{background:#10224f;border-color:#10224f;color:#ffffff}.ds-tabs button[aria-selected=true] span{color:#ffffff;opacity:.8}.ds-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:20px 0 0}.ds-kpis div{padding:14px 16px;border-radius:14px;background:#f7f8fa}.ds-kpis dt{font-size:14px;color:#5a6382}.ds-kpis dd{margin:4px 0 0;color:#10224f;font-size:30px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}.ds-kpis .ds-up{color:#13623f}.ds-kpis .ds-fore{color:#8a4a0b}.ds-topics{list-style:none;margin:18px 0 0;padding:0;display:grid;gap:12px}.ds-topics li{display:grid;grid-template-columns:1.2fr 1fr 44px;align-items:center;gap:12px;font-size:15px}.ds-topics span{color:#10224f;font-weight:600}.ds-topics i{height:10px;border-radius:999px;background:#f7f8fa;overflow:hidden}.ds-topics b{display:block;height:100%;border-radius:999px}.ds-strong{background:#1e8f62}.ds-mid{background:#ee9330}.ds-weak{background:#a32a1f}.ds-topics em{font-style:normal;text-align:right;color:#10224f;font-weight:700;font-variant-numeric:tabular-nums}.ds-focus{margin-top:16px;padding:12px 14px;border-radius:12px;background:#eaf1fb;color:#10224f;font-size:15px}.ds-focus b{display:block;color:#17508d;font-size:14px}"
+    },
+    {
+      "name": "Level Segment and Switch",
+      "kind": "input",
+      "refersTo": "segment-option",
+      "description": "Pill segment with white selected thumb, plus the seats-only switch.",
+      "html": "<div class=\"ds-row\"><div class=\"ds-seg\"><button aria-pressed=\"true\">All levels</button><button>GCSE</button><button>A level</button></div><label class=\"ds-sw\"><input type=\"checkbox\" checked><span class=\"ds-track\"></span>Only papers with seats</label></div>",
+      "css": ".ds-row{display:flex;gap:24px;align-items:center;flex-wrap:wrap;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif}.ds-seg{display:inline-flex;padding:4px;border-radius:999px;background:#f7f8fa;border:1px solid #e3e6ec}.ds-seg button{min-height:40px;padding:8px 18px;border:0;border-radius:999px;background:transparent;font:inherit;font-size:15px;font-weight:700;color:#5a6382;cursor:pointer}.ds-seg button[aria-pressed=true]{background:#ffffff;color:#10224f;box-shadow:0 1px 3px rgb(16 34 79 / 0.16)}.ds-seg button:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}.ds-sw{position:relative;display:inline-flex;align-items:center;gap:10px;font-size:15px;font-weight:600;color:#10224f}.ds-sw input{position:absolute;opacity:0;width:44px;height:26px;margin:0}.ds-track{position:relative;width:44px;height:26px;border-radius:999px;background:#c9d0dc;transition:background-color 160ms ease-out}.ds-track::after{content:\"\";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#ffffff;box-shadow:0 1px 2px rgb(0 0 0 / 0.2);transition:translate 160ms ease-out}.ds-sw input:checked+.ds-track{background:#1f64ae}.ds-sw input:checked+.ds-track::after{translate:18px 0}.ds-sw input:focus-visible+.ds-track{outline:3px solid #1f64ae;outline-offset:2px}"
+    },
+    {
+      "name": "Header Navigation",
+      "kind": "nav",
+      "refersTo": "nav-link",
+      "description": "White sticky header with pill nav links and compact primary button.",
+      "html": "<nav class=\"ds-nav\"><strong class=\"ds-logo\">Stem Examspace</strong><a href=\"#\">Timetable</a><a href=\"#\">How it works</a><a href=\"#\">Marking</a><a class=\"ds-in\" href=\"#\">Sign in</a><a class=\"ds-cta\" href=\"#\">Book a seat</a></nav>",
+      "css": ".ds-nav{display:flex;align-items:center;gap:4px;min-height:72px;padding:8px 24px;background:rgb(255 255 255 / 0.96);border-bottom:1px solid #e3e6ec;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif}.ds-logo{margin-right:auto;color:#10224f;font-weight:800}.ds-nav a{padding:10px 14px;border-radius:999px;font-size:16px;font-weight:600;color:#10224f;text-decoration:none}.ds-nav a:hover{background:#f7f8fa}.ds-nav a:focus-visible{outline:3px solid #1f64ae;outline-offset:3px}.ds-nav .ds-in:hover{background:none;color:#1f64ae}.ds-nav .ds-cta{margin-left:12px;min-height:44px;padding:10px 20px;background:#1f64ae;color:#ffffff;font-weight:700}.ds-nav .ds-cta:hover{background:#17508d}"
+    },
+    {
+      "name": "Ringed Heading",
+      "kind": "custom",
+      "refersTo": "headline",
+      "description": "Section headline with one word inside the blue hand-drawn ring.",
+      "html": "<h2 class=\"ds-h2\">How it <span class=\"ds-ringed\">works<svg viewBox=\"0 0 120 50\" preserveAspectRatio=\"none\"><path d=\"M10 28C8 12 40 5 70 6s46 10 42 22-40 16-66 14S6 34 14 20\" fill=\"none\" stroke=\"#1f64ae\" stroke-width=\"3\" stroke-linecap=\"round\"/></svg></span></h2>",
+      "css": ".ds-h2{margin:0;color:#10224f;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif;font-size:40px;line-height:1.15;font-weight:800;letter-spacing:-0.02em}.ds-ringed{position:relative;display:inline-block;isolation:isolate}.ds-ringed svg{position:absolute;left:-13%;top:-26%;width:126%;height:152%;overflow:visible;z-index:-1}"
+    },
+    {
+      "name": "Seat Status Pills",
+      "kind": "chip",
+      "refersTo": "pill-open",
+      "description": "Seat availability on paper cards.",
+      "html": "<div class=\"ds-pills\"><span class=\"ds-p ds-open\">14 seats left</span><span class=\"ds-p ds-few\">3 seats left</span><span class=\"ds-p ds-full\">Fully booked</span></div>",
+      "css": ".ds-pills{display:flex;gap:10px;font-family:var(--font-jakarta), \"Plus Jakarta Sans\", \"Segoe UI\", system-ui, sans-serif}.ds-p{padding:4px 11px;border-radius:999px;font-size:13px;font-weight:700;line-height:1.4}.ds-open{background:#e3f4ec;color:#13623f}.ds-few{background:#fdf0e1;color:#8a4a0b}.ds-full{background:#fdeceb;color:#a32a1f}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Open Exam Hall",
+    "overview": "A bright, clean education site in the category-standard manner of Save My Exams, rebuilt in Stem Examspace's own colours: logo navy for words, logo blue for every action, and the emblem's green, teal and orange as soft tints and as the performance code in charts. Sections alternate white and soft grey; everything in the interface is one friendly sans at confident weights; buttons, chips and tabs are fully rounded pills; cards are gently rounded, hairline-bordered and lifted by a faint navy-tinted shadow. The warmth comes from hand-drawn navy line drawings above the steps and a single blue hand-drawn ring around one word of each section heading, both of which draw themselves as they scroll in. The copy is calm and adult: plain statements of what happens, no exclamation, no hype.\n\nProof is shown, not claimed: a working student analysis dashboard, the live timetable with seats and prices, an interactive marking screen on a pictured tablet, the result as it arrives on a pictured phone, and a pictured index card. The pictured objects (script, tablet and docked pen, phone, store badges, index card) keep their own realistic materials, kept apart from the interface palette under the `artefact-` prefix; the phone screen even uses the phone's own system font, because it pictures a phone. Every example is labelled as example data.\n\nThis system currently covers the public home page (`src/app/page.tsx`, `src/components/home/`), scoped under the `.home` class. The older staff and account pages are not on this system yet; do not read their styles as part of it, and do not restyle them from this file without a decision to do so. A premium navy-and-serif system was tried and retired; nothing from it is part of this file.",
+    "keyCharacteristics": [
+      "White and soft-grey bands, faint blue wash behind the hero only.",
+      "One interface family, Plus Jakarta Sans: 800 headings, 18px body.",
+      "Navy (#10224f family) for headings, blue for every action; navy fills for selected chips and subject tabs.",
+      "Pill buttons, chips, tabs and status labels; 16 to 18px cards, 22px for the analysis dashboard.",
+      "Emblem tints by subject: maths green, sciences teal, computing orange; the same hues grade performance (strong green, mid orange, weak red).",
+      "In every chart: marks are solid blue, the cohort is a dotted slate line, the forecast is dashed orange.",
+      "Hand-drawn blue ring on one heading word; navy line drawings with people.",
+      "Realistic pictured artefacts: tablet with docked pen, flagship phone, red examiner pen and Kalam handwriting."
+    ],
+    "rules": [
+      {
+        "name": "The One Blue Rule",
+        "body": "If it can be clicked, it is Logo Blue; selected filter chips and selected subject tabs fill navy. Nothing decorative competes for that blue except the heading ring and the marks line in charts.",
+        "section": "colors"
+      },
+      {
+        "name": "The Emblem Code Rule",
+        "body": "Green, teal and orange mean subject (maths, sciences, computing) or seat status, always as tint background with deep-tone foreground. In charts and bars the solids grade performance: green strong (70% and above), orange middling (55 to 69%), red-deep weak (below 55%). Never as large fills.",
+        "section": "colors"
+      },
+      {
+        "name": "The Forecast Is Orange Rule",
+        "body": "Anything forecast is orange: a dashed orange line ending in a hollow orange point, an orange-deep figure. Actual marks are solid blue with filled points; the cohort is a dotted muted line.",
+        "section": "colors"
+      },
+      {
+        "name": "The Pen Stays On Paper Rule",
+        "body": "Examiner red (artefact-pen-red) appears only on pictured scripts and drawings, never on interface chrome; status red is red-deep on red-tint.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Voice Rule",
+        "body": "Plus Jakarta Sans is the only interface face. Kalam is handwriting pictured on a script, and the phone system stack is the type of a pictured phone screen; neither ever sets an interface label, heading or button.",
+        "section": "typography"
+      },
+      {
+        "name": "The Numbers Line Up Rule",
+        "body": "Prices, marks, scores, percentages, KPIs, counts, chart labels and index numbers use tabular numerals.",
+        "section": "typography"
+      },
+      {
+        "name": "The Soft Lift Rule",
+        "body": "Interface depth is one ambient, blurred, navy-tinted shadow; hard or offset drop shadows do not belong here. Zero-blur spreads are allowed only as edges (device metal, the ghost button ring, the highlight's side extension), never as depth.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use Logo Blue (#1f64ae) for every action, and navy (#10224f) for headings and selected chips and tabs.",
+      "Do make buttons, chips, tabs, bars and status labels full pills (999px).",
+      "Do give cards a 1px hairline (#e3e6ec), 16 to 18px corners and the soft navy-tinted Card shadow; keep tiles inside a card flat.",
+      "Do code subjects with emblem tints: maths green, sciences teal, computing orange, as tint background with deep foreground.",
+      "Do grade performance green, orange, red-deep, and draw forecasts as dashed orange beside solid blue marks.",
+      "Do ring at most one word per section heading with the blue hand-drawn ring.",
+      "Do keep pictured objects in their artefact colours, Kalam handwriting and phone system type, and label every example as example data.",
+      "Do honour reduced motion: drawings appear fully drawn and transitions switch off."
+    ],
+    "donts": [
+      "Don't use Kalam, the phone system stack, examiner red or any artefact colour on interface chrome.",
+      "Don't introduce a second interface typeface or a serif display face.",
+      "Don't set uppercase tracked labels above headings; the only uppercase tracked text is the brand line printed on the pictured index card.",
+      "Don't use hard or offset drop shadows for depth, or heavier shadows on hover.",
+      "Don't show store logos before the app is live, or brand marks on the pictured devices.",
+      "Don't show invented ratings, reviews, statistics, testimonials or press logos, and never copy the reference site's name, logo, images or copy.",
+      "Don't apply this file to the staff and account pages until they are moved onto it deliberately."
+    ]
+  }
+}

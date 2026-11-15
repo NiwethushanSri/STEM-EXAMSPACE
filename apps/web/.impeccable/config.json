@@ -1,0 +1,80 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "low-contrast",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r1-console.html"
+        ],
+        "createdAt": "2026-11-15T08:32:17.583Z",
+        "reason": "Agent: unchosen decision sketch the user passed over; never shipped"
+      },
+      {
+        "rule": "radial-spotlight-glow",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r1-console.html"
+        ],
+        "createdAt": "2026-11-15T08:32:17.824Z",
+        "reason": "Agent: unchosen decision sketch the user passed over; never shipped"
+      },
+      {
+        "rule": "kicker-above-heading",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r1-console.html"
+        ],
+        "createdAt": "2026-11-15T08:32:18.110Z",
+        "reason": "Agent: unchosen decision sketch the user passed over; never shipped"
+      },
+      {
+        "rule": "cream-palette",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/r2-calendar.html"
+        ],
+        "createdAt": "2026-11-15T08:32:18.412Z",
+        "reason": "Agent: unchosen decision sketch the user passed over; never shipped"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-11-15T08:58:09.010Z",
+        "reason": "Agent: decision-round sketches of alternative directions, never shipped; DESIGN.md describes the chosen world"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-11-15T08:58:09.883Z",
+        "reason": "Agent: decision-round sketches of alternative directions, never shipped; DESIGN.md describes the chosen world"
+      },
+      {
+        "rule": "design-system-radius",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-11-15T08:58:10.849Z",
+        "reason": "Agent: decision-round sketches of alternative directions, never shipped; DESIGN.md describes the chosen world"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/*.html"
+        ],
+        "createdAt": "2026-11-15T08:58:11.963Z",
+        "reason": "Agent: decision-round sketches of alternative directions, never shipped; DESIGN.md describes the chosen world"
+      }
+    ]
+  }
+}
