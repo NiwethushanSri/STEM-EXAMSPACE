@@ -31,3 +31,15 @@ export function email(v: unknown): string | null {
   const t = v.trim().toLowerCase();
   return t.length <= 254 && EMAIL.test(t) ? t : null;
 }
+
+/**
+ * A phone number: 10 to 15 digits, with an optional leading + and spaces, brackets, dots or hyphens between.
+ * Returned trimmed with single spaces (at most 30 characters), else null. The web form checks the same rule.
+ */
+export function phone(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim().replace(/\s+/g, " ");
+  if (t.length > 30 || !/^\+?[\d ().-]+$/.test(t)) return null;
+  const digits = t.replace(/\D/g, "").length;
+  return digits >= 10 && digits <= 15 ? t : null;
+}

@@ -24,6 +24,7 @@ type Details = {
   date_of_birth: string | null;
   signup_parent_name: string | null;
   signup_parent_email: string | null;
+  parent_phone: string | null;
   requested_by_parent: string | null;
 };
 
@@ -60,7 +61,7 @@ export async function loadPending(limit?: number): Promise<PendingRow[]> {
   const supabase = await createClient();
   let q = pendingQuery(
     supabase,
-    "id, first_name, last_name, email, created_at, student_details!profile_id!inner(school, date_of_birth, signup_parent_name, signup_parent_email, requested_by_parent)",
+    "id, first_name, last_name, email, created_at, student_details!profile_id!inner(school, date_of_birth, signup_parent_name, signup_parent_email, parent_phone, requested_by_parent)",
     false,
   ).order("created_at", { ascending: true });
   if (limit) q = q.limit(limit);
@@ -95,6 +96,7 @@ export async function loadPending(limit?: number): Promise<PendingRow[]> {
       dateOfBirth: d.date_of_birth,
       parentName: d.signup_parent_name ?? "",
       parentEmail: d.signup_parent_email ?? "",
+      parentPhone: d.parent_phone ?? "",
       signedUp: day(r.created_at),
       registeredBy: d.requested_by_parent ? (requesters.get(d.requested_by_parent) ?? null) : null,
     };

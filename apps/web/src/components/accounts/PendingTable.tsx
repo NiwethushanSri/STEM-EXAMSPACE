@@ -65,6 +65,7 @@ export function PendingTable({
                     <td className="py-2.5 pr-4">
                       <div>{p.parentName}</div>
                       <div className="text-slate-500">{p.parentEmail}</div>
+                      {p.parentPhone && <div className="text-slate-500">{p.parentPhone}</div>}
                     </td>
                     <td className="py-2.5 pr-4">{p.signedUp}</td>
                     <td className="py-2.5 pr-4">

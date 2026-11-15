@@ -102,6 +102,8 @@ export type RegisterStudentInput = {
   school: string;
   parentName: string;
   parentEmail: string;
+  /** Optional on the server so older clients keep working; the web form asks for it. */
+  parentPhone?: string;
 };
 
 export type InviteUserInput = {

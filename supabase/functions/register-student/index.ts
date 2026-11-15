@@ -2,7 +2,7 @@ import { serviceClient } from "../_shared/auth.ts";
 import { HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 import { sendEmail } from "../_shared/email.ts";
 import { buildAuthLink } from "../_shared/links.ts";
-import { email as validEmail, str, validPastDate } from "../_shared/validate.ts";
+import { email as validEmail, phone as validPhone, str, validPastDate } from "../_shared/validate.ts";
 
 const bad = (m: string) => new HttpError("invalid_input", 400, m);
 const internal = () => new HttpError("internal", 500, "Something went wrong. Please try again.");
@@ -52,6 +52,10 @@ Deno.serve(handle(async (req) => {
   if (!parentEmail) throw bad("Enter a valid parent email address.");
   if (!validPastDate(body.dateOfBirth)) throw bad("Enter a valid date of birth.");
   const dob = body.dateOfBirth;
+  // Optional, so older clients keep working; the web form asks for it. When sent, it must be valid.
+  const phoneSent = body.parentPhone !== undefined && body.parentPhone !== null && body.parentPhone !== "";
+  const parentPhone = phoneSent ? validPhone(body.parentPhone) : null;
+  if (phoneSent && !parentPhone) throw bad("Enter a valid parent phone number.");
 
   const svc = serviceClient();
   const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
@@ -69,7 +73,7 @@ Deno.serve(handle(async (req) => {
   }
   if (allowed !== true) throw new HttpError("rate_limited", 429, "Too many attempts. Try again later.");
 
-  const input: Input = { firstName, lastName, school, parentName, email, parentEmail, dob: String(dob) };
+  const input: Input = { firstName, lastName, school, parentName, email, parentEmail, parentPhone, dob: String(dob) };
   const work = createSignup(svc, input).catch((e) => {
     // Codes only: never the address, names or the error text.
     console.error("register background failed:", e instanceof HttpError ? e.code : "unknown");
@@ -96,6 +100,7 @@ type Input = {
   parentName: string;
   email: string;
   parentEmail: string;
+  parentPhone: string | null;
   dob: string;
 };
 
@@ -121,6 +126,7 @@ async function createSignup(svc: ReturnType<typeof serviceClient>, i: Input): Pr
       school: i.school,
       parent_name: i.parentName,
       parent_email: i.parentEmail,
+      ...(i.parentPhone ? { parent_phone: i.parentPhone } : {}),
     },
   });
   if (cErr || !created.user) {

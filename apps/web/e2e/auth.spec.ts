@@ -49,7 +49,8 @@ async function register(page: Page, email: string) {
   await page.getByLabel("School", { exact: true }).fill("E2E School");
   await page.getByLabel("Parent name").fill("Parent Istrant");
   await page.getByLabel("Parent email").fill(testEmail("parent"));
-  await page.getByLabel("Your email").fill(email);
+  await page.getByLabel("Parent phone").fill("07700 900123");
+  await page.getByLabel("Student email").fill(email);
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Create account" }).click();
 }
@@ -102,7 +103,7 @@ test("confirm_link_shows_pending", async ({ page }) => {
 
 test("register_form_has_no_password_field", async ({ page }) => {
   await page.goto("/register");
-  await expect(page.getByLabel("Your email")).toBeVisible();
+  await expect(page.getByLabel("Student email")).toBeVisible();
   await expect(page.getByLabel("Password")).toHaveCount(0);
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
 });
@@ -136,6 +137,7 @@ test("register_form_sends_signup_metadata", async ({ page }) => {
     dateOfBirth: "2009-04-12",
     school: "E2E School",
     parentName: "Parent Istrant",
+    parentPhone: "07700 900123",
   });
   expect(body).not.toHaveProperty("password");
   expect(body).not.toHaveProperty("role");

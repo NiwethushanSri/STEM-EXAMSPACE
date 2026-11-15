@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { email, normaliseIndex, str, validPastDate } from "./validate.ts";
+import { email, normaliseIndex, phone, str, validPastDate } from "./validate.ts";
 
 Deno.test("normaliseIndex tolerates case, spaces and mixed hyphens", () => {
   for (const raw of ["SE-2026-0142", "se-2026-0142", "SE 2026 0142", "SE-2026 0142", "se 2026-0142", " SE2026-0142 ", "se20260142", "SE - 2026 - 0142"]) {
@@ -32,4 +32,17 @@ Deno.test("str and email trim and bound", () => {
   assertEquals(email("nope"), null);
   assertEquals(email("a@b"), null);
   assertEquals(email(`${"a".repeat(250)}@b.co`), null);
+});
+
+Deno.test("phone: 10 to 15 digits with common separators", () => {
+  assertEquals(phone("07700 900123"), "07700 900123");
+  assertEquals(phone("  +44   7700 900123 "), "+44 7700 900123");
+  assertEquals(phone("(020) 7946-0958"), "(020) 7946-0958");
+  assertEquals(phone("0770090012"), "0770090012"); // 10 digits
+  assertEquals(phone("077009001"), null); // 9 digits
+  assertEquals(phone("+1234567890123456"), null); // 16 digits
+  assertEquals(phone("07700 9OO123"), null); // letters
+  assertEquals(phone("44+7700900123"), null); // + only at the start
+  assertEquals(phone(""), null);
+  assertEquals(phone(7700900123), null);
 });

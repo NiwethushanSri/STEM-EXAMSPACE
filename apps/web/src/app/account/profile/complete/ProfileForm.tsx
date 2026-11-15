@@ -10,7 +10,16 @@ const YEAR_GROUPS = ["Year 10", "Year 11", "Year 12", "Year 13", "University app
 const GENDERS = ["Female", "Male", "Prefer not to say"];
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
-export function ProfileForm({ userId, subjects }: { userId: string; subjects: { id: number; name: string }[] }) {
+export function ProfileForm({
+  userId,
+  subjects,
+  parentPhone,
+}: {
+  userId: string;
+  subjects: { id: number; name: string }[];
+  /** The phone given at registration, if any. */
+  parentPhone: string;
+}) {
   const router = useRouter();
   const [picked, setPicked] = useState<number[]>([]);
   const [photo, setPhoto] = useState<File | null>(null);
@@ -115,7 +124,7 @@ export function ProfileForm({ userId, subjects }: { userId: string; subjects: { 
 
       <div>
         <label htmlFor="phone" className={labelClass}>Parent phone</label>
-        <input id="phone" name="phone" type="tel" required autoComplete="tel" className={inputClass} />
+        <input id="phone" name="phone" type="tel" required autoComplete="tel" defaultValue={parentPhone} className={inputClass} />
       </div>
 
       <div>

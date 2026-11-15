@@ -24,6 +24,8 @@ export type PendingRow = {
   dateOfBirth: string | null;
   parentName: string;
   parentEmail: string;
+  /** Empty when the registration did not include one. */
+  parentPhone: string;
   signedUp: string;
   /** Present when a parent registered this child. */
   registeredBy: { name: string; email: string } | null;

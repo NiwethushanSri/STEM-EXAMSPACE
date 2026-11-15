@@ -13,14 +13,18 @@ async function Content() {
     redirect(homeFor(me.role, me.status, "web-staff"));
   }
   const supabase = await createClient();
-  const { data } = await supabase.from("subjects").select("id, name").eq("active", true).order("id");
+  const [{ data }, { data: details }] = await Promise.all([
+    supabase.from("subjects").select("id, name").eq("active", true).order("id"),
+    // Given at registration; the student confirms or corrects it here.
+    supabase.from("student_details").select("parent_phone").eq("profile_id", me.id).maybeSingle(),
+  ]);
   return (
     <AuthLayout
       title="Complete your profile"
       subtitle={`Welcome, ${me.firstName}. A few details and you are ready to go.`}
       footer={<AccountFooter canDelete />}
     >
-      <ProfileForm userId={me.id} subjects={data ?? []} />
+      <ProfileForm userId={me.id} subjects={data ?? []} parentPhone={details?.parent_phone ?? ""} />
     </AuthLayout>
   );
 }
