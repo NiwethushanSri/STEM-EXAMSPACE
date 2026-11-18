@@ -1,4 +1,7 @@
-// Docker-free pgTAP runner for the linked hosted dev project (bare --remote only).
+// Docker-free pgTAP runner. Default: the linked hosted dev project (bare --remote only).
+// With --local: the local Supabase stack from `supabase start`. `supabase db query -f` runs a file as one
+// prepared statement locally (multi-statement files fail), so --local pipes the file into psql inside the
+// local db container instead; the result row comes back as one JSON line.
 // Test files run unmodified except that the trailing `select * from finish(); rollback;`
 // is replaced by an epilogue that reads pgTAP's own state (plan, tests run, failures)
 // in one result query. `supabase db query` returns only the last statement's rows.
@@ -8,6 +11,9 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const local = process.argv.includes('--local');
+const projectLine = readFileSync('supabase/config.toml', 'utf8').split('\n').find((l) => l.startsWith('project_id'));
+const dbContainer = `supabase_db_${projectLine?.split('"')[1]}`;
 const dir = process.env.DB_TEST_DIR || 'supabase/tests';
 const helpersPath = join(dir, 'helpers.sql');
 const helpers = existsSync(helpersPath) ? readFileSync(helpersPath, 'utf8') : '';
@@ -17,10 +23,12 @@ if (files.length === 0) {
   process.exit(1);
 }
 
+if (local) console.log(`Target: local stack (docker container ${dbContainer})`);
 const tmp = mkdtempSync(join(tmpdir(), 'dbtest-'));
 let failed = false;
 
 function run(sqlText, name) {
+  if (local) return runLocal(sqlText);
   const p = join(tmp, name);
   writeFileSync(p, sqlText);
   const r = spawnSync('npx', ['supabase', 'db', 'query', '--remote', '--yes', '-f', p], {
@@ -34,9 +42,24 @@ function run(sqlText, name) {
   return { status: r.status, out, rows };
 }
 
+function runLocal(sqlText) {
+  const r = spawnSync('docker', ['exec', '-i', dbContainer, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-qAt'], {
+    encoding: 'utf8', input: sqlText,
+  });
+  const out = (r.stdout ?? '') + (r.stderr ?? '');
+  let rows;
+  try {
+    const last = (r.stdout ?? '').trim().split('\n').pop();
+    rows = [JSON.parse(last)];
+  } catch { /* leave undefined */ }
+  return { status: r.status, out, rows };
+}
+
+// Locally the result row is printed by psql as one JSON line; remotely the CLI returns it as rows.
+const result = (q) => (local ? `select row_to_json(x) from (${q}) x;` : `${q};`);
 const epilogue = `
 reset role;
-select _get('plan') as planned, _get('curr_test') as ran, num_failed() as bad;
+${result("select _get('plan') as planned, _get('curr_test') as ran, num_failed() as bad")}
 rollback;
 `;
 
@@ -73,7 +96,7 @@ for (const f of files) {
     const detail = src
       .replace(/^(\s*select\s+plan\(.*)$/im, '$1\ncreate temp table _out(n serial, t text);')
       .replace(/^select\s+(?!plan\()/gim, 'insert into _out(t) select ');
-    const d = run(detail + `\nreset role;\nselect coalesce(string_agg(t, E'\n' order by n), '') as lines from _out where t like 'not ok%';\nrollback;\n`, 'd-' + f);
+    const d = run(detail + `\nreset role;\n${result("select coalesce(string_agg(t, E'\\n' order by n), '') as lines from _out where t like 'not ok%'")}\nrollback;\n`, 'd-' + f);
     const lines = d.rows?.[0]?.lines;
     console.log(lines ? lines.replace(/\r/g, '') : '(failing assertion names unavailable; see failed count above)');
   }

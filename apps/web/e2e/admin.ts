@@ -8,7 +8,7 @@ export const BASE = "http://localhost:3005";
 export const CALLBACK = `${BASE}/auth/callback`;
 
 function loadEnv(): Record<string, string> {
-  const file = resolve(__dirname, "../../../.env.dev.local");
+  const file = resolve(__dirname, "../../../", process.env.E2E_ENV_FILE ?? ".env.dev.local");
   const out: Record<string, string> = {};
   for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
     const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);

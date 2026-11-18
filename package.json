@@ -9,8 +9,10 @@
     "db:push": "supabase db push --remote --yes",
     "db:reset": "supabase db reset --remote --yes",
     "db:test": "node scripts/db-test.mjs",
+    "db:test:local": "node scripts/db-test.mjs --local",
     "fn:deploy": "supabase functions deploy --yes --import-map supabase/functions/deno.json",
     "fn:test": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local supabase/functions",
+    "fn:test:local": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=supabase/functions/.env.test.local supabase/functions",
     "setup:owner": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/setup-owner.ts",
     "demo:seed": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --env-file=.env.dev.local scripts/demo-seed.ts",
     "demo:remove": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --env-file=.env.dev.local scripts/demo-seed.ts --remove"
