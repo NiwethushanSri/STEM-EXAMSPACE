@@ -12,6 +12,13 @@ function webServerEnv(): Record<string, string> {
     const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
     if (m) vars[m[1]] = m[2].replace(/^["']|["']$/g, "");
   }
+  if (!vars.SUPABASE_URL || !vars.SUPABASE_ANON_KEY) {
+    throw new Error(name + " must define SUPABASE_URL and SUPABASE_ANON_KEY");
+  }
+  const host = new URL(vars.SUPABASE_URL).hostname;
+  if (host !== "127.0.0.1" && host !== "localhost") {
+    throw new Error(name + " must point at a local Supabase, not " + host);
+  }
   return {
     NEXT_PUBLIC_SUPABASE_URL: vars.SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: vars.SUPABASE_ANON_KEY,

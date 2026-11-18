@@ -231,7 +231,9 @@ export async function countTestUsers(): Promise<number> {
 
 /** Dev-only: forget index-login attempts so repeated runs from one IP never hit the 5-per-15-minutes limit. */
 export async function clearLoginAttempts(): Promise<void> {
-  if (!SUPABASE_URL.includes("jmhjahwfskhlgagaqlrz")) throw new Error("refusing to touch a project other than stem-examspace-dev");
+  const host = new URL(SUPABASE_URL).hostname;
+  const isLocal = host === "127.0.0.1" || host === "localhost";
+  if (!isLocal && !SUPABASE_URL.includes("jmhjahwfskhlgagaqlrz")) throw new Error("refusing to touch a project other than stem-examspace-dev or the local stack");
   const { error } = await svc().from("login_attempts").delete().gte("attempted_at", "1970-01-01");
   if (error) throw new Error(`clearing login attempts failed: ${error.code ?? "unknown"}`);
 }
