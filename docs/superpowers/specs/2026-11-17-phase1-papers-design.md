@@ -51,11 +51,11 @@ Anti-goals (a failure even if it works):
 
 Approach 1 was chosen because it keeps the plain paper on the server, records every copy and needs no stored per-candidate files.
 
-**Where the work runs.** Making a PDF is heavy work, and Supabase Edge Functions allow only about 2 seconds of processing per request, which a print pack for a full room would exceed. So:
-- An Edge Function `paper-issue` does the checks and the light work. It runs as the caller, confirms they may have the paper now, creates or reuses the copy record, writes the download log, and returns the candidate details for the copy plus a link to the stored paper that expires within a minute.
-- A website server route makes the PDF. It calls `paper-issue` with the caller's own session, fetches the paper through the short-lived link, adds the codes and sends the PDF.
+**Where the work runs** (technical correction 2026-11-18, while planning). Supabase Edge Functions allow only about 2 seconds of processing per request, enough for one candidate's copy but not for a whole room. Website server functions on Vercel cannot send or receive files larger than 4.5 MB, which a scanned exam paper can exceed. So:
+- An Edge Function `paper-copy` makes **one candidate's copy**. It runs as the caller, checks in the database that they may have the paper now, creates or reuses the copy record, reads the stored paper itself, adds the bands and codes, sends the PDF, and only then logs the download.
+- A **print pack** is put together in the admin's browser: it asks `paper-copy` for each centre candidate's copy in turn (each one checked and logged as a print-pack copy) and joins them into one PDF, with a progress bar.
 
-The web app still holds no service-role key, and families never see the link to the plain paper. The phone apps (being built separately) will call the same website route with their session.
+The web app still holds no service-role key, and the plain paper never leaves the server except to admins. Owner decision 2026-11-18: everything is built for the web for now. Families, staff and examiners use the website on computers, phones and iPads; the phone apps and the dedicated iPad marking app come later and will call the same `paper-copy` function.
 
 ## 5. Design
 
@@ -144,7 +144,7 @@ An admin page where staff upload a photo or a scan (an image or a PDF). The page
 
 ## 6. Rules
 
-- Every check that decides who may have a paper lives in the database or in `paper-issue`, never only in the screen.
+- Every check that decides who may have a paper lives in the database or in `paper-copy`, never only in the screen.
 - The plain paper is never sent to a family's device.
 - Copy codes are random, at least 40 bits, unique across all exams, and never reused.
 - Download links to the plain paper last at most 60 seconds and are only seen by the website server.
