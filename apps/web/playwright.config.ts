@@ -20,6 +20,7 @@ function webServerEnv(): Record<string, string> {
     throw new Error(name + " must point at a local Supabase, not " + host);
   }
   return {
+    NEXT_DIST_DIR: ".next-e2e",
     NEXT_PUBLIC_SUPABASE_URL: vars.SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: vars.SUPABASE_ANON_KEY,
   };
@@ -38,7 +39,8 @@ export default defineConfig({
   use: { baseURL: `http://localhost:${PORT}`, trace: "off" },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    command: `npx next dev --webpack -p ${PORT}`,
+    // e2e:local serves the production build made by e2e-local.mjs (next dev does not fit in memory here).
+    command: process.env.E2E_ENV_FILE ? `npx next start -p ${PORT}` : `npx next dev --webpack -p ${PORT}`,
     url: `http://localhost:${PORT}/login`,
     env: webServerEnv(),
     reuseExistingServer: false,

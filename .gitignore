@@ -53,3 +53,6 @@ apps/web/playwright-report/
 
 # local Supabase test env (local dev keys)
 supabase/functions/.env.test.local
+
+# e2e:local production build
+.next-e2e/
