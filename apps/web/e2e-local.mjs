@@ -22,12 +22,16 @@ const run = (args, env) => spawnSync("npx", args, { stdio: "inherit", shell: tru
 // next build rewrites tsconfig.json (adds .next-e2e type globs, reformats); put it back afterwards.
 const tsconfigPath = resolve(import.meta.dirname, "tsconfig.json");
 const tsconfigBefore = readFileSync(tsconfigPath);
-const build = run(["next", "build", "--webpack"], {
-  NEXT_DIST_DIR: ".next-e2e",
-  NEXT_PUBLIC_SUPABASE_URL: vars.SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: vars.SUPABASE_ANON_KEY,
-});
-writeFileSync(tsconfigPath, tsconfigBefore);
+let build;
+try {
+  build = run(["next", "build", "--webpack"], {
+    NEXT_DIST_DIR: ".next-e2e",
+    NEXT_PUBLIC_SUPABASE_URL: vars.SUPABASE_URL,
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: vars.SUPABASE_ANON_KEY,
+  });
+} finally {
+  writeFileSync(tsconfigPath, tsconfigBefore);
+}
 if (build !== 0) {
   console.error("e2e:local: next build failed; not running tests");
   process.exit(build);
