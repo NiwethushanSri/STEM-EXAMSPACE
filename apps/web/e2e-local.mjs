@@ -2,7 +2,7 @@
 // Cross-platform stand-in for cross-env: sets E2E_ENV_FILE, builds the app once into .next-e2e with the
 // local Supabase URL and anon key, then hands over to playwright (which serves it with next start).
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const envFile = "supabase/functions/.env.test.local";
@@ -19,11 +19,15 @@ if (host !== "127.0.0.1" && host !== "localhost") throw new Error(envFile + " mu
 
 const run = (args, env) => spawnSync("npx", args, { stdio: "inherit", shell: true, env: { ...process.env, ...env } }).status ?? 1;
 
+// next build rewrites tsconfig.json (adds .next-e2e type globs, reformats); put it back afterwards.
+const tsconfigPath = resolve(import.meta.dirname, "tsconfig.json");
+const tsconfigBefore = readFileSync(tsconfigPath);
 const build = run(["next", "build", "--webpack"], {
   NEXT_DIST_DIR: ".next-e2e",
   NEXT_PUBLIC_SUPABASE_URL: vars.SUPABASE_URL,
   NEXT_PUBLIC_SUPABASE_ANON_KEY: vars.SUPABASE_ANON_KEY,
 });
+writeFileSync(tsconfigPath, tsconfigBefore);
 if (build !== 0) {
   console.error("e2e:local: next build failed; not running tests");
   process.exit(build);
