@@ -16,6 +16,14 @@ const messages: Record<ErrorCode, string> = {
   unauthenticated: "Please sign in again.",
   invalid_input: "Please check the details you entered.",
   internal: "Something went wrong. Please try again.",
+  paper_missing: "Your paper is not ready yet. The institution has been told.",
+  paper_held: "The paper is paused by the institution. Please wait.",
+  paper_not_released: "Your paper is not ready to download yet.",
+  paper_closed: "Downloads for this paper have closed.",
+  wrong_sitting: "Your booking is for the centre; your paper is handed out in the exam room",
+  paper_unreadable: "The paper could not be prepared. Please try again.",
+  paper_encrypted: "This PDF is password protected. Remove the password and upload it again.",
+  paper_too_large: "This PDF is larger than 20 MB. Make it smaller and upload it again.",
 };
 
 /** Fallback copy; a server-provided message takes precedence when present. */
@@ -25,7 +33,10 @@ export function messageFor(code: ErrorCode): string {
 
 /** Failure codes returned by the booking RPCs (create_booking, request_cancellation). */
 const bookingMessages: Record<string, string> = {
-  fully_booked: "This exam is fully booked",
+  choose_sitting: "Choose whether to sit this exam at the centre or at home.",
+  choose_centre: "Choose which centre you will sit this exam at.",
+  centre_full: "That centre is full. Choose another centre if there is one.",
+  sitting_not_offered: "This exam is not offered that way.",
   deadline_passed: "The booking deadline for this exam has passed.",
   not_bookable: "This exam cannot be booked.",
   already_booked: "This student already has a booking for this exam.",
@@ -48,9 +59,9 @@ const examMessages: Record<ExamContext, Record<string, string>> = {
   save_exam: {
     forbidden: "You do not have permission to change this exam. Teachers can only edit draft exams in their own subjects.",
     invalid_input:
-      "Check the exam details: the title, start time, duration (15 to 600 minutes), seat limit (1 to 1000), price (up to £1,000) and a booking deadline no later than the start. A published exam cannot be moved into the past, and an in-person exam needs an active venue and one of its rooms.",
+      "Check the exam details: the title, start time, duration (15 to 600 minutes), price (up to £1,000) and a booking deadline no later than the start. A published exam cannot be moved into the past. An exam at the centre needs 1 to 20 centres, each with an active venue, one of its rooms and 1 to 1000 seats, and no room used twice; an exam at home has no centres.",
     conflict:
-      "This exam cannot be changed that way. It may be cancelled or completed, or its subject or price may be locked because it already has bookings.",
+      "This exam cannot be changed that way. It may be cancelled or completed, its subject or price may be locked because it already has bookings, or a centre you removed or shrank still has bookings.",
     not_found: "This exam no longer exists. Refresh the page.",
   },
   save_venue: {
@@ -64,7 +75,7 @@ const examMessages: Record<ExamContext, Record<string, string>> = {
   set_status: {
     forbidden: "You do not have permission to change an exam's status.",
     invalid_input:
-      "This exam cannot be published yet: its start time and booking deadline must be in the future, and an in-person exam needs an active venue and one of its rooms.",
+      "This exam cannot be published yet: its start time and booking deadline must be in the future, and an exam at the centre needs a centre with an active venue and one of its rooms.",
     conflict: "This exam's status has already changed. Refresh the page to see where it stands.",
     not_found: "This exam no longer exists. Refresh the page.",
   },
@@ -77,7 +88,7 @@ export function examMessageFor(code: string | null | undefined, context: ExamCon
 }
 
 /** Which admin booking or finance RPC a failure code came from; the same code reads differently for each. */
-export type AdminBookingContext = "add" | "mark_paid" | "cancel" | "approve" | "decline" | "finance";
+export type AdminBookingContext = "add" | "mark_paid" | "cancel" | "approve" | "decline" | "finance" | "change_sitting";
 
 const FORBIDDEN = "You do not have permission to do that.";
 const REFRESH = "This booking has already changed. Refresh the page to see where it stands.";
@@ -90,7 +101,10 @@ const adminBookingMessages: Record<AdminBookingContext, Record<string, string>> 
     not_bookable: "This exam cannot be booked: it must be published, have a confirmed price and not have started.",
     deadline_passed: "The booking deadline has passed, so an unpaid booking cannot be added. Add it as paid instead.",
     already_booked: "This student already has a booking for this exam.",
-    fully_booked: "This exam is fully booked",
+    choose_sitting: "Choose whether the student sits at the centre or at home.",
+    choose_centre: "Choose which centre the student sits at.",
+    centre_full: "That centre is full. Choose another centre if there is one.",
+    sitting_not_offered: "This exam is not offered that way.",
   },
   mark_paid: {
     forbidden: FORBIDDEN,
@@ -116,6 +130,16 @@ const adminBookingMessages: Record<AdminBookingContext, Record<string, string>> 
     not_found: "This booking no longer exists. Refresh the page.",
     conflict:
       "This request cannot be declined: it may already be decided, or the exam was cancelled so the family is owed a refund. Refresh the page.",
+  },
+  change_sitting: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Give a reason of up to 300 characters, and choose a centre of this exam.",
+    not_found: "This booking no longer exists. Refresh the page.",
+    conflict:
+      "This booking cannot be moved there: it is already there, its exam is not running, or that register is closed. Refresh the page.",
+    choose_centre: "Choose which centre the student sits at.",
+    centre_full: "That centre is full. Choose another centre if there is one.",
+    sitting_not_offered: "This exam is not offered that way.",
   },
   finance: {
     forbidden: FORBIDDEN,

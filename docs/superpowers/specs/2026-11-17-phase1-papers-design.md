@@ -74,7 +74,7 @@ The web app still holds no service-role key, and the plain paper never leaves th
 
 ### 5.2 The question paper
 
-- An admin uploads the paper for an exam as a PDF (at most 40 MB). Encrypted or unreadable PDFs are refused with a clear message.
+- An admin uploads the paper for an exam as a PDF (at most 20 MB, so one candidate's copy can be built inside an Edge Function's memory and CPU limits). Encrypted or unreadable PDFs are refused with a clear message.
 - Stored privately (a new private storage area for papers). Only admins and the Super administrator can see or download the plain paper.
 - Uploading again creates a new version. Older versions are kept, because copies made from them may already be printed. The exam shows which version is current, who uploaded it and when.
 - Replacing the paper after any copy has been downloaded asks the admin to confirm and to give a reason (audited). Copies already made stay valid.

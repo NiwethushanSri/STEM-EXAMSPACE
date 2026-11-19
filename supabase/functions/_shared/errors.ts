@@ -8,6 +8,14 @@ export type ErrorCode =
   | "email_in_use"
   | "rate_limited"
   | "invalid_credentials"
+  | "paper_missing"
+  | "paper_held"
+  | "paper_not_released"
+  | "paper_closed"
+  | "wrong_sitting"
+  | "paper_unreadable"
+  | "paper_encrypted"
+  | "paper_too_large"
   | "internal";
 
 export class HttpError extends Error {
@@ -26,6 +34,9 @@ export const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+/** A PDF response must let the browser read these headers (fetch hides them otherwise). */
+export const pdfExposeHeaders = "Content-Disposition, X-Paper-Differs, X-Paper-Version";
 
 export function errorResponse(code: ErrorCode, message: string, status: number): Response {
   return new Response(JSON.stringify({ error: { code, message } }), {

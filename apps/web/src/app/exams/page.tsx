@@ -1,23 +1,25 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { Frame } from "@/components/bookings/Frame";
+import { SITTING_LABEL } from "@/lib/exam-form";
 import { isClosed } from "@/lib/exam-state";
+import { seatLine, type PublicCentre } from "@/lib/home-exams";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 
 type Row = {
   id: string;
   subject: string;
-  format: "in_person" | "online";
-  venue: string | null;
+  format: "in_person" | "online" | "both";
   starts_at: string;
   duration_minutes: number;
   price_pence: number;
   booking_deadline: string;
-  seats_left: number;
+  seats_left: number | null;
+  centres: PublicCentre[];
 };
 
-const COLUMNS = "id, subject, format, venue, starts_at, duration_minutes, price_pence, booking_deadline, seats_left";
+const COLUMNS = "id, subject, format, starts_at, duration_minutes, price_pence, booking_deadline, seats_left, centres";
 
 async function Timetable({ searchParams }: { searchParams: Promise<{ subject?: string | string[] }> }) {
   const supabase = await createClient();
@@ -42,7 +44,7 @@ async function Timetable({ searchParams }: { searchParams: Promise<{ subject?: s
   return (
     <Frame signedIn={!!me}>
       <h1 className="text-2xl font-semibold">Exam timetable</h1>
-      <p className="mt-1 text-sm text-slate-600">Online and face-to-face mock exams. All times are UK time.</p>
+      <p className="mt-1 text-sm text-slate-600">Mock exams at the centre or at home. All times are UK time.</p>
 
       <nav aria-label="Subject filter" className="mt-6 flex flex-wrap gap-2 text-sm">
         <Link
@@ -76,19 +78,31 @@ async function Timetable({ searchParams }: { searchParams: Promise<{ subject?: s
         <ul className="mt-6 divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
           {rows.map((e) => {
             const closed = isClosed(e, now);
-            const full = e.seats_left <= 0;
+            // Fully booked only for a centre-only exam; an exam that can be sat at home is always open.
+            const full = e.format === "in_person" && (e.seats_left ?? 0) <= 0;
+            const seats = e.format === "in_person" && full ? "No seats left" : seatLine(e);
             return (
               <li key={e.id} data-testid="exam-row" className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="space-y-1 text-sm">
                   <div className="text-base font-semibold text-blue-800">{e.subject}</div>
                   <div>{formatLondon(e.starts_at)} · {e.duration_minutes} min</div>
-                  <div className="text-slate-600">{e.format === "online" ? "Online" : (e.venue ?? "Venue to be confirmed")}</div>
+                  <div className="text-slate-600">{SITTING_LABEL[e.format]}</div>
+                  {e.format !== "online" && e.centres.length > 0 && (
+                    <ul className="text-slate-600">
+                      {e.centres.map((c) => (
+                        <li key={c.id}>
+                          {c.venue}
+                          {e.centres.length > 1 && <span className="text-slate-500"> · {c.seats_left <= 0 ? "full" : `${c.seats_left} seat${c.seats_left === 1 ? "" : "s"} left`}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   <div className="text-slate-600">Book by {formatLondon(e.booking_deadline)}</div>
                 </div>
                 <div className="flex items-center gap-4 text-sm sm:text-right">
                   <div>
                     <div className="font-semibold">{formatPence(e.price_pence)}</div>
-                    <div className="text-slate-500">{full ? "No seats left" : `${e.seats_left} seat${e.seats_left === 1 ? "" : "s"} left`}</div>
+                    {seats && <div className="text-slate-500">{seats}</div>}
                   </div>
                   {closed ? (
                     <button type="button" disabled className="rounded-lg bg-slate-200 px-4 py-2 font-medium text-slate-500">Booking closed</button>

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { AppShell, Card, Stat } from "@/components/AppShell";
+import { SITTING_MODE_LABEL } from "@/lib/exam-form";
 import { formatLondon } from "@/lib/money";
 import { loadTeacherHome } from "@/lib/staff-homes";
 
@@ -25,8 +26,13 @@ async function Body() {
                     {e.subject} · {e.paper} · {formatLondon(e.startsAt)}
                   </span>
                 </span>
-                <span data-testid="home-seats" className="text-slate-700">
-                  {e.seatsBooked} of {e.seatLimit} seats booked
+                <span data-testid="home-seats" className="text-right text-slate-700">
+                  {e.centres.map((c) => (
+                    <span key={c.id} data-testid="home-centre" className="block">
+                      {c.venue} · {c.room}: {c.seatsBooked} of {c.seatLimit} seats booked
+                    </span>
+                  ))}
+                  {e.homeBooked > 0 && <span className="block">{e.homeBooked} {SITTING_MODE_LABEL.home.toLowerCase()}</span>}
                 </span>
               </li>
             ))}

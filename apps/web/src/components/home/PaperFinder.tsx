@@ -37,7 +37,7 @@ function PaperCard({ c }: { c: PaperCardData }) {
         <span className={s.price}>{c.price}</span>
         <div className={s.paperFootRight}>
           <span className={`${s.pill} ${PILL[c.state]}`}>
-            {bookable ? `${c.seatsLeft} seat${c.seatsLeft === 1 ? "" : "s"} left` : STATE_LABEL[c.state]}
+            {bookable ? (c.seatLine ?? STATE_LABEL.open) : STATE_LABEL[c.state]}
           </span>
           {bookable ? (
             <Link href={`/exams/${c.id}/book`} className={s.btn} aria-label={`Book a seat for ${c.title}${c.paper ? `, ${c.paper}` : ""}`}>

@@ -8,6 +8,7 @@ import {
   londonDate,
   paperState,
   pickNextPaper,
+  seatLine,
   placeText,
   subjectGroup,
   type PublicExam,
@@ -20,13 +21,12 @@ function exam(over: Partial<PublicExam> = {}): PublicExam {
     title: "GCSE Maths",
     paper: "Paper 1 Higher",
     format: "in_person",
-    venue: "Main hall",
-    room: null,
     starts_at: "2027-06-05T08:00:00.000Z", // 09:00 BST
     duration_minutes: 90,
     price_pence: 3500,
     booking_deadline: "2027-05-28T22:59:00.000Z",
     seats_left: 14,
+    centres: [{ id: "c1", venue: "Main hall", seats_left: 14 }],
     ...over,
   };
 }
@@ -97,10 +97,30 @@ describe("daysUntil and countdownText", () => {
 });
 
 describe("display helpers", () => {
-  it("names the place, or Online", () => {
-    expect(placeText(exam({ room: "Room 2" }))).toBe("Main hall, Room 2");
-    expect(placeText(exam({ format: "online", venue: null }))).toBe("Online");
-    expect(placeText(exam({ venue: null, room: null }))).toBe("Venue to be confirmed");
+  it("place_text_for_home_only", () => {
+    expect(placeText(exam({ format: "online", seats_left: null, centres: [] }))).toBe("At home");
+  });
+  it("place_text_lists_centres", () => {
+    const two = [
+      { id: "a", venue: "Hall A", seats_left: 4 },
+      { id: "b", venue: "Hall B", seats_left: 0 },
+    ];
+    expect(placeText(exam({ centres: two, seats_left: 4 }))).toBe("At the centre: Hall A, Hall B");
+    expect(placeText(exam({ format: "both", centres: two, seats_left: 4 }))).toBe("At the centre or at home: Hall A, Hall B");
+    expect(placeText(exam({ format: "both", centres: [two[0]] }))).toBe("At the centre or at home: Hall A");
+    expect(placeText(exam({ centres: [] }))).toBe("At the centre");
+  });
+  it("seats_left_null_for_home_only_shows_no_seat_line", () => {
+    const home = exam({ format: "online", seats_left: null, centres: [] });
+    expect(seatLine(home)).toBeNull();
+    expect(paperState(home, NOW)).toBe("open");
+    expect(toCardData(home, NOW)).toMatchObject({ seatLine: null, state: "open", place: "At home" });
+  });
+  it("a_both_exam_with_a_full_centre_is_still_open_at_home", () => {
+    const both = exam({ format: "both", seats_left: 0, centres: [{ id: "c1", venue: "Main hall", seats_left: 0 }] });
+    expect(paperState(both, NOW)).toBe("open");
+    expect(seatLine(both)).toBe("Centre full");
+    expect(seatLine(exam({ format: "both", seats_left: 1 }))).toBe("1 seat left at the centre");
   });
   it("gives UK date parts and the finish time", () => {
     const d = londonDate("2027-06-05T08:00:00.000Z");
@@ -127,7 +147,8 @@ describe("toCardData", () => {
       group: "maths",
       date: "Saturday 5 June",
       time: "09:00–10:30 · 1 h 30 min",
-      place: "Main hall",
+      place: "At the centre: Main hall",
+      seatLine: "3 seats left",
       price: "£35.00",
       state: "few",
       seatsLeft: 3,

@@ -24,24 +24,25 @@ function failure(data: unknown, error: unknown, context: AttendanceContext): { o
   return { ok: false, message: attendanceMessageFor(code, context) };
 }
 
-function refresh(examId: string) {
-  revalidatePath(`/admin/attendance/${examId}`);
-  revalidatePath(`/teacher/attendance/${examId}`);
+/** A register page is addressed by exam and centre (?centre=), so every register page is refreshed. */
+function refresh() {
+  revalidatePath("/admin/attendance/[examId]", "page");
+  revalidatePath("/teacher/attendance/[examId]", "page");
   revalidatePath("/admin/attendance");
   revalidatePath("/teacher/attendance");
 }
 
 /**
- * Looks a student up by typed or scanned index number. The database normalises the text itself. The photo
+ * Looks a student up by typed or scanned index number, for the register of one centre. The database normalises the text itself. The photo
  * is a 60-second signed URL made with the caller's own session: the storage policy lets owner/admin read
  * any student photo and no one else but the student, so a teacher gets "Photo unavailable" (null here).
  */
-export async function lookupAction(examId: string, index: string): Promise<LookupOutcome> {
+export async function lookupAction(centreId: string, index: string): Promise<LookupOutcome> {
   await requireStaff(STAFF);
   const text = typeof index === "string" ? index.trim() : "";
-  if (!isUuid(examId) || text === "" || text.length > 40) return { ok: false, message: attendanceMessageFor("invalid_input", "lookup") };
+  if (!isUuid(centreId) || text === "" || text.length > 40) return { ok: false, message: attendanceMessageFor("invalid_input", "lookup") };
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("attendance_lookup", { p_exam: examId, p_index: text });
+  const { data, error } = await supabase.rpc("attendance_lookup", { p_centre: centreId, p_index: text });
   if (error || !isObject(data) || data.ok !== true) return failure(data, error, "lookup");
   if (data.booked !== true || typeof data.studentId !== "string") return { ok: false, message: attendanceMessageFor("not_booked", "mark") };
 
@@ -61,22 +62,22 @@ export async function lookupAction(examId: string, index: string): Promise<Looku
   };
 }
 
-export async function markAction(examId: string, studentId: string): Promise<MarkOutcome> {
+export async function markAction(centreId: string, studentId: string): Promise<MarkOutcome> {
   await requireStaff(STAFF);
-  if (!isUuid(examId) || !isUuid(studentId)) return { ok: false, message: attendanceMessageFor("not_found", "mark") };
+  if (!isUuid(centreId) || !isUuid(studentId)) return { ok: false, message: attendanceMessageFor("not_found", "mark") };
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("mark_attendance", { p_exam: examId, p_student: studentId });
-  refresh(examId);
+  const { data, error } = await supabase.rpc("mark_attendance", { p_centre: centreId, p_student: studentId });
+  refresh();
   if (error || !isObject(data) || data.ok !== true || !isMark(data.status)) return failure(data, error, "mark");
   return { ok: true, status: data.status, already: data.already === true };
 }
 
-export async function closeRegisterAction(examId: string): Promise<CloseOutcome> {
+export async function closeRegisterAction(centreId: string): Promise<CloseOutcome> {
   await requireStaff(STAFF);
-  if (!isUuid(examId)) return { ok: false, message: attendanceMessageFor("not_found", "close") };
+  if (!isUuid(centreId)) return { ok: false, message: attendanceMessageFor("not_found", "close") };
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("close_register", { p_exam: examId });
-  refresh(examId);
+  const { data, error } = await supabase.rpc("close_register", { p_centre: centreId });
+  refresh();
   if (error || !isObject(data) || data.ok !== true) return failure(data, error, "close");
   return { ok: true, absent: typeof data.absent === "number" ? data.absent : 0 };
 }

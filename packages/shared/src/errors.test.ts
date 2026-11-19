@@ -12,6 +12,14 @@ const table: Record<ErrorCode, string> = {
   unauthenticated: "Please sign in again.",
   invalid_input: "Please check the details you entered.",
   internal: "Something went wrong. Please try again.",
+  paper_missing: "Your paper is not ready yet. The institution has been told.",
+  paper_held: "The paper is paused by the institution. Please wait.",
+  paper_not_released: "Your paper is not ready to download yet.",
+  paper_closed: "Downloads for this paper have closed.",
+  wrong_sitting: "Your booking is for the centre; your paper is handed out in the exam room",
+  paper_unreadable: "The paper could not be prepared. Please try again.",
+  paper_encrypted: "This PDF is password protected. Remove the password and upload it again.",
+  paper_too_large: "This PDF is larger than 20 MB. Make it smaller and upload it again.",
 };
 
 describe("messageFor", () => {
@@ -25,8 +33,15 @@ describe("messageFor", () => {
 
 describe("bookingMessageFor", () => {
   it("maps booking codes", () => {
-    expect(bookingMessageFor("fully_booked")).toBe("This exam is fully booked");
+    expect(bookingMessageFor("centre_full")).toBe("That centre is full. Choose another centre if there is one.");
+    for (const code of ["choose_sitting", "choose_centre", "sitting_not_offered"]) {
+      expect(bookingMessageFor(code)).not.toBe("Something went wrong. Please try again.");
+    }
     expect(bookingMessageFor("too_many_unpaid")).toBe("You have 3 unpaid bookings. Pay or cancel one before booking another.");
+  });
+  it("maps change_sitting codes", () => {
+    expect(adminBookingMessageFor("centre_full", "change_sitting")).toBe("That centre is full. Choose another centre if there is one.");
+    expect(adminBookingMessageFor("choose_centre", "change_sitting")).toContain("centre");
   });
   it("falls back to the generic message", () => {
     expect(bookingMessageFor("nope")).toBe("Something went wrong. Please try again.");
@@ -44,7 +59,7 @@ describe("examMessageFor", () => {
   it("maps each code per context", () => {
     expect(examMessageFor("conflict", "save_venue")).toContain("upcoming exam still uses this venue");
     expect(examMessageFor("conflict", "set_status")).toContain("status has already changed");
-    expect(examMessageFor("invalid_input", "save_exam")).toContain("seat limit (1 to 1000)");
+    expect(examMessageFor("invalid_input", "save_exam")).toContain("1 to 1000 seats");
     expect(examMessageFor("not_found", "set_status")).toBe("This exam no longer exists. Refresh the page.");
   });
   it("falls back to the generic message", () => {
@@ -68,7 +83,7 @@ describe("adminBookingMessageFor", () => {
   it("falls back to the generic message", () => {
     expect(adminBookingMessageFor("nope", "add")).toBe("Something went wrong. Please try again.");
     expect(adminBookingMessageFor(undefined, "finance")).toBe("Something went wrong. Please try again.");
-    expect(adminBookingMessageFor("fully_booked", "finance")).toBe("Something went wrong. Please try again.");
+    expect(adminBookingMessageFor("centre_full", "finance")).toBe("Something went wrong. Please try again.");
   });
   it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
     expect(adminBookingMessageFor(code, "add")).toBe("Something went wrong. Please try again.");

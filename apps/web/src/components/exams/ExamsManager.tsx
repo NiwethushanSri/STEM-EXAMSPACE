@@ -1,12 +1,15 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
 import { ExamForm } from "@/components/exams/ExamForm";
 import { saveExamAction, setExamStatusAction, type ExamActionResult } from "@/app/admin/exams/actions";
 import type { ExamRow, SubjectOption, VenueOption } from "@/lib/exams-staff";
+import { SITTING_LABEL } from "@/lib/exam-form";
 import { formatLondon, formatPence } from "@/lib/money";
+import { missingPaperWarning } from "@/lib/print-pack";
 
 const STATUS_TONE = { draft: "slate", published: "green", cancelled: "red", completed: "blue" } as const;
 const STATUS_LABEL = { draft: "Draft", published: "Published", cancelled: "Cancelled", completed: "Completed" } as const;
@@ -82,7 +85,10 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
           <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{notice.message}</div>
         ))}
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <Link href="/admin/exams/scan-check" className="rounded border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50">
+          Check a scan
+        </Link>
         <button
           type="button"
           disabled={noSubjects}
@@ -148,7 +154,7 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
             <table className="w-full text-left text-sm">
               <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  {["When (UK time)", "Exam", "Where", "Status", "Seats sold", "Price", "Net taken", "Actions"].map((h) => (
+                  {["When (UK time)", "Exam", "Where", "Status", "Booked", "Price", "Net taken", "Actions"].map((h) => (
                     <th key={h} className="py-2 pr-4 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -159,6 +165,7 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
                     key={e.id}
                     e={e}
                     busy={busy}
+                    nowMs={nowMs}
                     onEdit={() => {
                       setFormError(null);
                       setNotice(null);
@@ -205,17 +212,18 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
 function ExamTableRow({
   e,
   busy,
+  nowMs,
   onEdit,
   onPublish,
   onCancel,
 }: {
   e: ExamRow;
   busy: boolean;
+  nowMs: number;
   onEdit: () => void;
   onPublish: () => void;
   onCancel: () => void;
 }) {
-  const where = e.format === "online" ? "Online" : [e.venue, e.room].filter(Boolean).join(" · ");
   const canEdit = e.status === "draft" || e.status === "published";
   const refundTotal = e.refundsDue.reduce((s, r) => s + r.pence, 0);
   return (
@@ -229,19 +237,33 @@ function ExamTableRow({
             {e.paper ? ` · ${e.paper}` : ""} · {e.durationMinutes} min
           </div>
         </td>
-        <td className="py-2.5 pr-4">{where}</td>
+        <td className="py-2.5 pr-4">
+          <div className="text-xs font-medium text-slate-500">{SITTING_LABEL[e.format]}</div>
+          {e.centres.map((c) => (
+            <div key={c.id} data-testid="exam-centre">
+              {c.venue} · {c.room}
+              <span className="ml-2 text-xs text-slate-500">
+                {e.status === "cancelled" ? `${c.seatLimit} seats` : `${c.seatsSold} of ${c.seatLimit} seats`}
+              </span>
+            </div>
+          ))}
+        </td>
         <td className="py-2.5 pr-4">
           <div className="flex flex-wrap gap-1">
             <Badge tone={STATUS_TONE[e.status]}>{STATUS_LABEL[e.status]}</Badge>
             {e.bookingClosed && <Badge tone="amber">Booking closed</Badge>}
             {e.status === "draft" && !e.priceConfirmed && <Badge tone="amber">Price not confirmed</Badge>}
+            {missingPaperWarning(e, new Date(nowMs)) && <Badge tone="amber">No paper uploaded</Badge>}
           </div>
         </td>
-        <td className="py-2.5 pr-4 whitespace-nowrap">{e.status === "cancelled" ? "Released" : `${e.seatsSold} / ${e.seatLimit}`}</td>
+        <td className="py-2.5 pr-4 whitespace-nowrap">{e.status === "cancelled" ? "Released" : e.homeBooked > 0 ? `${e.seatsSold} (${e.homeBooked} at home)` : e.seatsSold}</td>
         <td className="py-2.5 pr-4 whitespace-nowrap">{e.pricePence === null ? "" : formatPence(e.pricePence)}</td>
         <td className="py-2.5 pr-4 whitespace-nowrap">{money(e.moneyPence)}</td>
         <td className="py-2.5">
           <div className="flex flex-wrap gap-2">
+            <Link href={`/admin/exams/${e.id}`} className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50">
+              Paper and print
+            </Link>
             {canEdit && (
               <button type="button" onClick={onEdit} disabled={busy} className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50 disabled:opacity-60">
                 Edit

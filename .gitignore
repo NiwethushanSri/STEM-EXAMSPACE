@@ -50,3 +50,9 @@ apps/web/playwright-report/
 
 # local demo credentials
 *.local.md
+
+# local Supabase test env (local dev keys)
+supabase/functions/.env.test.local
+
+# e2e:local production build
+.next-e2e/

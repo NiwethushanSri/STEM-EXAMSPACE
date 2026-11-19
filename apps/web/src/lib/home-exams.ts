@@ -1,4 +1,5 @@
 import { isClosed } from "./exam-state";
+import { SITTING_LABEL } from "./exam-form";
 import { utcToLondonParts } from "./london-time";
 import { formatPence } from "./money";
 
@@ -8,18 +9,21 @@ export type PublicExam = {
   subject: string;
   title: string;
   paper: string;
-  format: "in_person" | "online";
-  venue: string | null;
-  room: string | null;
+  format: "in_person" | "online" | "both";
   starts_at: string;
   duration_minutes: number;
   price_pence: number;
   booking_deadline: string;
-  seats_left: number;
+  /** Seats left across the current centres; null when the exam is sat at home only. */
+  seats_left: number | null;
+  /** The current centres by venue name (rooms are never public), each with its seats left. */
+  centres: PublicCentre[];
 };
 
+export type PublicCentre = { id: string; venue: string; seats_left: number };
+
 export const PUBLIC_EXAM_COLUMNS =
-  "id, subject, title, paper, format, venue, room, starts_at, duration_minutes, price_pence, booking_deadline, seats_left";
+  "id, subject, title, paper, format, starts_at, duration_minutes, price_pence, booking_deadline, seats_left, centres";
 
 /** How a paper stands for a family looking at it now. */
 export type PaperState = "open" | "few" | "full" | "closed";
@@ -29,6 +33,8 @@ export const FEW_SEATS = 5;
 
 export function paperState(exam: PublicExam, now: Date): PaperState {
   if (isClosed(exam, now)) return "closed";
+  // Home sittings have no limit, so an exam that is sat at home (alone or as a choice) is never full.
+  if (exam.format !== "in_person" || exam.seats_left == null) return "open";
   if (exam.seats_left <= 0) return "full";
   if (exam.seats_left <= FEW_SEATS) return "few";
   return "open";
@@ -84,10 +90,20 @@ export function countdownText(days: number): string {
   return `In ${days} days`;
 }
 
-/** Where the paper is sat, in a few words. */
-export function placeText(exam: Pick<PublicExam, "format" | "venue" | "room">): string {
-  if (exam.format === "online") return "Online";
-  return [exam.venue, exam.room].filter(Boolean).join(", ") || "Venue to be confirmed";
+/** Where the paper is sat, in a few words: the sitting, then the venue of each centre. */
+export function placeText(exam: Pick<PublicExam, "format" | "centres">): string {
+  const label = SITTING_LABEL[exam.format];
+  if (exam.format === "online") return label;
+  const venues = [...new Set(exam.centres.map((c) => c.venue))];
+  return venues.length ? `${label}: ${venues.join(", ")}` : label;
+}
+
+/** The seats line of a paper, or null when there is nothing to count (home only). */
+export function seatLine(exam: Pick<PublicExam, "format" | "seats_left">): string | null {
+  if (exam.format === "online" || exam.seats_left == null) return null;
+  const n = Math.max(0, exam.seats_left);
+  if (exam.format === "both") return n === 0 ? "Centre full" : `${n} seat${n === 1 ? "" : "s"} left at the centre`;
+  return `${n} seat${n === 1 ? "" : "s"} left`;
 }
 
 const LONG = new Intl.DateTimeFormat("en-GB", {
@@ -154,6 +170,8 @@ export type PaperCardData = {
   price: string;
   state: PaperState;
   seatsLeft: number;
+  /** "3 seats left", "Centre full", or null for a home-only paper. */
+  seatLine: string | null;
 };
 
 export function toCardData(exam: PublicExam, now: Date): PaperCardData {
@@ -170,6 +188,7 @@ export function toCardData(exam: PublicExam, now: Date): PaperCardData {
     place: placeText(exam),
     price: formatPence(exam.price_pence),
     state: paperState(exam, now),
-    seatsLeft: Math.max(0, exam.seats_left),
+    seatsLeft: Math.max(0, exam.seats_left ?? 0),
+    seatLine: seatLine(exam),
   };
 }

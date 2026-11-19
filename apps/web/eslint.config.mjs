@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local browser-test build (NEXT_DIST_DIR, see e2e-local.mjs).
+    ".next-e2e/**",
     // Vendored third-party bundle.
     "public/pdf.worker.mjs",
   ]),

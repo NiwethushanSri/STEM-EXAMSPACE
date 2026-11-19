@@ -1,5 +1,6 @@
 import "server-only";
 import { chunk } from "@/lib/chunk";
+import type { ExamFormat } from "@/lib/exam-form";
 import { loadTeacherExams } from "@/lib/exams-staff";
 import { createClient } from "@/lib/supabase/server";
 import { requireStaff } from "@/lib/staff-gate";
@@ -13,7 +14,19 @@ const TUTOR_CAP = 200;
 type Embedded<T> = T | T[] | null;
 const one = <T,>(v: Embedded<T>): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
 
-export type TeacherHomeExam = { id: string; title: string; paper: string; subject: string; startsAt: string; seatLimit: number; seatsBooked: number };
+export type TeacherHomeCentre = { id: string; venue: string; room: string; seatLimit: number; seatsBooked: number };
+export type TeacherHomeExam = {
+  id: string;
+  title: string;
+  paper: string;
+  subject: string;
+  startsAt: string;
+  format: ExamFormat;
+  /** Each current centre with the seats taken there (counts only). */
+  centres: TeacherHomeCentre[];
+  /** Candidates sitting at home: no seat limit. */
+  homeBooked: number;
+};
 
 /** The teacher's own subjects: upcoming published exams with seats taken (counts only, no names, no prices) and the draft count. */
 export async function loadTeacherHome(): Promise<{ upcoming: TeacherHomeExam[]; drafts: number }> {
@@ -39,7 +52,8 @@ export async function loadTeacherHome(): Promise<{ upcoming: TeacherHomeExam[]; 
     if (de) throw new Error("drafts could not be counted");
     drafts = count ?? 0;
   }
-  const counts = new Map<string, number>();
+  const atCentre = new Map<string, number>();
+  const atHome = new Map<string, number>();
   for (const ids of chunk(
     upcoming.map((e) => e.id),
     ID_BATCH,
@@ -47,13 +61,16 @@ export async function loadTeacherHome(): Promise<{ upcoming: TeacherHomeExam[]; 
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await supabase
         .from("bookings")
-        .select("id, exam_id")
+        .select("id, exam_id, centre_id, sitting")
         .in("exam_id", ids)
         .in("status", SEAT_STATUSES)
         .order("id", { ascending: true })
         .range(from, from + PAGE - 1);
       if (error) throw new Error("bookings could not be loaded");
-      for (const b of data ?? []) counts.set(b.exam_id, (counts.get(b.exam_id) ?? 0) + 1);
+      for (const b of data ?? []) {
+        if (b.sitting === "home") atHome.set(b.exam_id, (atHome.get(b.exam_id) ?? 0) + 1);
+        else if (b.centre_id) atCentre.set(b.centre_id, (atCentre.get(b.centre_id) ?? 0) + 1);
+      }
       if ((data ?? []).length < PAGE) break;
     }
   }
@@ -65,8 +82,9 @@ export async function loadTeacherHome(): Promise<{ upcoming: TeacherHomeExam[]; 
       paper: e.paper,
       subject: e.subject,
       startsAt: e.startsAt,
-      seatLimit: e.seatLimit,
-      seatsBooked: counts.get(e.id) ?? 0,
+      format: e.format,
+      centres: e.centres.map((c) => ({ id: c.id, venue: c.venue, room: c.room, seatLimit: c.seatLimit, seatsBooked: atCentre.get(c.id) ?? 0 })),
+      homeBooked: atHome.get(e.id) ?? 0,
     })),
   };
 }

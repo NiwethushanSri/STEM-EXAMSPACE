@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStemClient, type StemClient } from "./supabase";
 import {
-  accountAdmin, approveStudent, callFunction, deleteMyAccount, indexLogin, inviteUser, parentChild, registerStudent, rejectStudent,
+  accountAdmin, approveStudent, callFunction, deleteMyAccount, downloadPaperCopy, indexLogin, inviteUser, parentChild, registerStudent,
+  rejectStudent,
 } from "./functions";
 
 function client(fetchImpl: typeof fetch) {
@@ -128,5 +129,46 @@ describe("helper payloads", () => {
     await run(c as StemClient);
     expect(last().url).toContain(`/functions/v1/${fn}`);
     expect(last().body).toEqual(payload);
+  });
+});
+
+describe("downloadPaperCopy", () => {
+  /** Only the session is read from the client; where to call comes from the endpoint argument. */
+  const sessionOnly = (token: string | null) =>
+    ({ auth: { getSession: async () => ({ data: { session: token ? { access_token: token } : null } }) } }) as unknown as StemClient;
+
+  it("calls the endpoint it is given with the session token and the anon key, and reads the version", async () => {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    vi.stubGlobal("fetch", (async (url: string, init: RequestInit) => {
+      seen.push({ url, headers: init.headers as Record<string, string> });
+      return new Response(new Uint8Array([37, 80, 68, 70]), {
+        status: 200,
+        headers: { "Content-Disposition": 'attachment; filename="X-1.pdf"', "X-Paper-Differs": "1", "X-Paper-Version": "3" },
+      });
+    }) as typeof fetch);
+    const r = await downloadPaperCopy(sessionOnly("tok"), { bookingId: "b", kind: "home" }, { url: "http://example.test/", anonKey: "anon" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toBe("http://example.test/functions/v1/paper-copy");
+    expect(seen[0].headers.Authorization).toBe("Bearer tok");
+    expect(seen[0].headers.apikey).toBe("anon");
+    expect("data" in r && { name: r.data.fileName, differs: r.data.differs, version: r.data.version }).toEqual({
+      name: "X-1.pdf",
+      differs: true,
+      version: 3,
+    });
+  });
+  it("gives no version for an insert (no header)", async () => {
+    vi.stubGlobal("fetch", (async () => new Response(new Uint8Array([1]), { status: 200 })) as typeof fetch);
+    const r = await downloadPaperCopy(sessionOnly("tok"), { bookingId: "b", insertId: "i" }, { url: "http://example.test", anonKey: "anon" });
+    expect("data" in r && r.data.version).toBeNull();
+  });
+  it("without a session or an endpoint it fails without calling anything", async () => {
+    const f = vi.fn();
+    vi.stubGlobal("fetch", f);
+    expect(await downloadPaperCopy(sessionOnly(null), { bookingId: "b", kind: "home" }, { url: "http://example.test", anonKey: "anon" }))
+      .toEqual({ error: { code: "unauthenticated", message: expect.any(String) } });
+    expect(await downloadPaperCopy(sessionOnly("tok"), { bookingId: "b", kind: "home" }, { url: "", anonKey: "anon" }))
+      .toEqual({ error: { code: "internal", message: expect.any(String) } });
+    expect(f).not.toHaveBeenCalled();
   });
 });

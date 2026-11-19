@@ -19,7 +19,7 @@
 - Sitting wording in every screen: "At the centre", "At home", "At the centre or at home". Enum values stay `in_person` (centre only), `online` (home only), and the new `both`.
 - Times are stored as `timestamptz` and shown in `Europe/London`.
 - Release time = start minus `release_minutes_before` (default 10, allowed 0 to 120), unless released early. Home copies can be downloaded until the scheduled end plus 2 hours.
-- Spare answer pages per copy: default 2, allowed 0 to 6. Paper PDFs at most 40 MB.
+- Spare answer pages per copy: default 2, allowed 0 to 6. Paper PDFs at most 20 MB.
 - QR content is exactly `SX1.<code>.<page>`: `<code>` is the copy code (8 random Crockford base32 characters, 40 bits, plus 1 check character), `<page>` is the 1-based page number including spare pages. No name, index number or booking id in the QR.
 - Copy codes are unique across all exams and never reused.
 - A candidate can make at most 20 home downloads per hour.
@@ -168,7 +168,7 @@
   - enum `paper_kind ('paper', 'insert')`; table `exam_papers(id uuid pk, exam_id, kind, title text not null, version int not null, storage_path text unique not null, page_count int not null check (> 0), byte_size bigint not null, uploaded_by uuid, uploaded_at timestamptz not null default now(), replace_reason text, superseded_at timestamptz, corrected_notified_at timestamptz)`. The current paper is the `kind = 'paper'` row with `superseded_at is null` (at most one per exam: partial unique index).
   - table `paper_copies(id uuid pk, code text unique not null, booking_id uuid not null references bookings, paper_id uuid not null references exam_papers, page_count int not null, created_at timestamptz not null default now(), unique (booking_id, paper_id))`.
   - enum `paper_download_kind ('home', 'print_pack', 'reprint', 'admin_preview')`; table `paper_downloads(id bigint identity pk, copy_id uuid not null references paper_copies, downloaded_by uuid, kind paper_download_kind not null, at timestamptz not null default now())`.
-  - Storage bucket `exam-papers` (private, 41943040 bytes, `application/pdf`), objects at `<exam_id>/<uuid>.pdf`; insert, select and delete for `is_staff_admin()` only.
+  - Storage bucket `exam-papers` (private, 20971520 bytes, `application/pdf`), objects at `<exam_id>/<uuid>.pdf`; insert, select and delete for `is_staff_admin()` only.
   - `copy_code_new() returns text` and `copy_code_valid(p_code text) returns boolean` (Crockford base32 without I, L, O, U; the check character is the mod-37 Crockford check symbol over the 8 data characters).
   - `paper_release_at(p_exam uuid) returns timestamptz` = `coalesce(released_early_at, starts_at - release_minutes_before * interval '1 minute')`.
   - `set_exam_paper_settings(p_exam uuid, p_exam_code text, p_release_minutes_before int, p_spare_pages int) returns jsonb` (admin; exam code `^[A-Z0-9-]{3,40}$`, refused with `conflict` once any copy exists; audit `exam_paper_settings_changed`).
@@ -239,7 +239,7 @@
 **Interfaces:**
 - Consumes: `inspectPaper` and `buildCopy` (Task 6); `register_exam_paper`, `paper_copy_issue`, `paper_download_log` and `paper_insert_issue` (Task 5). SQL functions are called with a client built from the anon key and the caller's `Authorization` header, so `auth.uid()` is the caller; storage is read with `serviceClient()`.
 - Produces:
-  - `POST paper-register {examId, kind: "paper" | "insert", title?, storagePath, reason?}`: owner/admin. Downloads the object (refuses over 40 MB), runs `inspectPaper`, calls `register_exam_paper`, and deletes the object on any refusal. Returns `{paperId, version, pageCount}`.
+  - `POST paper-register {examId, kind: "paper" | "insert", title?, storagePath, reason?}`: owner/admin. Downloads the object (refuses over 20 MB), runs `inspectPaper`, calls `register_exam_paper`, and deletes the object on any refusal. Returns `{paperId, version, pageCount}`.
   - `POST paper-copy {bookingId, kind: "home" | "print_pack" | "reprint" | "admin_preview"}` returns `application/pdf` with `Content-Disposition: attachment; filename="<examCode>-<indexNumber>.pdf"`, logged only after the PDF is built, plus an `X-Paper-Differs` header (`1` when `differs_from_previous`). `POST paper-copy {bookingId, insertId}` returns the insert file unchanged.
   - Error codes added to `packages/shared/src/errors.ts` with the Global Constraints family texts: `paper_missing`, `paper_held`, `paper_not_released`, `paper_closed`, `wrong_sitting`, `paper_unreadable`, `paper_encrypted`, `paper_too_large`.
   - In `functions.ts`: `registerExamPaper(client, input: { examId: string; kind: "paper" | "insert"; title?: string; storagePath: string; reason?: string })` returning `FunctionResult<{ paperId: string; version: number; pageCount: number }>`, and `downloadPaperCopy(client, input: { bookingId: string; kind: "home" | "print_pack" | "reprint" | "admin_preview" } | { bookingId: string; insertId: string }): Promise<{ data: { blob: Blob; fileName: string; differs: boolean } } | { error: AppError }>` using `fetch` with the session token, because `functions.invoke` parses JSON.

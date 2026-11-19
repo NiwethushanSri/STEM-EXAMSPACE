@@ -14,8 +14,8 @@ type Shown =
 
 const field = "rounded border border-slate-300 bg-white px-3 py-2 text-sm";
 
-/** The scan / type box, the confirmation card, and the close-register control. Counts and lists are server-rendered around it. */
-export function Register({ examId, open, startsAt }: { examId: string; open: boolean; startsAt: string }) {
+/** The scan / type box, the confirmation card, and the close-register control of one centre. Counts and lists are server-rendered around it. */
+export function Register({ centreId, open, startsAt }: { centreId: string; open: boolean; startsAt: string }) {
   const startMs = Date.parse(startsAt);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -38,7 +38,7 @@ export function Register({ examId, open, startsAt }: { examId: string; open: boo
     running.current = true;
     start(async () => {
       try {
-        const r = await lookupAction(examId, text);
+        const r = await lookupAction(centreId, text);
         shownIndex.current = r.ok ? text : "";
         setShown(
           r.ok
@@ -58,7 +58,7 @@ export function Register({ examId, open, startsAt }: { examId: string; open: boo
     running.current = true;
     start(async () => {
       try {
-        const r = await markAction(examId, studentId);
+        const r = await markAction(centreId, studentId);
         if (!r.ok) setShown({ kind: "message", tone: "error", text: r.message });
         else {
           setShown({ kind: "student", studentId, name, photoUrl, status: r.status, justMarked: !r.already });
@@ -75,7 +75,7 @@ export function Register({ examId, open, startsAt }: { examId: string; open: boo
   function close() {
     start(async () => {
       try {
-        const r = await closeRegisterAction(examId);
+        const r = await closeRegisterAction(centreId);
         setConfirmClose(false);
         setCloseMessage(r.ok ? `Register closed. ${r.absent} marked absent.` : r.message);
       } catch {
@@ -168,7 +168,7 @@ export function Register({ examId, open, startsAt }: { examId: string; open: boo
           )}
           {canClose && confirmClose && (
             <div role="alertdialog" aria-label="Confirm close register" className="space-y-3 text-sm">
-              <p>Close the register? Every booked student not yet marked becomes absent, and the exam is completed. This cannot be undone.</p>
+              <p>Close the register? Every student booked at this centre and not yet marked becomes absent. Only this centre closes: the exam completes by itself two hours after it is scheduled to end. This cannot be undone.</p>
               <div className="flex gap-2">
                 <button type="button" disabled={pending} onClick={close} className="rounded bg-red-600 px-4 py-2 font-medium text-white hover:bg-red-700 disabled:opacity-60">
                   Confirm close register

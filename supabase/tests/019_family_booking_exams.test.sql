@@ -17,17 +17,17 @@ insert into public.subjects (name, kind) values ('ZZ Fam A', 'school');
 create temp table ex (name text primary key, id uuid not null);
 grant select on ex to public;
 with x as (
-  insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, seat_limit, price_pence,
+  insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence,
     price_confirmed, booking_deadline, status, created_by)
   select (select id from public.subjects where name = 'ZZ Fam A'), 'ZZ ' || n, 'P1', 'online',
-    now() + interval '30 days', 60, 10, 1000, true, now() + interval '20 days', st::public.exam_status,
+    now() + interval '30 days', 60, 1000, true, now() + interval '20 days', st::public.exam_status,
     (select id from c where name = 'admin')
   from (values ('cancelled', 'cancelled'), ('draft', 'draft')) v(n, st)
   returning id, title)
 insert into ex select substr(title, 4), id from x;
-insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence)
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting)
   values ((select id from ex where name = 'cancelled'), (select id from c where name = 's1'),
-          (select id from c where name = 's1'), 'cancelled', 1000);
+          (select id from c where name = 's1'), 'cancelled', 1000, 'home');
 
 select tests.as_user((select id from c where name = 's1'));
 select is((select count(*)::int from public.exams where id = (select id from ex where name = 'cancelled')), 1, 'student sees own cancelled exam');
