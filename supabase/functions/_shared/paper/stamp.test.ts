@@ -1,20 +1,25 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import jsqrModule from "jsqr";
 import {
   A4,
   BOTTOM_BAND,
   buildCopy,
   CODE_TEXT_TOP,
+  CODE_TEXT_Y,
   fitPage,
+  identityLine,
   inspectPaper,
+  PAGE_TEXT_Y,
   PaperError,
+  PRINT_MARGIN,
   QR_SIZE,
   qrLayout,
   qrMatrix,
   qrPayload,
   SIDE,
   TOP_BAND,
+  TOP_TEXT_DROP,
   transliterate,
 } from "./stamp.ts";
 
@@ -224,4 +229,74 @@ Deno.test("copy_with_rotated_pages_all_a4", async () => {
   b.setRotation({ type: "degrees", angle: 270 } as never);
   const out = await buildCopy(await d.save(), INFO);
   assertEquals((await PDFDocument.load(out)).getPageCount(), 4);
+});
+
+Deno.test("band_elements_clear_of_sheet_edges", () => {
+  const M = PRINT_MARGIN;
+  assert(M >= 12);
+  assert(SIDE >= M);
+  assert(CODE_TEXT_Y >= M);
+  assert(PAGE_TEXT_Y >= M);
+  assert(TOP_TEXT_DROP - 10 >= M); // cap height of 10 pt text below the top edge
+  for (const n of [21, 25, 29]) {
+    const l = qrLayout(n);
+    assert(l.x - l.quiet >= M && l.x + QR_SIZE + l.quiet <= A4.width - M);
+    assert(l.y - l.quiet >= M);
+    assert(l.y + QR_SIZE + l.quiet <= BOTTOM_BAND);
+  }
+  assert(CODE_TEXT_TOP >= CODE_TEXT_Y + 5);
+});
+
+Deno.test("long_name_shrinks_then_truncates_index_intact", async () => {
+  const d = await PDFDocument.create();
+  const font = await d.embedFont(StandardFonts.Helvetica);
+  const bold = await d.embedFont(StandardFonts.HelveticaBold);
+  const limit = A4.width - 2 * SIDE;
+  const short = identityLine(font, bold, INFO);
+  assertEquals(short.leftSize, 10);
+  assertEquals(short.left, "Amara Perera \u00b7 SE-2027-0142");
+  const mid = identityLine(font, bold, {
+    ...INFO,
+    candidateName:
+      "Maria Fernanda Gonzalez-Hernandez de la Cruz y Alvarez-Castellanos Montenegro Villanueva Rodriguez",
+  });
+  assert(mid.leftSize < 10 && mid.leftSize >= 7);
+  const long = identityLine(font, bold, {
+    ...INFO,
+    candidateName: "Abcdefghij ".repeat(12),
+  });
+  for (const r of [mid, long]) {
+    assert(r.leftWidth + 12 + r.rightWidth <= limit + 1e-6);
+    assert(r.left.endsWith("\u00b7 SE-2027-0142"));
+  }
+  assertEquals(long.leftSize, 7);
+  assert(long.left.includes("\u2026"));
+  const out = await buildCopy(await master(), {
+    ...INFO,
+    candidateName: "Abcdefghij ".repeat(12),
+  });
+  assertEquals((await PDFDocument.load(out)).getPageCount(), 5);
+});
+
+Deno.test("fit_contained_for_all_rotations_and_sizes", () => {
+  const boxW = A4.width - 2 * SIDE;
+  for (
+    const [w, h] of [[595.28, 841.89], [841.89, 595.28], [841.89, 1190.55], [
+      300,
+      400,
+    ], [1200, 500]]
+  ) {
+    for (const rot of [0, 90, 180, 270]) {
+      const f = fitPage(w, h, rot);
+      const turned = f.angle === 90 || f.angle === 270;
+      const fw = (turned ? h : w) * f.scale;
+      const fh = (turned ? w : h) * f.scale;
+      assert(f.scale <= 1);
+      assert(f.x >= SIDE - 1e-6 && f.x + fw <= A4.width - SIDE + 1e-6);
+      assert(
+        f.y >= BOTTOM_BAND - 1e-6 && f.y + fh <= A4.height - TOP_BAND + 1e-6,
+      );
+      assert(boxW > 0);
+    }
+  }
 });

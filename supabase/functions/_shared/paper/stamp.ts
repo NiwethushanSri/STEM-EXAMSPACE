@@ -15,7 +15,7 @@ import QRCode from "qrcode";
 
 export const A4 = { width: 595.28, height: 841.89 };
 export const TOP_BAND = 34;
-export const BOTTOM_BAND = 84;
+export const BOTTOM_BAND = 92;
 export const SIDE = 18;
 
 /** QR symbol (dark modules only, without quiet zone) is this wide, in points. */
@@ -88,7 +88,48 @@ export function fitPage(
 }
 
 /** Text under the QR occupies y from 0 to this height. */
-export const CODE_TEXT_TOP = 10;
+export const CODE_TEXT_TOP = 18;
+
+/** Nothing printed in either band may sit closer than this to a sheet edge. */
+export const PRINT_MARGIN = 12;
+/** Baselines (points from the bottom edge) of the bottom-band texts. */
+export const CODE_TEXT_Y = 12;
+export const PAGE_TEXT_Y = 30;
+/** Baseline of the top-band texts, measured down from the top edge. */
+export const TOP_TEXT_DROP = 26;
+const TOP_TEXT_SIZE = 10;
+
+/** Fits "name · index" on the left and "exam · date" on the right of one line:
+ * shrinks the name text to 7 pt, then shortens only the name with an ellipsis. */
+export function identityLine(font: PDFFont, bold: PDFFont, info: CopyInfo) {
+  const right = safe(font, `${info.examCode} · ${info.examDate}`);
+  const rightWidth = font.widthOfTextAtSize(right, TOP_TEXT_SIZE);
+  const avail = A4.width - 2 * SIDE - rightWidth - 12;
+  const suffix = ` · ${info.indexNumber}`;
+  const name = transliterate(info.candidateName).trim();
+  const make = (n: string) => safe(bold, n + suffix);
+  let size = TOP_TEXT_SIZE;
+  let left = make(name);
+  while (bold.widthOfTextAtSize(left, size) > avail && size > 7) size -= 0.5;
+  if (bold.widthOfTextAtSize(left, size) > avail) {
+    let n = name;
+    while (
+      n.length > 0 && bold.widthOfTextAtSize(make(n + "…"), size) > avail
+    ) {
+      n = n.slice(0, -1).trimEnd();
+    }
+    left = make(n.length > 0 ? n + "…" : "");
+    if (n.length === 0) left = safe(bold, `${suffix}`.replace(/^ · /, ""));
+  }
+  return {
+    left,
+    leftSize: size,
+    leftWidth: bold.widthOfTextAtSize(left, size),
+    right,
+    rightSize: TOP_TEXT_SIZE,
+    rightWidth,
+  };
+}
 
 /** Lower-left of the QR symbol; the 4-module quiet zone around it lies wholly
  * inside the bottom band, right of the margin and above the code text. */
@@ -207,17 +248,19 @@ function drawBands(
 ) {
   const { width: W, height: H } = A4;
   // top band
-  const left = safe(
-    bold,
-    `${transliterate(info.candidateName)} · ${info.indexNumber}`,
-  );
-  const right = safe(font, `${info.examCode} · ${info.examDate}`);
-  page.drawText(left, { x: SIDE, y: H - 22, size: 10, font: bold, color: INK });
-  const rw = font.widthOfTextAtSize(right, 10);
-  page.drawText(right, {
-    x: W - SIDE - rw,
-    y: H - 22,
-    size: 10,
+  const id = identityLine(font, bold, info);
+  const ty = H - TOP_TEXT_DROP;
+  page.drawText(id.left, {
+    x: SIDE,
+    y: ty,
+    size: id.leftSize,
+    font: bold,
+    color: INK,
+  });
+  page.drawText(id.right, {
+    x: W - SIDE - id.rightWidth,
+    y: ty,
+    size: id.rightSize,
     font,
     color: INK,
   });
@@ -236,7 +279,7 @@ function drawBands(
   });
   page.drawText(`Page ${n} of ${total}`, {
     x: SIDE,
-    y: 30,
+    y: PAGE_TEXT_Y,
     size: 10,
     font,
     color: INK,
@@ -249,7 +292,7 @@ function drawBands(
   const lw = font.widthOfTextAtSize(label, 7);
   page.drawText(label, {
     x: qrRight - QR_SIZE / 2 - lw / 2,
-    y: 2.5,
+    y: CODE_TEXT_Y,
     size: 7,
     font,
     color: INK,
