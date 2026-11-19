@@ -1,4 +1,4 @@
-export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm" | "confirm_signup";
+export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm" | "confirm_signup" | "paper_released" | "paper_corrected";
 
 /** Templates that carry a one-time sign-in link. */
 const LINK_TEMPLATES: readonly EmailTemplate[] = ["invite", "child_confirm", "confirm_signup"];
@@ -9,7 +9,14 @@ const SUBJECTS: Record<EmailTemplate, string> = {
   invite: "You are invited to Stem Examspace",
   child_confirm: "Set up your Stem Examspace account",
   confirm_signup: "Confirm your Stem Examspace registration",
+  paper_released: "Your paper is ready to download",
+  paper_corrected: "A corrected paper is available",
 };
+
+/** One line, no markup characters that could break a header. */
+function plain(s: string | undefined): string {
+  return (s ?? "").replace(/[\r\n<>]+/g, " ").trim();
+}
 
 const ESCAPES: Record<string, string> = {
   "&": "&amp;",
@@ -65,8 +72,22 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
       }${data.link ? `<p><a href="${esc(data.link)}">Confirm your email and choose your password</a></p>` : ""}${expiryNote(", or register again")}`;
       break;
     }
+    case "paper_released": {
+      const exam = esc(plain(data.exam) || "paper");
+      html = `<p>Hi ${name},</p><p>Your ${exam} is ready to download. Sign in to Stem Examspace and open your booking to download your paper.</p>`;
+      break;
+    }
+    case "paper_corrected": {
+      const exam = esc(plain(data.exam) || "paper");
+      html = `<p>Hi ${name},</p><p>The ${exam} has been corrected. Please download it again and use the new copy. Sign in to Stem Examspace and open your booking.</p>`;
+      break;
+    }
   }
-  return { subject: SUBJECTS[template], html };
+  const exam = plain(data.exam);
+  let subject = SUBJECTS[template];
+  if (exam && template === "paper_released") subject = `Your ${exam} is ready to download`;
+  if (exam && template === "paper_corrected") subject = `A corrected ${exam} is available`;
+  return { subject, html };
 }
 
 /** Plain-text console output is only for a local development site. */

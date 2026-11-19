@@ -432,3 +432,6 @@ verify_jwt = true
 
 [functions.paper-copy]
 verify_jwt = true
+
+[functions.paper-release-notify]
+verify_jwt = false

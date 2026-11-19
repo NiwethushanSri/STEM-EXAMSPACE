@@ -123,3 +123,12 @@ Deno.test("templates: confirm_signup lists the registered details (escaped) and 
     return Promise.resolve();
   });
 });
+
+Deno.test("paper templates: subject names the exam and the html is escaped", () => {
+  const r = _renderForTest("paper_released", { name: "Sam", exam: "GCSE Maths Paper 1" });
+  assertEquals(r.subject, "Your GCSE Maths Paper 1 is ready to download");
+  assertStringIncludes(r.html, "Hi Sam");
+  const c = _renderForTest("paper_corrected", { name: "<b>x</b>", exam: "GCSE Maths Paper 1" });
+  assertEquals(c.subject, "A corrected GCSE Maths Paper 1 is available");
+  assert(!c.html.includes("<b>x</b>"));
+});
