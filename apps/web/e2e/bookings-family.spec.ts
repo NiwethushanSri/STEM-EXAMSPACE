@@ -334,16 +334,48 @@ test("family_books_home_sitting", async ({ page }) => {
   await expect(mine).not.toContainText(SECRET);
   expect(await bookingRow(exam, me.id)).toMatchObject({ status: "awaiting_payment", sitting: "home", centre_id: null });
 
-  // The centre is full, so a second family cannot take it; a student who skips the question is told to choose.
+  // The centre is full: the page says so and offers only At home (never a choice that cannot be sent).
   const late = await student("Latecomer");
   await page.context().clearCookies();
   await signInUI(page, late.email, late.password);
   await expect(page).toHaveURL(/\/account\/home$/);
   await page.goto(`/exams/${exam}/book`);
-  await page.getByLabel("At the centre").check();
+  await expect(page.getByLabel("At the centre")).toBeDisabled();
+  await expect(page.getByTestId("centres-full")).toHaveText("The centre is full. Choose At home.");
+  await expect(page.getByText("Which centre?")).toHaveCount(0);
+  await page.getByLabel("At home").check();
   await page.getByRole("button", { name: "Confirm booking" }).click();
-  await expect(page.locator("main [role=alert]")).toHaveText("That centre is full. Choose another centre if there is one.");
-  expect(await bookingStatus(exam, late.id)).toBeUndefined();
+  await expect(page).toHaveURL(/\/account\/bookings\?booked=1$/);
+  expect(await bookingRow(exam, late.id)).toMatchObject({ sitting: "home", centre_id: null });
+});
+
+test("both_exam_with_every_centre_full_says_choose_at_home", async ({ page }) => {
+  const exam = await makeExam({
+    starts: SUMMER_ISO,
+    format: "both",
+    centres: [
+      { venue: "a", seats: 1 },
+      { venue: "b", seats: 1 },
+    ],
+  });
+  const a = await student("Seata");
+  const b = await student("Seatb");
+  await insertBooking(exam, a.id, "paid", 1500, { centre: 0 });
+  await insertBooking(exam, b.id, "paid", 1500, { centre: 1 });
+  const me = await student("Lastone");
+  await signInUI(page, me.email, me.password);
+  await expect(page).toHaveURL(/\/account\/home$/);
+  await page.goto(`/exams/${exam}/book`);
+  await expect(page.getByLabel("At the centre")).toBeDisabled();
+  await expect(page.getByTestId("centres-full")).toHaveText("All centres are full. Choose At home.");
+  await expect(page.getByText("Which centre?")).toHaveCount(0);
+  // Submitting without a choice is held back by the browser; At home books.
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  expect(await bookingStatus(exam, me.id)).toBeUndefined();
+  await page.getByLabel("At home").check();
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await expect(page).toHaveURL(/\/account\/bookings\?booked=1$/);
+  expect(await bookingRow(exam, me.id)).toMatchObject({ sitting: "home", centre_id: null });
 });
 
 test("family_picks_a_centre", async ({ page }) => {

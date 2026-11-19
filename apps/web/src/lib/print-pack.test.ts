@@ -1,6 +1,6 @@
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
-import { buildPrintPack, fetchInOrder, missingPaperWarning, type FetchOutcome } from "@/lib/print-pack";
+import { buildPrintPack, createPackBuilder, fetchInOrder, missingPaperWarning, packVersion, type FetchOutcome } from "@/lib/print-pack";
 
 async function onePage(width = 595): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -86,5 +86,24 @@ describe("missing paper warning", () => {
     expect(missingPaperWarning({ status: "published", hasPaper: true, releaseAt: at(23) }, now)).toBe(false);
     expect(missingPaperWarning({ status: "draft", hasPaper: false, releaseAt: at(23) }, now)).toBe(false);
     expect(missingPaperWarning({ status: "published", hasPaper: false, releaseAt: at(-2) }, now)).toBe(true);
+  });
+});
+
+describe("print pack cover version", () => {
+  it("the cover is made after the copies and still comes first", async () => {
+    const b = await createPackBuilder();
+    await b.append(await onePage(300));
+    await b.append(await onePage(400));
+    const out = await PDFDocument.load(await b.finish({ ...cover, candidates: 2, paperVersion: 3 }));
+    expect(out.getPages().map((p) => Math.round(p.getWidth()))).toEqual([595, 300, 400]);
+  });
+  it("packVersion takes the version of the copies actually fetched", () => {
+    expect(packVersion(null, 2)).toEqual({ ok: true, version: 2 });
+    expect(packVersion(2, 2)).toEqual({ ok: true, version: 2 });
+  });
+  it("copies of different versions, or a copy without one, stop the pack", () => {
+    expect(packVersion(2, 3)).toEqual({ ok: false });
+    expect(packVersion(null, null)).toEqual({ ok: false });
+    expect(packVersion(2, null)).toEqual({ ok: false });
   });
 });

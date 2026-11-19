@@ -3,6 +3,8 @@ export type BookingPaperState = {
   sitting: "centre" | "home";
   status: "centre" | "missing" | "not_yet" | "held" | "open" | "closed";
   release_at: string | null;
+  /** The database clock that decided the status (older servers may leave it out). */
+  server_now?: string | null;
   last_download: { at: string; by_name: string | null } | null;
   corrected: boolean;
   inserts: { id: string; title: string }[];
@@ -32,6 +34,7 @@ export const PAPER_TEXT = {
   ready: "Your paper is ready to download.",
   closed: "Paper downloads are closed for this booking.",
   failure: "The paper could not be prepared. Please try again.",
+  unpaid: "Pay for this booking to get the paper.",
 } as const;
 
 export function paperMessage(state: BookingPaperState, now: Date): { text: string; action: "download" | "none" } {
@@ -64,4 +67,37 @@ export function downloadedLine(last: BookingPaperState["last_download"], now: Da
   const sameDay = YMD.format(at) === YMD.format(now);
   const when = sameDay ? clock(at) : `${clock(at)} on ${dayDate(at)}`;
   return `Downloaded at ${when}${last.by_name ? ` by ${last.by_name}` : ""}`;
+}
+
+/** How often the page looks again while the paper is close to release, held or missing. */
+export const RECHECK_MS = 25_000;
+/** Within this long of the release the page looks again every RECHECK_MS. */
+export const NEAR_RELEASE_MS = 15 * 60_000;
+/** Longest wait before looking again, so a long timer never overflows. */
+export const MAX_WAIT_MS = 10 * 60_000;
+
+/** How far the device clock is behind the database clock, in ms (0 when unknown). `sentAt`/`receivedAt` are the
+ * device times around the request, so the server time is compared with their midpoint. */
+export function clockSkewMs(state: BookingPaperState, sentAt: number, receivedAt: number): number {
+  const server = state.server_now ? Date.parse(state.server_now) : NaN;
+  return Number.isNaN(server) ? 0 : server - (sentAt + receivedAt) / 2;
+}
+
+/**
+ * When to ask the server again, in ms from now, or null for never. The server decides the status; the page only
+ * chooses when to ask. Before the release: every RECHECK_MS from 15 minutes before it, plus once just after it
+ * (by the server's clock); further out, wake up when the 15 minutes start. Held or missing: every RECHECK_MS, so
+ * a resume or a late upload shows without reloading. Open, closed or centre: never.
+ */
+export function nextCheckMs(state: BookingPaperState, deviceNow: number, skewMs: number): number | null {
+  if (state.status === "held" || state.status === "missing") return RECHECK_MS;
+  if (state.status !== "not_yet") return null;
+  const at = state.release_at ? Date.parse(state.release_at) : NaN;
+  if (Number.isNaN(at)) return RECHECK_MS;
+  const until = at - (deviceNow + skewMs);
+  if (until > NEAR_RELEASE_MS) return Math.min(until - NEAR_RELEASE_MS + 1000, MAX_WAIT_MS);
+  if (until > 0) return Math.max(Math.min(until + 1500, RECHECK_MS), 1500);
+  // The release has passed by the server's clock but the answer was still "not yet": ask again soon, then less
+  // often (an exam taken back to draft stays "not yet").
+  return until > -60_000 ? 5_000 : RECHECK_MS;
 }

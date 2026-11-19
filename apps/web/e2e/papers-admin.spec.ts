@@ -318,6 +318,31 @@ test("print_pack_names_the_candidate_that_failed_and_saves_nothing", async ({ pa
   await expect(page.getByText("Pack saved: 3 copies.")).toBeVisible();
 });
 
+test("print_pack_with_copies_of_two_versions_is_not_saved", async ({ page }) => {
+  await signInAdmin(page);
+  await openExamPage(page);
+  // One copy reports another paper version, as if the paper were replaced while the pack was being made.
+  let calls = 0;
+  await page.route("**/functions/v1/paper-copy", async (route) => {
+    const res = await route.fetch();
+    calls++;
+    const headers = { ...res.headers() };
+    if (calls === 2) headers["x-paper-version"] = "99";
+    return route.fulfill({ response: res, headers });
+  });
+  let saved = false;
+  page.on("download", () => (saved = true));
+  await page.getByRole("button", { name: "Print pack" }).click();
+  const alert = page.getByRole("alert").filter({ hasText: "The paper was replaced while this pack was being made" });
+  await expect(alert).toContainText("Nothing was saved. Make the pack again.");
+  expect(saved).toBe(false);
+  await page.unroute("**/functions/v1/paper-copy");
+  const downloadPromise = page.waitForEvent("download");
+  await alert.getByRole("button", { name: "Make the pack again" }).click();
+  await downloadPromise;
+  await expect(page.getByText("Pack saved: 3 copies.")).toBeVisible();
+});
+
 test("teacher_has_no_way_into_the_exam_paper_page", async ({ page }) => {
   const teacher = await createAccount({ role: "teacher" });
   await signInUI(page, teacher.email, teacher.password);
@@ -328,4 +353,39 @@ test("teacher_has_no_way_into_the_exam_paper_page", async ({ page }) => {
   await expect(page.getByText("Paper and print")).toHaveCount(0);
   await page.goto(`/admin/exams/${examId}`);
   await expect(page).not.toHaveURL(/\/admin\//);
+});
+
+test("release_minutes_change_on_published_exam_asks_for_a_reason", async ({ page }) => {
+  await signInAdmin(page);
+  await openExamPage(page);
+  const form = page.getByRole("form", { name: "Paper settings" });
+  await form.getByLabel("Release minutes before the start").fill("30");
+  await form.getByRole("button", { name: "Save settings" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("Families will get the paper 30 minutes before the start instead of 10.");
+  await dialog.getByRole("button", { name: "Save settings" }).click();
+  await expect(dialog.getByText("Give a reason of 3 to 300 characters.")).toBeVisible();
+  const before = await svc().from("exams").select("release_minutes_before").eq("id", examId).single();
+  expect(before.data?.release_minutes_before).toBe(10);
+  await dialog.getByLabel("Reason").fill("Room opens earlier");
+  await dialog.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Paper settings saved." })).toBeVisible();
+  const release = new Date(Date.parse(startsAt) - 30 * 60_000).toISOString();
+  await expect(page.getByTestId("release-time")).toContainText(formatLondon(release));
+  const audit = await svc()
+    .from("audit_log")
+    .select("reason")
+    .eq("action", "exam_paper_settings_changed")
+    .eq("target_id", examId)
+    .eq("actor_id", admin.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .single();
+  expect(audit.data?.reason).toMatch(/; release 10 -> 30 minutes before the start; spare pages 2 -> 2; reason: Room opens earlier$/);
+  // Spare pages alone need no reason.
+  await form.getByLabel("Spare answer pages").fill("3");
+  await form.getByRole("button", { name: "Save settings" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "Paper settings saved." })).toBeVisible();
+  await svc().from("exams").update({ release_minutes_before: 10, spare_pages: SPARE }).eq("id", examId);
 });

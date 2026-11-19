@@ -266,10 +266,58 @@ test("centre_booking_shows_exam_room_message", async ({ page }) => {
   await expect(page.getByTestId("paper-message")).toHaveText("Your booking is for the centre; your paper is handed out in the exam room");
   await expect(page.getByRole("button", { name: /Download/ })).toHaveCount(0);
 
-  // An unpaid booking has no paper section at all.
+  // An unpaid home booking has no paper section, only a line saying why.
   await page.context().clearCookies();
   await signIn(page, unpaid);
   await page.goto("/account/bookings");
   await expect(page.getByTestId("booking-row")).toHaveCount(1);
   await expect(page.getByTestId("booking-paper")).toHaveCount(0);
+  await expect(page.getByTestId("paper-unpaid")).toHaveText("Pay for this booking to get the paper.");
+  await expect(page.getByRole("button", { name: /Download/ })).toHaveCount(0);
+});
+
+test("page_left_open_shows_the_download_at_release", async ({ page }) => {
+  test.setTimeout(240_000);
+  // Released about 75 seconds from now (10 minutes before a start 11 minutes and 15 seconds away).
+  const exam = await makeExam("Wait", new Date(Date.now() + 11 * MIN + 15_000), "online", 10);
+  await registerPaper(exam, "paper", await pdf(1, "Timed"));
+  const student = await createAccount({ status: "active", firstName: "Tia" });
+  await book(exam, student, "home");
+  await signIn(page, student);
+  await page.goto("/account/bookings");
+  const paper = page.getByTestId("booking-paper");
+  await expect(paper.getByTestId("paper-message")).toHaveText(/^Your paper will be ready at \d{2}:\d{2} on /);
+  await expect(paper.getByRole("button", { name: /Download/ })).toHaveCount(0);
+  // No reload: the page looks again by itself and the button appears once the server says it is released.
+  await expect(paper.getByRole("button", { name: /^Download paper for / })).toBeVisible({ timeout: 150_000 });
+  await expect(paper.getByTestId("paper-message")).toHaveText("Your paper is ready to download.");
+});
+
+test("held_then_resumed_without_reload", async ({ page }) => {
+  test.setTimeout(120_000);
+  const exam = await makeExam("Held", new Date(Date.now() + 60 * MIN), "online", 120);
+  await registerPaper(exam, "paper", await pdf(1, "Held"));
+  await svc().from("exams").update({ release_held: true }).eq("id", exam);
+  const student = await createAccount({ status: "active", firstName: "Hal" });
+  await book(exam, student, "home");
+  await signIn(page, student);
+  await page.goto("/account/bookings");
+  const paper = page.getByTestId("booking-paper");
+  await expect(paper.getByTestId("paper-message")).toHaveText("The paper is paused by the institution. Please wait.");
+  await svc().from("exams").update({ release_held: false }).eq("id", exam);
+  await expect(paper.getByRole("button", { name: /^Download paper for / })).toBeVisible({ timeout: 60_000 });
+  await expect(paper.getByTestId("paper-message")).toHaveText("Your paper is ready to download.");
+});
+
+test("missing_then_uploaded_without_reload", async ({ page }) => {
+  test.setTimeout(120_000);
+  const exam = await makeExam("Late", new Date(Date.now() + 60 * MIN), "online", 120);
+  const student = await createAccount({ status: "active", firstName: "Lou" });
+  await book(exam, student, "home");
+  await signIn(page, student);
+  await page.goto("/account/bookings");
+  const paper = page.getByTestId("booking-paper");
+  await expect(paper.getByTestId("paper-message")).toHaveText("Your paper is not ready yet. The institution has been told.");
+  await registerPaper(exam, "paper", await pdf(1, "Late"));
+  await expect(paper.getByRole("button", { name: /^Download paper for / })).toBeVisible({ timeout: 60_000 });
 });

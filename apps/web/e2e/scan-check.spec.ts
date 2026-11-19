@@ -119,7 +119,7 @@ test("scan_check_reads_a_generated_copy", async ({ page }) => {
   const reg = await client.functions.invoke("paper-register", { body: { examId, kind: "paper", storagePath } });
   if (reg.error) throw new Error(`paper-register failed: ${reg.error.message}`);
   const booking = await svc().from("bookings").select("id").eq("exam_id", examId).single();
-  const copy = await downloadPaperCopy(client, { bookingId: booking.data!.id, kind: "admin_preview" });
+  const copy = await downloadPaperCopy(client, { bookingId: booking.data!.id, kind: "admin_preview" }, { url: SUPABASE_URL, anonKey: ANON_KEY });
   await client.auth.signOut();
   if ("error" in copy) throw new Error(`copy failed: ${copy.error.message}`);
   const bytes = Buffer.from(await copy.data.blob.arrayBuffer());

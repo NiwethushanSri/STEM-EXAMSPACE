@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { downloadPaperCopy } from "@stem/shared";
 import { Card } from "@/components/AppShell";
-import { createPackBuilder, fetchInOrder, type FetchOutcome } from "@/lib/print-pack";
-import { createClient } from "@/lib/supabase/client";
+import { createPackBuilder, fetchInOrder, packVersion, type FetchOutcome } from "@/lib/print-pack";
+import { createClient, functionsEndpoint } from "@/lib/supabase/client";
 import { formatLondon } from "@/lib/money";
 import type { PackCentre } from "@/lib/exam-admin";
 
@@ -25,8 +25,10 @@ function saveBlob(blob: Blob, fileName: string) {
 
 const fileSafe = (s: string) => s.replace(/[^A-Za-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
 
-type Run = { centreId: string; done: number; total: number; failedIndex: string | null; finished: boolean };
-type Reprint = { busy: boolean; differs: boolean; error: string | null; done: boolean };
+/** failedIndex: the candidate whose copy failed ("the pack itself" when joining failed). mixed: the paper was
+ * replaced while the pack was being made, so its copies are not all one version. */
+type Run = { centreId: string; done: number; total: number; failedIndex: string | null; finished: boolean; mixed?: boolean };
+type Reprint = { busy: boolean; differs: boolean; error: string | null; done: boolean; version?: number | null };
 
 /** Print packs per centre, and a reprint for any one candidate. Needs the exam's current paper. */
 export function PrintPanel({
@@ -48,35 +50,49 @@ export function PrintPanel({
   const [reprints, setReprints] = useState<Record<string, Reprint>>({});
 
   const anyRunning = run !== null && !run.finished && run.failedIndex === null;
+  const endpoint = functionsEndpoint();
 
   async function makePack(centre: PackCentre) {
     if (paperVersion === null || centre.candidates.length === 0 || anyRunning) return;
     setRun({ centreId: centre.id, done: 0, total: centre.candidates.length, failedIndex: null, finished: false });
     const client = createClient();
-    // The cover goes in first; each copy is merged as soon as it is next in order and its bytes are dropped.
-    const builder = await createPackBuilder({
-      examTitle,
-      examCode,
-      centre: centre.venue,
-      room: centre.room,
-      date: formatLondon(startsAt),
-      candidates: centre.candidates.length,
-      paperVersion,
-      madeAt: formatLondon(new Date().toISOString()),
-    });
+    // Each copy is merged as soon as it is next in order and its bytes are dropped. The cover is made last, from
+    // the paper version of the copies actually fetched (paper-copy's X-Paper-Version), and put first.
+    let builder: Awaited<ReturnType<typeof createPackBuilder>>;
+    try {
+      builder = await createPackBuilder();
+    } catch {
+      setRun({ centreId: centre.id, done: 0, total: centre.candidates.length, failedIndex: "the pack itself", finished: true });
+      return;
+    }
+    let version: number | null = null;
+    let mixed = false;
     const result = await fetchInOrder(
       centre.candidates,
-      async (c): Promise<FetchOutcome<Uint8Array>> => {
-        const r = await downloadPaperCopy(client, { bookingId: c.bookingId, kind: "print_pack" });
+      async (c): Promise<FetchOutcome<{ bytes: Uint8Array; version: number | null }>> => {
+        const r = await downloadPaperCopy(client, { bookingId: c.bookingId, kind: "print_pack" }, endpoint);
         if ("error" in r) return { ok: false };
-        return { ok: true, value: new Uint8Array(await r.data.blob.arrayBuffer()) };
+        return { ok: true, value: { bytes: new Uint8Array(await r.data.blob.arrayBuffer()), version: r.data.version } };
       },
-      (bytes) => builder.append(bytes),
+      (copy) => {
+        const v = packVersion(version, copy.version);
+        if (!v.ok) {
+          mixed = true;
+          throw new Error("mixed versions");
+        }
+        version = v.version;
+        return builder.append(copy.bytes);
+      },
       {
         limit: IN_FLIGHT,
         onProgress: (done) => setRun((r) => (r && r.centreId === centre.id ? { ...r, done } : r)),
       },
     );
+    if (!result.ok && mixed) {
+      setRun((r) => ({ centreId: centre.id, done: r?.done ?? 0, total: centre.candidates.length, failedIndex: null, finished: true, mixed: true }));
+      router.refresh();
+      return;
+    }
     if (!result.ok) {
       // The index number only; no name goes on screen here.
       setRun((r) => ({ centreId: centre.id, done: r?.done ?? 0, total: centre.candidates.length, failedIndex: centre.candidates[result.failedIndex].indexNumber, finished: true }));
@@ -84,7 +100,16 @@ export function PrintPanel({
       return;
     }
     try {
-      const bytes = await builder.finish();
+      const bytes = await builder.finish({
+        examTitle,
+        examCode,
+        centre: centre.venue,
+        room: centre.room,
+        date: formatLondon(startsAt),
+        candidates: centre.candidates.length,
+        paperVersion: version ?? paperVersion,
+        madeAt: formatLondon(new Date().toISOString()),
+      });
       saveBlob(new Blob([bytes as BlobPart], { type: "application/pdf" }), `${fileSafe(examCode)}-${fileSafe(centre.venue)}-${fileSafe(centre.room)}-print-pack.pdf`);
       setRun({ centreId: centre.id, done: centre.candidates.length, total: centre.candidates.length, failedIndex: null, finished: true });
     } catch {
@@ -95,13 +120,13 @@ export function PrintPanel({
 
   async function reprint(bookingId: string) {
     setReprints((m) => ({ ...m, [bookingId]: { busy: true, differs: false, error: null, done: false } }));
-    const r = await downloadPaperCopy(createClient(), { bookingId, kind: "reprint" });
+    const r = await downloadPaperCopy(createClient(), { bookingId, kind: "reprint" }, endpoint);
     if ("error" in r) {
       setReprints((m) => ({ ...m, [bookingId]: { busy: false, differs: false, error: r.error.message, done: false } }));
       return;
     }
     saveBlob(r.data.blob, r.data.fileName);
-    setReprints((m) => ({ ...m, [bookingId]: { busy: false, differs: r.data.differs, error: null, done: true } }));
+    setReprints((m) => ({ ...m, [bookingId]: { busy: false, differs: r.data.differs, error: null, done: true, version: r.data.version } }));
     router.refresh();
   }
 
@@ -137,7 +162,16 @@ export function PrintPanel({
 
                 {mine && (
                   <div className="mt-3" aria-live="polite">
-                    {mine.failedIndex === null ? (
+                    {mine.mixed ? (
+                      <div role="alert" className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                        <p>
+                          The paper was replaced while this pack was being made, so its copies are not all the same version. Nothing was saved. Make the pack again.
+                        </p>
+                        <button type="button" onClick={() => makePack(c)} className="mt-2 rounded border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100">
+                          Make the pack again
+                        </button>
+                      </div>
+                    ) : mine.failedIndex === null ? (
                       <>
                         <div
                           role="progressbar"
@@ -193,9 +227,9 @@ export function PrintPanel({
                                 {rp.error}
                               </p>
                             )}
-                            {rp?.done && rp.differs && paperVersion !== null && (
+                            {rp?.done && rp.differs && (rp.version ?? paperVersion) !== null && (
                               <p role="alert" className="mt-1 rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
-                                This reprint uses the corrected paper (version {paperVersion}) and differs from the pack you printed.
+                                This reprint uses the corrected paper (version {rp.version ?? paperVersion}) and differs from the pack you printed.
                               </p>
                             )}
                             {rp?.done && !rp.differs && <p className="mt-1 text-xs text-slate-500">Reprint saved.</p>}

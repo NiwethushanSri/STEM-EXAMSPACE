@@ -7,6 +7,7 @@ import { Frame } from "@/components/bookings/Frame";
 import { STATUS_LABEL, STATUS_TONE, type BookingStatus } from "@/components/bookings/status";
 import { Badge } from "@/components/AppShell";
 import { BookingPaper } from "@/components/papers/BookingPaper";
+import { PAPER_TEXT } from "@/lib/paper-state";
 import { SITTING_MODE_LABEL } from "@/lib/exam-form";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
@@ -91,6 +92,9 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
         )}
         <div className="text-slate-600">{formatPence(r.amount_pence)}</div>
         {r.exam && (r.status === "paid" || r.status === "cancel_requested") && <BookingPaper bookingId={r.id} label={[r.exam.title || subject, r.exam.paper, me.role === "parent" ? (names.get(r.student_id) ?? "your child") : ""].filter(Boolean).join(", ")} />}
+        {r.exam && !examCancelled && r.status === "awaiting_payment" && r.sitting === "home" && (
+          <p data-testid="paper-unpaid" className="rounded-lg bg-slate-50 p-3 text-slate-700">{PAPER_TEXT.unpaid}</p>
+        )}
         {future && r.status === "awaiting_payment" && <CancelButton bookingId={r.id} paid={false} />}
         {future && r.status === "paid" && <CancelButton bookingId={r.id} paid />}
       </li>

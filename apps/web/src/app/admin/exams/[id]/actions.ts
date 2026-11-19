@@ -47,11 +47,16 @@ function refresh(examId: string) {
   revalidatePath("/admin");
 }
 
-/** Exam code, release minutes before the start, and spare answer pages. The database re-checks every rule. */
+/** Asked for when the release minutes of a published exam change without a reason. */
+const REASON_REQUIRED =
+  "Changing the release time of a published exam needs a reason (3 to 300 characters). It goes into the audit log.";
+
+/** Exam code, release minutes before the start, and spare answer pages. Changing the minutes of a published exam
+ * needs a reason. The database re-checks every rule and records the old and new values. */
 export async function saveSettingsAction(
   examId: string,
-  settings: { examCode: string; releaseMinutes: number; sparePages: number },
-): Promise<PaperActionResult> {
+  settings: { examCode: string; releaseMinutes: number; sparePages: number; reason?: string },
+): Promise<PaperActionResult & { reasonRequired?: boolean }> {
   await requireStaff(["admin", "owner"]);
   if (!isUuid(examId)) return { ok: false, message: GENERIC };
   const supabase = await createClient();
@@ -60,8 +65,12 @@ export async function saveSettingsAction(
     p_exam_code: settings.examCode,
     p_release_minutes_before: settings.releaseMinutes,
     p_spare_pages: settings.sparePages,
+    p_reason: settings.reason?.trim() ? settings.reason.trim() : undefined,
   });
   refresh(examId);
+  if (!error && data && typeof data === "object" && !Array.isArray(data) && (data as { code?: unknown }).code === "reason_required") {
+    return { ok: false, message: REASON_REQUIRED, reasonRequired: true };
+  }
   return answer(data, error, CONFLICTS.settings, "Paper settings saved.");
 }
 

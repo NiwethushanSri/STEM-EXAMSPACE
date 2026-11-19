@@ -17,15 +17,15 @@ const safe = (s: string) => s.replace(/[^ -~ -ÿ]/g, "?");
 export type PackBuilder = {
   /** Adds one copy's pages after those already added. The caller can drop its bytes straight away. */
   append(bytes: Uint8Array): Promise<void>;
-  finish(): Promise<Uint8Array>;
+  /** Puts the cover page first (made now, from what was actually added) and returns the pack. */
+  finish(cover: PackCover): Promise<Uint8Array>;
 };
 
-/** Starts a centre pack with its cover page; copies are merged one at a time with `append`, so they never all sit in memory. */
-export async function createPackBuilder(cover: PackCover): Promise<PackBuilder> {
-  const out = await PDFDocument.create();
+/** Draws the cover as the pack's first page. */
+async function drawCover(out: PDFDocument, cover: PackCover) {
   const font = await out.embedFont(StandardFonts.Helvetica);
   const bold = await out.embedFont(StandardFonts.HelveticaBold);
-  const page = out.addPage([595.28, 841.89]);
+  const page = out.insertPage(0, [595.28, 841.89]);
   const left = 56;
   page.drawText(safe(cover.examTitle), { x: left, y: 760, size: 22, font: bold, maxWidth: 480, color: rgb(0.1, 0.1, 0.1) });
   page.drawText("Centre print pack", { x: left, y: 730, size: 12, font, color: rgb(0.35, 0.35, 0.35) });
@@ -44,21 +44,40 @@ export async function createPackBuilder(cover: PackCover): Promise<PackBuilder> 
     page.drawText(safe(value), { x: left + 130, y, size: 13, font: bold, maxWidth: 350, color: rgb(0.1, 0.1, 0.1) });
     y -= 30;
   }
+}
+
+/** Starts a centre pack. Copies are merged one at a time with `append`, so they never all sit in memory; the
+ * cover is made by `finish`, so it describes the copies that are really in the pack. */
+export async function createPackBuilder(): Promise<PackBuilder> {
+  const out = await PDFDocument.create();
   return {
     async append(bytes) {
       const src = await PDFDocument.load(bytes);
       const pages = await out.copyPages(src, src.getPageIndices());
       for (const p of pages) out.addPage(p);
     },
-    finish: () => out.save(),
+    async finish(cover) {
+      await drawCover(out, cover);
+      return out.save();
+    },
   };
 }
 
 /** One PDF for a centre: a cover page, then every candidate copy in the order given. */
 export async function buildPrintPack(copies: Uint8Array[], cover: PackCover): Promise<Uint8Array> {
-  const builder = await createPackBuilder(cover);
+  const builder = await createPackBuilder();
   for (const bytes of copies) await builder.append(bytes);
-  return builder.finish();
+  return builder.finish(cover);
+}
+
+/**
+ * The paper version a pack stands for, given the version so far (null before the first copy) and the next copy's
+ * (from paper-copy's X-Paper-Version). Not ok when a copy has no version or another version than the copies before
+ * it (the paper was replaced while the pack was being made): the pack must then be made again.
+ */
+export function packVersion(sofar: number | null, copy: number | null): { ok: true; version: number } | { ok: false } {
+  if (copy === null || (sofar !== null && copy !== sofar)) return { ok: false };
+  return { ok: true, version: copy };
 }
 
 /** True when an exam is published, has no question paper, and its release time is less than 24 hours away (or past). */

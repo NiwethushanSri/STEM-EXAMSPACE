@@ -13,3 +13,10 @@ export function parseBookingChoice(form: FormData): BookingChoice {
   if (centre && !isUuid(centre)) return { ok: false };
   return { ok: true, sitting: (sitting || null) as SittingMode | null, centre: centre || null };
 }
+
+/** On an exam sat at the centre or at home: the line shown when no centre has a seat left (the centre option is
+ * then not offered), or null while at least one centre has a seat. */
+export function centresFullNote(format: "in_person" | "online" | "both", centres: { seats_left: number }[]): string | null {
+  if (format !== "both" || centres.some((c) => c.seats_left > 0)) return null;
+  return centres.length > 1 ? "All centres are full. Choose At home." : "The centre is full. Choose At home.";
+}

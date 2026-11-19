@@ -8,6 +8,7 @@ import { releaseAction, saveSettingsAction } from "@/app/admin/exams/[id]/action
 import { formatLondon } from "@/lib/money";
 
 type Kind = "release" | "hold" | "resume";
+type Settings = { examCode: string; releaseMinutes: number; sparePages: number };
 
 const DIALOG = {
   release: { title: "Release the paper now?", confirm: "Release now", tone: "primary" as const, text: "Families can download their copy straight away, before the planned release time." },
@@ -53,6 +54,9 @@ export function ReleasePanel({
   const [minutes, setMinutes] = useState(String(releaseMinutes));
   const [spare, setSpare] = useState(String(sparePages));
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  /** Settings waiting for the reason a release-time change on a published exam needs. */
+  const [pending, setPending] = useState<Settings | null>(null);
+  const [pendingError, setPendingError] = useState<string | null>(null);
 
   const published = status === "published";
   const released = Date.parse(releaseAt) <= nowMs;
@@ -82,12 +86,33 @@ export function ReleasePanel({
     if (!/^[A-Za-z0-9-]{3,40}$/.test(code.trim())) return setSettingsError("The exam code is 3 to 40 letters, numbers or hyphens.");
     if (!Number.isInteger(m) || m < 0 || m > 120) return setSettingsError("Release minutes must be a whole number from 0 to 120.");
     if (!Number.isInteger(s) || s < 0 || s > 6) return setSettingsError("Spare answer pages must be a whole number from 0 to 6.");
+    const next = { examCode: code.trim(), releaseMinutes: m, sparePages: s };
+    // Moving the release of a published exam is in effect an early (or later) release: ask why first.
+    if (published && m !== releaseMinutes) {
+      setPendingError(null);
+      setPending(next);
+      return;
+    }
+    await save(next);
+  }
+
+  async function save(next: Settings, reason?: string) {
     setBusy(true);
-    const res = await saveSettingsAction(examId, { examCode: code.trim(), releaseMinutes: m, sparePages: s }).catch(() => ({ ok: false as const, message: "Something went wrong. Please try again." }));
+    const res: Awaited<ReturnType<typeof saveSettingsAction>> = await saveSettingsAction(examId, { ...next, reason }).catch(() => ({
+      ok: false as const,
+      message: "Something went wrong. Please try again.",
+    }));
     setBusy(false);
     if (res.ok) {
+      setPending(null);
       setNotice(res);
       router.refresh();
+    } else if (res.reasonRequired && !reason) {
+      // The exam was published meanwhile: ask for the reason now.
+      setPendingError(null);
+      setPending(next);
+    } else if (reason !== undefined) {
+      setPendingError(res.message);
     } else {
       setSettingsError(res.message);
     }
@@ -161,6 +186,25 @@ export function ReleasePanel({
           </button>
         </div>
       </form>
+
+      {pending && (
+        <ReasonDialog
+          title="Change the release time?"
+          confirmLabel="Save settings"
+          busy={busy}
+          error={pendingError}
+          onConfirm={(reason) => save(pending, reason)}
+          onCancel={() => {
+            setPending(null);
+            setPendingError(null);
+          }}
+        >
+          <p>
+            Families will get the paper {pending.releaseMinutes} minutes before the start instead of {releaseMinutes}.
+            {pending.releaseMinutes > releaseMinutes ? " Moving the release earlier lets families download the paper sooner." : ""}
+          </p>
+        </ReasonDialog>
+      )}
 
       {dialog && (
         <ReasonDialog

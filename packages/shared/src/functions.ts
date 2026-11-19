@@ -217,22 +217,27 @@ function parseFunctionError(parsed: unknown): FunctionError | null {
   };
 }
 
+/** Where the Edge Functions are: the project URL and its public anon key (the same two the client was made with). */
+export type FunctionsEndpoint = { url: string; anonKey: string };
+
 /**
  * Downloads a candidate's personalised paper (or an insert unchanged). Uses fetch with the session token because
- * `functions.invoke` parses JSON. Never throws.
+ * `functions.invoke` parses JSON; the client only supplies the session. `version` is the paper version the copy
+ * was made from (null for an insert). Never throws.
  */
 export async function downloadPaperCopy(
   client: StemClient,
   input: PaperCopyInput,
-): Promise<{ data: { blob: Blob; fileName: string; differs: boolean } } | { error: FunctionError }> {
+  endpoint: FunctionsEndpoint,
+): Promise<{ data: { blob: Blob; fileName: string; differs: boolean; version: number | null } } | { error: FunctionError }> {
   try {
+    if (!endpoint?.url || !endpoint.anonKey) return internal();
     const { data: sess } = await client.auth.getSession();
     const token = sess.session?.access_token;
     if (!token) return fromStatus(401);
-    const { supabaseUrl, supabaseKey } = client as unknown as { supabaseUrl: string; supabaseKey: string };
-    const res = await fetch(`${supabaseUrl}/functions/v1/paper-copy`, {
+    const res = await fetch(`${endpoint.url.replace(/\/+$/, "")}/functions/v1/paper-copy`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, apikey: supabaseKey, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${token}`, apikey: endpoint.anonKey, "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
     if (!res.ok) {
@@ -245,11 +250,13 @@ export async function downloadPaperCopy(
       return parsed ? { error: parsed } : fromStatus(res.status);
     }
     const named = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+    const v = Number(res.headers.get("X-Paper-Version") ?? "");
     return {
       data: {
         blob: await res.blob(),
         fileName: named?.[1] ?? "paper.pdf",
         differs: res.headers.get("X-Paper-Differs") === "1",
+        version: Number.isInteger(v) && v > 0 ? v : null,
       },
     };
   } catch {
