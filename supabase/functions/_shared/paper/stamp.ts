@@ -106,7 +106,7 @@ export function identityLine(font: PDFFont, bold: PDFFont, info: CopyInfo) {
   const rightWidth = font.widthOfTextAtSize(right, TOP_TEXT_SIZE);
   const avail = A4.width - 2 * SIDE - rightWidth - 12;
   const suffix = ` · ${info.indexNumber}`;
-  const name = transliterate(info.candidateName).trim();
+  const name = transliterate(info.candidateName, bold).trim();
   const make = (n: string) => safe(bold, n + suffix);
   let size = TOP_TEXT_SIZE;
   let left = make(name);
@@ -155,6 +155,34 @@ export function qrMatrix(
   return { size: qr.modules.size, get: (r, c) => !!qr.modules.get(r, c) };
 }
 
+/** The part of a page a viewer shows: the CropBox clipped to the MediaBox,
+ * or the MediaBox when there is no usable CropBox. Corners are kept as stored
+ * (a box need not start at 0,0) and put in order if written the other way. */
+export function visibleBox(
+  page: PDFPage,
+): { left: number; bottom: number; right: number; top: number } {
+  const norm = (r: { x: number; y: number; width: number; height: number }) => ({
+    left: Math.min(r.x, r.x + r.width),
+    bottom: Math.min(r.y, r.y + r.height),
+    right: Math.max(r.x, r.x + r.width),
+    top: Math.max(r.y, r.y + r.height),
+  });
+  const media = norm(page.getMediaBox());
+  let crop = media;
+  try {
+    crop = norm(page.getCropBox());
+  } catch {
+    // a malformed CropBox is ignored: the MediaBox is what the page is
+  }
+  const box = {
+    left: Math.max(media.left, crop.left),
+    bottom: Math.max(media.bottom, crop.bottom),
+    right: Math.min(media.right, crop.right),
+    top: Math.min(media.top, crop.top),
+  };
+  return box.right > box.left && box.top > box.bottom ? box : media;
+}
+
 export async function inspectPaper(
   bytes: Uint8Array,
 ): Promise<{ pageCount: number }> {
@@ -168,7 +196,14 @@ export async function inspectPaper(
   const pageCount = doc.getPageCount();
   if (pageCount < 1) throw new PaperError("unreadable");
   for (const p of doc.getPages()) {
-    const { width, height } = p.getSize();
+    let width: number, height: number;
+    try {
+      const b = visibleBox(p);
+      width = b.right - b.left;
+      height = b.top - b.bottom;
+    } catch {
+      throw new PaperError("unreadable");
+    }
     if (!(width > 0 && height > 0) || !isFinite(width) || !isFinite(height)) {
       throw new PaperError("unreadable");
     }
@@ -197,11 +232,21 @@ const SPECIAL: Record<string, string> = {
   "ı": "i",
 };
 
-/** Reduces a name to what standard Helvetica (WinAnsi) can print. */
-export function transliterate(text: string): string {
+/** Keeps every character the font can print (é, ü, ñ, ç, ß, Ø … in standard
+ * Helvetica's WinAnsi set) and only rewrites the others: Ł → L, Ş → S. What
+ * still cannot be printed is left for safe() to replace. */
+export function transliterate(text: string, font: PDFFont): string {
+  const ok = new Set(font.getCharacterSet());
+  const prints = (ch: string) => ok.has(ch.codePointAt(0)!);
   let t = "";
-  for (const ch of text) t += SPECIAL[ch] ?? ch;
-  return t.normalize("NFKD").replace(/\p{M}/gu, "");
+  for (const ch of text.normalize("NFC")) {
+    if (prints(ch)) t += ch;
+    else if (SPECIAL[ch] !== undefined) t += SPECIAL[ch];
+    else {
+      for (const part of ch.normalize("NFKD").replace(/\p{M}/gu, "")) t += part;
+    }
+  }
+  return t;
 }
 
 function safe(font: PDFFont, text: string): string {
@@ -350,12 +395,32 @@ export async function buildCopy(
   const out = await PDFDocument.create();
   const font = await out.embedFont(StandardFonts.Helvetica);
   const bold = await out.embedFont(StandardFonts.HelveticaBold);
-  const embedded: PDFEmbeddedPage[] = await out.embedPages(srcPages);
+  // Each page is embedded by the box a viewer shows (its CropBox, else its
+  // MediaBox, at its own origin), so an offset MediaBox or a CropBox is neither
+  // cut off nor padded with what lies outside it.
+  let boxes: ReturnType<typeof visibleBox>[];
+  try {
+    boxes = srcPages.map(visibleBox);
+  } catch {
+    throw new PaperError("unreadable");
+  }
+  // A truly blank page may have no content stream, which pdf-lib cannot embed.
+  for (const p of srcPages) {
+    if (!p.node.Contents()) {
+      p.node.addContentStream(src.context.register(src.context.contentStream([])));
+    }
+  }
+  const embedded: PDFEmbeddedPage[] = await out.embedPages(srcPages, boxes);
   const total = srcPages.length + info.sparePages;
 
   embedded.forEach((ep, i) => {
     const page = out.addPage([A4.width, A4.height]);
-    const f = fitPage(ep.width, ep.height, srcPages[i].getRotation().angle);
+    const b = boxes[i];
+    const f = fitPage(
+      b.right - b.left,
+      b.top - b.bottom,
+      srcPages[i].getRotation().angle,
+    );
     page.drawPage(ep, {
       x: f.ox,
       y: f.oy,
