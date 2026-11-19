@@ -148,3 +148,62 @@ Deno.test("replaced_paper_nobody_downloaded_sends_nothing", async () => {
     await fx.cleanup();
   }
 });
+
+const recipients = async (fx: Fixture, paperId: string) => {
+  const r = await fx.svc.rpc("paper_corrected_recipients", { p_paper_ids: [paperId] });
+  assertEquals(r.error, null);
+  return (r.data ?? []) as { email: string }[];
+};
+
+async function downloaded(fx: Fixture) {
+  const dl = await call("paper-copy", fx.student.token, { bookingId: fx.bookingId, kind: "home" });
+  assertEquals(dl.status, 200);
+  await dl.body?.cancel();
+}
+
+Deno.test("corrected_recipients_cancelled_booking_excluded", async () => {
+  const fx = await setup(5);
+  try {
+    const v1 = await fx.addPaper(await makePdf(2), "paper", 2);
+    await downloaded(fx);
+    await replacePaper(fx, v1.id);
+    assertEquals((await recipients(fx, v1.id)).length, 1);
+    const c = await fx.svc.from("bookings").update({ status: "cancelled" }).eq("id", fx.bookingId);
+    assertEquals(c.error, null);
+    assertEquals((await recipients(fx, v1.id)).length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("corrected_recipients_inactive_parent_excluded", async () => {
+  const fx = await setup(5);
+  try {
+    const v1 = await fx.addPaper(await makePdf(2), "paper", 2);
+    await linkParent(fx);
+    await downloaded(fx);
+    await replacePaper(fx, v1.id);
+    assertEquals((await recipients(fx, v1.id)).length, 2);
+    const s = await fx.svc.from("profiles").update({ status: "suspended" }).eq("id", fx.stranger.id);
+    assertEquals(s.error, null);
+    const left = await recipients(fx, v1.id);
+    assertEquals(left.length, 1);
+    assertEquals(left[0].email.toLowerCase(), fx.student.email.toLowerCase());
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("corrected_recipients_already_has_current_version_excluded", async () => {
+  const fx = await setup(5);
+  try {
+    const v1 = await fx.addPaper(await makePdf(2), "paper", 2);
+    await downloaded(fx);
+    await replacePaper(fx, v1.id);
+    assertEquals((await recipients(fx, v1.id)).length, 1);
+    await downloaded(fx);
+    assertEquals((await recipients(fx, v1.id)).length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});

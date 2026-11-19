@@ -38,10 +38,10 @@ as $$
   select distinct on (lower(r.email)) r.email, r.first_name
   from public.bookings b
   join lateral (
-    select p.id, p.email, p.first_name from public.profiles p
+    select p.id, p.email, p.first_name, 0 as rnk, p.created_at from public.profiles p
     where p.id = b.student_id and p.status = 'active'
     union all
-    select p.id, p.email, p.first_name
+    select p.id, p.email, p.first_name, 1, p.created_at
     from public.parent_children pc
     join public.profiles p on p.id = pc.parent_id and p.status = 'active'
     where pc.student_id = b.student_id
@@ -50,7 +50,7 @@ as $$
     and b.sitting = 'home'
     and b.status in ('paid', 'cancel_requested')
     and r.email is not null
-  order by lower(r.email)
+  order by lower(r.email), r.rnk, r.created_at, r.id
 $$;
 
 -- Exams with a paper version replaced in the last 6 hours (and not yet announced) while a current paper exists.
@@ -64,7 +64,9 @@ as $$
   select e.id, e.title, e.paper, array_agg(old.id)
   from public.exam_papers old
   join public.exams e on e.id = old.exam_id
-  where old.kind = 'paper'
+  where e.status = 'published'
+    and not e.release_held
+    and old.kind = 'paper'
     and old.superseded_at is not null
     and old.superseded_at > p_now - interval '6 hours'
     and old.corrected_notified_at is null
@@ -87,20 +89,27 @@ as $$
   from public.paper_copies c
   join public.bookings b on b.id = c.booking_id
   join lateral (
-    select p.id, p.email, p.first_name from public.profiles p
+    select p.id, p.email, p.first_name, 0 as rnk, p.created_at from public.profiles p
     where p.id = b.student_id and p.status = 'active'
     union all
-    select p.id, p.email, p.first_name
+    select p.id, p.email, p.first_name, 1, p.created_at
     from public.parent_children pc
     join public.profiles p on p.id = pc.parent_id and p.status = 'active'
     where pc.student_id = b.student_id
   ) r on true
   where c.paper_id = any (p_paper_ids)
     and exists (select 1 from public.paper_downloads d where d.copy_id = c.id)
+    and not exists (
+      select 1
+      from public.exam_papers cur
+      join public.paper_copies cc on cc.paper_id = cur.id and cc.booking_id = b.id
+      join public.paper_downloads cd on cd.copy_id = cc.id
+      where cur.exam_id = b.exam_id and cur.kind = 'paper' and cur.superseded_at is null
+    )
     and b.sitting = 'home'
     and b.status in ('paid', 'cancel_requested')
     and r.email is not null
-  order by lower(r.email)
+  order by lower(r.email), r.rnk, r.created_at, r.id
 $$;
 
 revoke execute on function public.paper_release_due(timestamptz) from public, anon, authenticated;
@@ -124,6 +133,9 @@ declare
   v_url text;
   v_secret text;
 begin
+  if to_regclass('vault.decrypted_secrets') is null or to_regnamespace('net') is null then
+    return;
+  end if;
   select decrypted_secret into v_url from vault.decrypted_secrets where name = 'paper_notify_url';
   select decrypted_secret into v_secret from vault.decrypted_secrets where name = 'cron_secret';
   if coalesce(v_url, '') = '' or coalesce(v_secret, '') = '' then
@@ -137,7 +149,7 @@ begin
   );
 end;
 $$;
-revoke execute on function public.paper_release_notify_tick() from public, anon, authenticated;
+revoke execute on function public.paper_release_notify_tick() from public, anon, authenticated, service_role;
 
 do $$
 begin
