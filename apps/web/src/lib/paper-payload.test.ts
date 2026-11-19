@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePagePayload } from "./paper-payload";
+import { LOOKUP_LIMIT, lookupChunks, parsePagePayload } from "./paper-payload";
 
 describe("parsePagePayload", () => {
   it("parses_valid_payload", () => {
@@ -27,5 +27,19 @@ describe("parsePagePayload", () => {
     expect(parsePagePayload("SX1.7K2M9QWXA.1\n")).toBeNull();
     expect(parsePagePayload("SX1.7K2M9QWI0.1")).toBeNull(); // I is not in the alphabet
     expect(parsePagePayload("SX1.7K2M9QW.1")).toBeNull(); // 8 characters
+  });
+});
+
+describe("lookupChunks", () => {
+  it("splits_2500_codes_into_three_calls_of_at_most_1000", () => {
+    const items = Array.from({ length: 2500 }, (_, i) => i);
+    const chunks = lookupChunks(items);
+    expect(chunks.map((c) => c.length)).toEqual([1000, 1000, 500]);
+    expect(chunks.flat()).toEqual(items);
+  });
+  it("keeps_the_normal_case_to_one_call_and_none_for_nothing", () => {
+    expect(lookupChunks([1, 2, 3])).toHaveLength(1);
+    expect(lookupChunks(Array.from({ length: LOOKUP_LIMIT }, (_, i) => i))).toHaveLength(1);
+    expect(lookupChunks([])).toEqual([]);
   });
 });

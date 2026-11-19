@@ -30,6 +30,9 @@ let student: TestAccount;
 let subjectId: number;
 let venueId: string;
 let examId: string;
+let copyBytes: Buffer;
+
+test.describe.configure({ mode: "serial" });
 
 async function pdf(pages: number): Promise<Buffer> {
   const doc = await PDFDocument.create();
@@ -120,6 +123,7 @@ test("scan_check_reads_a_generated_copy", async ({ page }) => {
   await client.auth.signOut();
   if ("error" in copy) throw new Error(`copy failed: ${copy.error.message}`);
   const bytes = Buffer.from(await copy.data.blob.arrayBuffer());
+  copyBytes = bytes;
   const total = PAPER_PAGES + SPARE;
   expect((await PDFDocument.load(bytes)).getPageCount()).toBe(total);
 
@@ -147,6 +151,7 @@ test("scan_check_reads_a_generated_copy", async ({ page }) => {
   }
   await expect(rows.first()).toContainText(`${tag} Scan`);
   await expect(page.getByText("Older version")).toHaveCount(0);
+  await expect(page.getByTestId("scan-progress")).toContainText(`Read ${total} pages, ${total} codes found`);
   expect(lookups).toHaveLength(1);
   expect(stores).toHaveLength(0);
 
@@ -157,4 +162,25 @@ test("scan_check_reads_a_generated_copy", async ({ page }) => {
   await expect(page.getByText("No code found on page 1")).toBeVisible({ timeout: 30_000 });
   await page.locator("#scan-file").setInputFiles({ name: "photo.heic", mimeType: "image/heic", buffer: Buffer.from("x") });
   await expect(page.getByRole("alert").filter({ hasText: "HEIC photos are not supported. Export as JPEG or PNG and try again." })).toBeVisible();
+});
+
+test("scan_check_keeps_the_reading_when_the_lookup_fails", async ({ page }) => {
+  await signInUI(page, admin.email, admin.password);
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.goto("/admin/exams/scan-check");
+  const total = PAPER_PAGES + SPARE;
+  let calls = 0;
+  await page.route("**/rest/v1/rpc/paper_lookup_codes", (route) => {
+    calls++;
+    return calls === 1 ? route.abort() : route.continue();
+  });
+  await page.locator("#scan-file").setInputFiles({ name: "copy.pdf", mimeType: "application/pdf", buffer: copyBytes });
+  await expect(page.getByRole("alert").filter({ hasText: "could not be looked up" })).toBeVisible({ timeout: 90_000 });
+  const rows = page.getByTestId("scan-row");
+  await expect(rows).toHaveCount(total);
+  await expect(rows.first()).toContainText("not looked up yet");
+  await page.getByRole("button", { name: "Try the lookup again" }).click();
+  await expect(rows.first()).toContainText(student.indexNumber!);
+  await expect(rows.nth(total - 1)).toContainText(`Page ${total} of ${total}`);
+  expect(calls).toBe(2);
 });

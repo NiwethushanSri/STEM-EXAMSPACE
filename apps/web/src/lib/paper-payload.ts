@@ -6,3 +6,13 @@ export function parsePagePayload(text: string): { code: string; page: number } |
   const m = PAYLOAD.exec(text);
   return m ? { code: m[1], page: Number(m[2]) } : null;
 }
+
+/** The lookup refuses more than this many codes in one call. */
+export const LOOKUP_LIMIT = 1000;
+
+/** Splits codes into lookup calls of at most LOOKUP_LIMIT; one call in the normal case, none for no codes. */
+export function lookupChunks<T>(items: readonly T[], size: number = LOOKUP_LIMIT): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
