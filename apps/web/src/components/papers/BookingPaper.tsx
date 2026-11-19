@@ -22,8 +22,8 @@ const MAX_WAIT_MS = 10 * 60_000;
 const BUTTON =
   "rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60";
 
-/** The paper section of one paid booking: its status in plain words, the download, and the inserts. */
-export function BookingPaper({ bookingId }: { bookingId: string }) {
+/** The paper section of one paid booking (`label` names the exam, and the child for a parent, so every control is unique on the page): its status in plain words, the download, and the inserts. */
+export function BookingPaper({ bookingId, label }: { bookingId: string; label: string }) {
   const [state, setState] = useState<BookingPaperState | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -87,19 +87,19 @@ export function BookingPaper({ bookingId }: { bookingId: string }) {
   const open = state.status === "open";
 
   return (
-    <section aria-label="Paper" data-testid="booking-paper" className="space-y-2 rounded-lg bg-slate-50 p-3">
-      <p data-testid="paper-message" className="text-slate-700">{msg.text}</p>
-      {line && <p data-testid="paper-downloaded" className="text-slate-600">{line}</p>}
+    <section aria-label={`Paper for ${label}`} data-testid="booking-paper" className="space-y-2 rounded-lg bg-slate-50 p-3">
+      <p data-testid="paper-message" aria-live="polite" className="text-slate-700">{msg.text}</p>
+      {line && <p data-testid="paper-downloaded" aria-live="polite" className="text-slate-600">{line}</p>}
       {msg.action === "download" && (
         <div>
-          <button type="button" disabled={busy !== null} onClick={() => download("home", { bookingId, kind: "home" })} className={BUTTON}>
+          <button type="button" disabled={busy !== null} aria-label={`${state.corrected ? "Download corrected paper" : line ? "Download paper again" : "Download paper"} for ${label}`} onClick={() => download("home", { bookingId, kind: "home" })} className={BUTTON}>
             {busy === "home" ? "Preparing your paper..." : state.corrected ? "Download corrected paper" : line ? "Download again" : "Download paper"}
           </button>
           {error?.key === "home" && <p role="alert" className="mt-1 text-sm text-red-700">{error.message}</p>}
         </div>
       )}
       {open && state.inserts.length > 0 && (
-        <ul className="space-y-2 border-t border-slate-200 pt-2" aria-label="Inserts">
+        <ul className="space-y-2 border-t border-slate-200 pt-2" aria-label={`Inserts for ${label}`}>
           {state.inserts.map((i) => (
             <li key={i.id} data-testid="paper-insert" className="space-y-1">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -107,7 +107,7 @@ export function BookingPaper({ bookingId }: { bookingId: string }) {
                 <button
                   type="button"
                   disabled={busy !== null}
-                  aria-label={`Download ${i.title}`}
+                  aria-label={`Download ${i.title} for ${label}`}
                   onClick={() => download(i.id, { bookingId, insertId: i.id })}
                   className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >

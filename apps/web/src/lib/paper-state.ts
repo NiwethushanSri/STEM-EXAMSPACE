@@ -50,6 +50,7 @@ export function paperMessage(state: BookingPaperState, now: Date): { text: strin
     }
     case "open":
       return { text: state.corrected ? PAPER_TEXT.corrected : PAPER_TEXT.ready, action: "download" };
+    case "closed":
     default:
       return { text: PAPER_TEXT.closed, action: "none" };
   }

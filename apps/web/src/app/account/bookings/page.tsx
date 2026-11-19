@@ -88,7 +88,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
           <div className="text-slate-600">This exam is no longer on the timetable.</div>
         )}
         <div className="text-slate-600">{formatPence(r.amount_pence)}</div>
-        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && <BookingPaper bookingId={r.id} />}
+        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && <BookingPaper bookingId={r.id} label={me.role === "parent" ? `${subject}, ${names.get(r.student_id) ?? "your child"}` : subject} />}
         {future && r.status === "awaiting_payment" && <CancelButton bookingId={r.id} paid={false} />}
         {future && r.status === "paid" && <CancelButton bookingId={r.id} paid />}
       </li>

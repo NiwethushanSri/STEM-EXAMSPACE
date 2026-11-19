@@ -50,7 +50,7 @@ async function pdf(pages: number, label: string): Promise<Buffer> {
   return Buffer.from(await doc.save());
 }
 
-async function makeExam(title: string, starts: Date, format: "online" | "in_person"): Promise<string> {
+async function makeExam(title: string, starts: Date, format: "online" | "in_person", releaseMinutes = 10): Promise<string> {
   const { data, error } = await svc()
     .from("exams")
     .insert({
@@ -64,6 +64,7 @@ async function makeExam(title: string, starts: Date, format: "online" | "in_pers
       price_confirmed: true,
       booking_deadline: starts.toISOString(),
       status: "published",
+      release_minutes_before: releaseMinutes,
       created_by: adminAccount.id,
     })
     .select("id")
@@ -140,8 +141,8 @@ test.beforeAll(async () => {
   const v = await svc().from("venues").insert({ name: VENUE, rooms: ["Hall A"] }).select("id").single();
   if (v.error || !v.data) throw new Error(`venue insert failed: ${v.error?.message}`);
   venueId = v.data.id;
-  // Starts in about 5 minutes, so with the default 10 minute lead the paper is already released.
-  openExam = await makeExam("Open", new Date(Date.now() + 5 * MIN), "online");
+  // Starts in an hour with release 2 hours before: released now, and the window stays open well beyond the suite.
+  openExam = await makeExam("Open", new Date(Date.now() + 60 * MIN), "online", 120);
   await registerPaper(openExam, "paper", await pdf(2, "Question"));
   for (const path of ["/login", "/account/bookings"]) await fetch(`${BASE}${path}`, { redirect: "manual" }).catch(() => undefined);
 });
@@ -166,11 +167,11 @@ test("home_candidate_downloads_after_release", async ({ page }) => {
   await expect(paper.getByTestId("paper-message")).toHaveText("Your paper is ready to download.");
   await expect(paper.getByTestId("paper-downloaded")).toHaveCount(0);
 
-  const [download] = await Promise.all([page.waitForEvent("download"), paper.getByRole("button", { name: "Download paper" }).click()]);
+  const [download] = await Promise.all([page.waitForEvent("download"), paper.getByRole("button", { name: /^Download paper for / }).click()]);
   expect(download.suggestedFilename()).toMatch(/\.pdf$/);
   await expect(paper.getByTestId("paper-downloaded")).toHaveText(/^Downloaded at \d{2}:\d{2} by Cora Tester$/);
   // The button is back to normal and offers a second download.
-  await expect(paper.getByRole("button", { name: "Download again" })).toBeEnabled();
+  await expect(paper.getByRole("button", { name: /^Download paper again for / })).toBeEnabled();
 
   // A held release stops the download and says so.
   await svc().from("exams").update({ release_held: true }).eq("id", openExam);
@@ -184,14 +185,14 @@ test("home_candidate_downloads_after_release", async ({ page }) => {
   await page.reload();
   const insert = page.getByTestId("paper-insert");
   await expect(insert).toContainText("Formula sheet");
-  const [insertDownload] = await Promise.all([page.waitForEvent("download"), insert.getByRole("button", { name: "Download Formula sheet" }).click()]);
+  const [insertDownload] = await Promise.all([page.waitForEvent("download"), insert.getByRole("button", { name: /^Download Formula sheet for / }).click()]);
   expect(insertDownload.suggestedFilename()).toMatch(/\.pdf$/);
 
   // A replaced paper asks for a corrected download; downloading it clears the notice.
   await registerPaper(openExam, "paper", await pdf(3, "Corrected"), { reason: "Typo on page two" });
   await page.reload();
   await expect(page.getByTestId("paper-message")).toHaveText("A corrected paper is available. Download it again.");
-  await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Download corrected paper" }).click()]);
+  await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: /^Download corrected paper for / }).click()]);
   await expect(page.getByTestId("paper-message")).toHaveText("Your paper is ready to download.");
   await expect(page.getByTestId("paper-downloaded")).toContainText("by Cora Tester");
 });
@@ -207,7 +208,8 @@ test("parent_downloads_for_child", async ({ page }) => {
 
   const row = page.getByTestId("booking-row").filter({ hasText: "For Chip Tester" });
   await expect(row.getByTestId("paper-message")).toHaveText("Your paper is ready to download.");
-  const [download] = await Promise.all([page.waitForEvent("download"), row.getByRole("button", { name: "Download paper" }).click()]);
+  await expect(row.getByRole("button", { name: /^Download paper for .*, Chip Tester$/ })).toBeVisible();
+  const [download] = await Promise.all([page.waitForEvent("download"), row.getByRole("button", { name: /^Download paper for / }).click()]);
   expect(download.suggestedFilename()).toMatch(/\.pdf$/);
   await expect(row.getByTestId("paper-downloaded")).toHaveText(/^Downloaded at \d{2}:\d{2} by Pia Tester$/);
 });
@@ -230,7 +232,7 @@ test("before_release_shows_ready_time", async ({ page }) => {
 });
 
 test("centre_booking_shows_exam_room_message", async ({ page }) => {
-  const exam = await makeExam("Centre", new Date(Date.now() + 5 * MIN), "in_person");
+  const exam = await makeExam("Centre", new Date(Date.now() + 60 * MIN), "in_person", 120);
   const student = await createAccount({ status: "active", firstName: "Cleo" });
   const unpaid = await createAccount({ status: "active", firstName: "Una" });
   await book(exam, student, "centre");
