@@ -1,0 +1,271 @@
+// Builds a personalised copy of a question paper: every master page sits on an
+// A4 portrait sheet between a top band (identity) and a bottom band (page
+// number, QR, readable code). Nothing in the master page is moved, cropped or
+// covered. Pure module: no I/O, no personal data in errors.
+import {
+  degrees,
+  PDFDocument,
+  type PDFEmbeddedPage,
+  type PDFFont,
+  type PDFPage,
+  rgb,
+  StandardFonts,
+} from "pdf-lib";
+import QRCode from "qrcode";
+
+export const A4 = { width: 595.28, height: 841.89 };
+export const TOP_BAND = 34;
+export const BOTTOM_BAND = 64;
+export const SIDE = 18;
+
+/** QR symbol (dark modules only, without quiet zone) is this wide, in points. */
+export const QR_SIZE = 52;
+
+export class PaperError extends Error {
+  readonly reason: "encrypted" | "unreadable";
+  constructor(reason: "encrypted" | "unreadable") {
+    super(
+      reason === "encrypted"
+        ? "The paper is password protected."
+        : "The paper could not be read.",
+    );
+    this.name = "PaperError";
+    this.reason = reason;
+  }
+}
+
+export interface CopyInfo {
+  candidateName: string;
+  indexNumber: string;
+  examCode: string;
+  examDate: string;
+  code: string;
+  sparePages: number;
+}
+
+/** Where a source page of the given size goes. x,y is the lower-left corner of
+ * the placed page after any turning; scale never exceeds 1. */
+export function fitPage(
+  width: number,
+  height: number,
+): { rotate: 0 | 90; scale: number; x: number; y: number } {
+  const rotate: 0 | 90 = width > height ? 90 : 0;
+  const w = rotate === 90 ? height : width;
+  const h = rotate === 90 ? width : height;
+  const boxW = A4.width - 2 * SIDE;
+  const boxH = A4.height - TOP_BAND - BOTTOM_BAND;
+  const scale = Math.min(1, boxW / w, boxH / h);
+  return {
+    rotate,
+    scale,
+    x: SIDE + (boxW - w * scale) / 2,
+    y: BOTTOM_BAND + (boxH - h * scale) / 2,
+  };
+}
+
+export function qrPayload(code: string, page: number): string {
+  return `SX1.${code}.${page}`;
+}
+
+export function qrMatrix(
+  payload: string,
+): { size: number; get: (row: number, col: number) => boolean } {
+  const qr = QRCode.create(payload, { errorCorrectionLevel: "M" });
+  return { size: qr.modules.size, get: (r, c) => !!qr.modules.get(r, c) };
+}
+
+export async function inspectPaper(
+  bytes: Uint8Array,
+): Promise<{ pageCount: number }> {
+  let doc: PDFDocument;
+  try {
+    doc = await PDFDocument.load(bytes);
+  } catch (e) {
+    if (isEncrypted(e)) throw new PaperError("encrypted");
+    throw new PaperError("unreadable");
+  }
+  const pageCount = doc.getPageCount();
+  if (pageCount < 1) throw new PaperError("unreadable");
+  for (const p of doc.getPages()) {
+    const { width, height } = p.getSize();
+    if (!(width > 0 && height > 0) || !isFinite(width) || !isFinite(height)) {
+      throw new PaperError("unreadable");
+    }
+  }
+  return { pageCount };
+}
+
+function readable(code: string, page: number): string {
+  return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)} · p${
+    String(page).padStart(2, "0")
+  }`;
+}
+
+function safe(font: PDFFont, text: string): string {
+  const ok = new Set(font.getCharacterSet());
+  let out = "";
+  for (const ch of text) out += ok.has(ch.codePointAt(0)!) ? ch : "?";
+  return out;
+}
+
+const INK = rgb(0.1, 0.1, 0.1);
+
+function drawQr(page: PDFPage, payload: string, right: number, bottom: number) {
+  const m = qrMatrix(payload);
+  const mod = QR_SIZE / m.size;
+  let d = "";
+  for (let r = 0; r < m.size; r++) {
+    let c = 0;
+    while (c < m.size) {
+      if (!m.get(r, c)) {
+        c++;
+        continue;
+      }
+      const start = c;
+      while (c < m.size && m.get(r, c)) c++;
+      d += `M${start} ${r}h${c - start}v1h-${c - start}z`;
+    }
+  }
+  page.drawSvgPath(d, {
+    x: right - QR_SIZE,
+    y: bottom + QR_SIZE,
+    scale: mod,
+    color: rgb(0, 0, 0),
+    borderWidth: 0,
+  });
+}
+
+function drawBands(
+  page: PDFPage,
+  font: PDFFont,
+  bold: PDFFont,
+  info: CopyInfo,
+  n: number,
+  total: number,
+) {
+  const { width: W, height: H } = A4;
+  // top band
+  const left = safe(bold, `${info.candidateName} · ${info.indexNumber}`);
+  const right = safe(font, `${info.examCode} · ${info.examDate}`);
+  page.drawText(left, { x: SIDE, y: H - 22, size: 10, font: bold, color: INK });
+  const rw = font.widthOfTextAtSize(right, 10);
+  page.drawText(right, {
+    x: W - SIDE - rw,
+    y: H - 22,
+    size: 10,
+    font,
+    color: INK,
+  });
+  page.drawLine({
+    start: { x: SIDE, y: H - TOP_BAND + 4 },
+    end: { x: W - SIDE, y: H - TOP_BAND + 4 },
+    thickness: 0.5,
+    color: INK,
+  });
+  // bottom band
+  page.drawLine({
+    start: { x: SIDE, y: BOTTOM_BAND - 4 },
+    end: { x: W - SIDE, y: BOTTOM_BAND - 4 },
+    thickness: 0.5,
+    color: INK,
+  });
+  page.drawText(`Page ${n} of ${total}`, {
+    x: SIDE,
+    y: 30,
+    size: 10,
+    font,
+    color: INK,
+  });
+  // QR sits right of the band with a 4-module quiet zone to its right
+  const quiet = (QR_SIZE / qrMatrix(qrPayload(info.code, n)).size) * 4;
+  const qrRight = W - SIDE - quiet;
+  drawQr(page, qrPayload(info.code, n), qrRight, 10);
+  const label = readable(info.code, n);
+  const lw = font.widthOfTextAtSize(label, 7);
+  page.drawText(label, {
+    x: qrRight - QR_SIZE / 2 - lw / 2,
+    y: 2.5,
+    size: 7,
+    font,
+    color: INK,
+  });
+}
+
+function drawSpare(page: PDFPage, font: PDFFont, bold: PDFFont) {
+  const top = A4.height - TOP_BAND - 14;
+  page.drawText("Additional answer page", {
+    x: SIDE,
+    y: top - 12,
+    size: 14,
+    font: bold,
+    color: INK,
+  });
+  const bw = 150;
+  page.drawText("Question number", {
+    x: A4.width - SIDE - bw,
+    y: top - 10,
+    size: 8,
+    font,
+    color: INK,
+  });
+  page.drawRectangle({
+    x: A4.width - SIDE - bw,
+    y: top - 38,
+    width: bw,
+    height: 24,
+    borderWidth: 0.75,
+    borderColor: INK,
+  });
+  for (let y = top - 62; y > BOTTOM_BAND + 12; y -= 24) {
+    page.drawLine({
+      start: { x: SIDE, y },
+      end: { x: A4.width - SIDE, y },
+      thickness: 0.4,
+      color: rgb(0.6, 0.6, 0.6),
+    });
+  }
+}
+
+export async function buildCopy(
+  master: Uint8Array,
+  info: CopyInfo,
+): Promise<Uint8Array> {
+  let src: PDFDocument;
+  try {
+    src = await PDFDocument.load(master);
+  } catch (e) {
+    if (isEncrypted(e)) throw new PaperError("encrypted");
+    throw new PaperError("unreadable");
+  }
+  const srcPages = src.getPages();
+  if (srcPages.length < 1) throw new PaperError("unreadable");
+  const out = await PDFDocument.create();
+  const font = await out.embedFont(StandardFonts.Helvetica);
+  const bold = await out.embedFont(StandardFonts.HelveticaBold);
+  const embedded: PDFEmbeddedPage[] = await out.embedPages(srcPages);
+  const total = srcPages.length + info.sparePages;
+
+  embedded.forEach((ep, i) => {
+    const page = out.addPage([A4.width, A4.height]);
+    const f = fitPage(ep.width, ep.height);
+    page.drawPage(ep, {
+      x: f.rotate === 90 ? f.x + ep.height * f.scale : f.x,
+      y: f.y,
+      xScale: f.scale,
+      yScale: f.scale,
+      rotate: degrees(f.rotate),
+    });
+    drawBands(page, font, bold, info, i + 1, total);
+  });
+  for (let s = 0; s < info.sparePages; s++) {
+    const page = out.addPage([A4.width, A4.height]);
+    drawSpare(page, font, bold);
+    drawBands(page, font, bold, info, srcPages.length + s + 1, total);
+  }
+  return await out.save();
+}
+
+// pdf-lib's EncryptedPDFError is not exported, so recognise it by its message.
+function isEncrypted(e: unknown): boolean {
+  return e instanceof Error && /is encrypted/i.test(e.message);
+}
