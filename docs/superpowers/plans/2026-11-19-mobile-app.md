@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-19-mobile-app-design.md`
 
+**Execution:** subagent-driven (chosen by the owner 2026-11-19).
+
 ## Global Constraints
 
 - Built after the 1 Dec 2026 launch; never takes time from it.
