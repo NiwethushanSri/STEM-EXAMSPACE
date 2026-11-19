@@ -119,6 +119,9 @@ async function openExamPage(page: Page) {
   await expect(page.getByRole("heading", { name: new RegExp(`${tag} Maths`) })).toBeVisible();
 }
 
+// The tests build on each other (the paper, then its copies), so a failure skips the rest.
+test.describe.configure({ mode: "serial" });
+
 test.beforeAll(async () => {
   await assertNoOwner();
   admin = await createAccount({ role: "admin" });
@@ -205,7 +208,7 @@ test("replace_requires_reason_after_download", async ({ page }) => {
   await signInAdmin(page);
   await openExamPage(page);
 
-  // Before any copy exists a replacement needs no reason.
+  // Make a copy (a print pack), so replacing the paper now needs a reason.
   await page.getByRole("button", { name: "Print pack" }).click();
   await expect(page.getByText("Pack saved: 1 copy.")).toBeVisible();
   const copies = await svc().from("paper_copies").select("id", { count: "exact", head: true }).eq("paper_id", paper.data!.id);

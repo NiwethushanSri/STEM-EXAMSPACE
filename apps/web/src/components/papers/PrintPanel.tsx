@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { downloadPaperCopy } from "@stem/shared";
 import { Card } from "@/components/AppShell";
-import { buildPrintPack, fetchInOrder, type FetchOutcome } from "@/lib/print-pack";
+import { createPackBuilder, fetchInOrder, type FetchOutcome } from "@/lib/print-pack";
 import { createClient } from "@/lib/supabase/client";
 import { formatLondon } from "@/lib/money";
 import type { PackCentre } from "@/lib/exam-admin";
@@ -53,6 +53,17 @@ export function PrintPanel({
     if (paperVersion === null || centre.candidates.length === 0 || anyRunning) return;
     setRun({ centreId: centre.id, done: 0, total: centre.candidates.length, failedIndex: null, finished: false });
     const client = createClient();
+    // The cover goes in first; each copy is merged as soon as it is next in order and its bytes are dropped.
+    const builder = await createPackBuilder({
+      examTitle,
+      examCode,
+      centre: centre.venue,
+      room: centre.room,
+      date: formatLondon(startsAt),
+      candidates: centre.candidates.length,
+      paperVersion,
+      madeAt: formatLondon(new Date().toISOString()),
+    });
     const result = await fetchInOrder(
       centre.candidates,
       async (c): Promise<FetchOutcome<Uint8Array>> => {
@@ -60,6 +71,7 @@ export function PrintPanel({
         if ("error" in r) return { ok: false };
         return { ok: true, value: new Uint8Array(await r.data.blob.arrayBuffer()) };
       },
+      (bytes) => builder.append(bytes),
       {
         limit: IN_FLIGHT,
         onProgress: (done) => setRun((r) => (r && r.centreId === centre.id ? { ...r, done } : r)),
@@ -72,16 +84,7 @@ export function PrintPanel({
       return;
     }
     try {
-      const bytes = await buildPrintPack(result.values, {
-        examTitle,
-        examCode,
-        centre: centre.venue,
-        room: centre.room,
-        date: formatLondon(startsAt),
-        candidates: centre.candidates.length,
-        paperVersion,
-        madeAt: formatLondon(new Date().toISOString()),
-      });
+      const bytes = await builder.finish();
       saveBlob(new Blob([bytes as BlobPart], { type: "application/pdf" }), `${fileSafe(examCode)}-${fileSafe(centre.venue)}-${fileSafe(centre.room)}-print-pack.pdf`);
       setRun({ centreId: centre.id, done: centre.candidates.length, total: centre.candidates.length, failedIndex: null, finished: true });
     } catch {

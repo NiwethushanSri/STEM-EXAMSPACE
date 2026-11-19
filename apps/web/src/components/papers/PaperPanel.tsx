@@ -217,6 +217,9 @@ function UploadDialog({
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [forceReason, setForceReason] = useState(false);
+  const router = useRouter();
+  const mustGiveReason = needsReason || forceReason;
   const isInsert = mode.kind === "insert";
   const heading = isInsert ? "Add an insert" : replacing ? "Replace the paper" : "Upload the paper";
 
@@ -229,7 +232,7 @@ function UploadDialog({
     const cleanTitle = title.trim();
     if (isInsert && (cleanTitle.length < 1 || cleanTitle.length > 120)) return setError("Give the insert a title of up to 120 characters.");
     const cleanReason = reason.trim();
-    if (needsReason && (cleanReason.length < REASON_MIN || cleanReason.length > REASON_MAX)) return setError("Give a reason of 3 to 300 characters.");
+    if (mustGiveReason && (cleanReason.length < REASON_MIN || cleanReason.length > REASON_MAX)) return setError("Give a reason of 3 to 300 characters.");
 
     setBusy(true);
     const client = createClient();
@@ -247,16 +250,25 @@ function UploadDialog({
       ...(cleanReason ? { reason: cleanReason } : {}),
     });
     setBusy(false);
-    if ("error" in res) return setError(res.error.message);
+    if ("error" in res) {
+      // A copy was made since this page loaded, so a reason is now needed. The refused file is already gone;
+      // keep the dialog open with the reason field and upload again on the next press.
+      if (res.error.code === "invalid_input" && replacing && !cleanReason) {
+        setForceReason(true);
+        router.refresh();
+        return setError("Copies of the current paper now exist. Say why you are replacing it, then upload again.");
+      }
+      return setError(res.error.message);
+    }
     onDone(isInsert ? `Insert added (${res.data.pageCount} pages).` : `Paper version ${res.data.version} uploaded (${res.data.pageCount} pages).`);
   }
 
   return (
-    <ConfirmDialog title={heading} confirmLabel={busy ? "Uploading..." : "Upload"} tone="primary" busy={busy} onConfirm={submit} onCancel={onCancel}>
+    <ConfirmDialog title={heading} confirmLabel={busy ? "Uploading..." : "Upload"} tone="primary" busy={busy} onConfirm={submit} onCancel={() => { if (!busy) onCancel(); }}>
       <div className="space-y-3">
         {replacing && (
           <p>
-            {needsReason
+            {mustGiveReason
               ? "Copies of the current paper already exist. They stay valid, and the new version gets new codes. Say why you are replacing it."
               : "The new version replaces the current one. The old version stays in the history."}
           </p>
@@ -267,7 +279,7 @@ function UploadDialog({
             <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm" />
           </label>
         )}
-        {needsReason && (
+        {mustGiveReason && (
           <label className="block text-sm">
             <span className="font-medium text-slate-700">Reason for replacing</span>
             <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} maxLength={REASON_MAX} className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm" />

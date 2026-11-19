@@ -40,7 +40,9 @@ export function ReasonDialog({
         setTouched(true);
         if (!bad) onConfirm(trimmed);
       }}
-      onCancel={onCancel}
+      onCancel={() => {
+        if (!busy) onCancel();
+      }}
     >
       <div className="space-y-3">
         {children}
