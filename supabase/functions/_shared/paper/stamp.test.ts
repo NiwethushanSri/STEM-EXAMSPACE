@@ -5,13 +5,17 @@ import {
   A4,
   BOTTOM_BAND,
   buildCopy,
+  CODE_TEXT_TOP,
   fitPage,
   inspectPaper,
   PaperError,
+  QR_SIZE,
+  qrLayout,
   qrMatrix,
   qrPayload,
   SIDE,
   TOP_BAND,
+  transliterate,
 } from "./stamp.ts";
 
 type JsQR = (
@@ -154,4 +158,70 @@ Deno.test("timing_20_page_master", async () => {
   );
   assertEquals((await PDFDocument.load(out)).getPageCount(), 22);
   assert(ms < 1000);
+});
+
+Deno.test("qr_quiet_zone_inside_band", () => {
+  const size = qrMatrix(qrPayload(INFO.code, 1)).size;
+  const l = qrLayout(size);
+  assertEquals(Math.round(QR_SIZE), 52);
+  assert(Math.abs(l.quiet - (QR_SIZE / size) * 4) < 1e-9);
+  assert(l.x - l.quiet >= SIDE - 1e-6);
+  assert(l.x + QR_SIZE + l.quiet <= A4.width - SIDE + 1e-6);
+  assert(l.y - l.quiet >= CODE_TEXT_TOP - 1e-6);
+  assert(l.y + QR_SIZE + l.quiet <= BOTTOM_BAND - 1e-6);
+  // also with a three-digit page number
+  const big = qrLayout(qrMatrix(qrPayload(INFO.code, 123)).size);
+  assert(big.y + QR_SIZE + big.quiet <= BOTTOM_BAND - 1e-6);
+});
+
+Deno.test("name_transliterated_to_winansi", () => {
+  assertEquals(transliterate("Łukasz Ørsted-Şahin"), "Lukasz Orsted-Sahin");
+  assertEquals(
+    transliterate("Straße Æther Œuvre Đorđe ı"),
+    "Strasse AEther OEuvre Dorde i",
+  );
+});
+
+Deno.test("copy_builds_with_non_winansi_name", async () => {
+  const out = await buildCopy(await master(), {
+    ...INFO,
+    candidateName: "Łukasz Ørsted-Şahin 王",
+  });
+  assertEquals((await PDFDocument.load(out)).getPageCount(), 5);
+});
+
+Deno.test("fit_honours_page_rotate", () => {
+  // portrait page stored as landscape plus /Rotate 90 or 270: upright portrait
+  const ref = fitPage(595.28, 841.89);
+  for (const rot of [90, 270]) {
+    const f = fitPage(841.89, 595.28, rot);
+    assertEquals(f.rotate, 0);
+    assertEquals(f.angle, rot === 90 ? 270 : 90);
+    assert(Math.abs(f.scale - ref.scale) < 1e-9);
+    assert(Math.abs(f.x - ref.x) < 1e-6 && Math.abs(f.y - ref.y) < 1e-6);
+  }
+  // origin: angle 270 draws from the top-left of the footprint, 90 from bottom-right
+  const f270 = fitPage(841.89, 595.28, 90);
+  assert(Math.abs(f270.oy - (f270.y + 841.89 * f270.scale)) < 1e-6);
+  assert(Math.abs(f270.ox - f270.x) < 1e-6);
+  const f90 = fitPage(841.89, 595.28, 270);
+  assert(Math.abs(f90.ox - (f90.x + 595.28 * f90.scale)) < 1e-6);
+  // landscape visible via /Rotate 90 on a portrait-stored page: turned to fit
+  const l = fitPage(595.28, 841.89, 90);
+  assertEquals(l.rotate, 90);
+  assertEquals(l.angle, 0);
+  // upside-down portrait
+  assertEquals(fitPage(595.28, 841.89, 180).angle, 180);
+});
+
+Deno.test("copy_with_rotated_pages_all_a4", async () => {
+  const d = await PDFDocument.create();
+  const a = d.addPage([841.89, 595.28]);
+  a.drawText("a");
+  a.setRotation({ type: "degrees", angle: 90 } as never);
+  const b = d.addPage([841.89, 595.28]);
+  b.drawText("b");
+  b.setRotation({ type: "degrees", angle: 270 } as never);
+  const out = await buildCopy(await d.save(), INFO);
+  assertEquals((await PDFDocument.load(out)).getPageCount(), 4);
 });

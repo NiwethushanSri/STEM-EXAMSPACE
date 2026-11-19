@@ -15,7 +15,7 @@ import QRCode from "qrcode";
 
 export const A4 = { width: 595.28, height: 841.89 };
 export const TOP_BAND = 34;
-export const BOTTOM_BAND = 64;
+export const BOTTOM_BAND = 84;
 export const SIDE = 18;
 
 /** QR symbol (dark modules only, without quiet zone) is this wide, in points. */
@@ -43,23 +43,63 @@ export interface CopyInfo {
   sparePages: number;
 }
 
-/** Where a source page of the given size goes. x,y is the lower-left corner of
- * the placed page after any turning; scale never exceeds 1. */
+/** Where a source page goes. width/height are the stored page size and
+ * pageRotation its /Rotate entry (clockwise, as a viewer shows it). The page is
+ * first made upright, then a landscape page is turned 90 degrees anticlockwise.
+ * `angle` is the total anticlockwise turn; x,y is the lower-left corner of the
+ * placed footprint; ox,oy is the origin to hand to drawPage. Scale never
+ * exceeds 1. */
 export function fitPage(
   width: number,
   height: number,
-): { rotate: 0 | 90; scale: number; x: number; y: number } {
-  const rotate: 0 | 90 = width > height ? 90 : 0;
-  const w = rotate === 90 ? height : width;
-  const h = rotate === 90 ? width : height;
+  pageRotation: number = 0,
+): {
+  rotate: 0 | 90;
+  angle: 0 | 90 | 180 | 270;
+  scale: number;
+  x: number;
+  y: number;
+  ox: number;
+  oy: number;
+} {
+  const r = (((Math.round(pageRotation / 90) * 90) % 360) + 360) % 360;
+  const sideways = r === 90 || r === 270;
+  const vw = sideways ? height : width;
+  const vh = sideways ? width : height;
+  const rotate: 0 | 90 = vw > vh ? 90 : 0;
+  const angle = ((((360 - r + rotate) % 360) + 360) % 360) as
+    | 0
+    | 90
+    | 180
+    | 270;
+  const turned = angle === 90 || angle === 270;
+  const w = turned ? height : width;
+  const h = turned ? width : height;
   const boxW = A4.width - 2 * SIDE;
   const boxH = A4.height - TOP_BAND - BOTTOM_BAND;
   const scale = Math.min(1, boxW / w, boxH / h);
+  const x = SIDE + (boxW - w * scale) / 2;
+  const y = BOTTOM_BAND + (boxH - h * scale) / 2;
+  const sw = width * scale;
+  const sh = height * scale;
+  const ox = angle === 90 ? x + sh : angle === 180 ? x + sw : x;
+  const oy = angle === 180 ? y + sh : angle === 270 ? y + sw : y;
+  return { rotate, angle, scale, x, y, ox, oy };
+}
+
+/** Text under the QR occupies y from 0 to this height. */
+export const CODE_TEXT_TOP = 10;
+
+/** Lower-left of the QR symbol; the 4-module quiet zone around it lies wholly
+ * inside the bottom band, right of the margin and above the code text. */
+export function qrLayout(
+  modules: number,
+): { x: number; y: number; quiet: number } {
+  const quiet = (QR_SIZE / modules) * 4;
   return {
-    rotate,
-    scale,
-    x: SIDE + (boxW - w * scale) / 2,
-    y: BOTTOM_BAND + (boxH - h * scale) / 2,
+    x: A4.width - SIDE - quiet - QR_SIZE,
+    y: CODE_TEXT_TOP + quiet,
+    quiet,
   };
 }
 
@@ -99,6 +139,28 @@ function readable(code: string, page: number): string {
   return `${code.slice(0, 4)}-${code.slice(4, 8)}-${code.slice(8)} · p${
     String(page).padStart(2, "0")
   }`;
+}
+
+const SPECIAL: Record<string, string> = {
+  "Ł": "L",
+  "ł": "l",
+  "Ø": "O",
+  "ø": "o",
+  "ß": "ss",
+  "Æ": "AE",
+  "æ": "ae",
+  "Œ": "OE",
+  "œ": "oe",
+  "Đ": "D",
+  "đ": "d",
+  "ı": "i",
+};
+
+/** Reduces a name to what standard Helvetica (WinAnsi) can print. */
+export function transliterate(text: string): string {
+  let t = "";
+  for (const ch of text) t += SPECIAL[ch] ?? ch;
+  return t.normalize("NFKD").replace(/\p{M}/gu, "");
 }
 
 function safe(font: PDFFont, text: string): string {
@@ -145,7 +207,10 @@ function drawBands(
 ) {
   const { width: W, height: H } = A4;
   // top band
-  const left = safe(bold, `${info.candidateName} · ${info.indexNumber}`);
+  const left = safe(
+    bold,
+    `${transliterate(info.candidateName)} · ${info.indexNumber}`,
+  );
   const right = safe(font, `${info.examCode} · ${info.examDate}`);
   page.drawText(left, { x: SIDE, y: H - 22, size: 10, font: bold, color: INK });
   const rw = font.widthOfTextAtSize(right, 10);
@@ -164,8 +229,8 @@ function drawBands(
   });
   // bottom band
   page.drawLine({
-    start: { x: SIDE, y: BOTTOM_BAND - 4 },
-    end: { x: W - SIDE, y: BOTTOM_BAND - 4 },
+    start: { x: SIDE, y: BOTTOM_BAND - 0.5 },
+    end: { x: W - SIDE, y: BOTTOM_BAND - 0.5 },
     thickness: 0.5,
     color: INK,
   });
@@ -177,9 +242,9 @@ function drawBands(
     color: INK,
   });
   // QR sits right of the band with a 4-module quiet zone to its right
-  const quiet = (QR_SIZE / qrMatrix(qrPayload(info.code, n)).size) * 4;
-  const qrRight = W - SIDE - quiet;
-  drawQr(page, qrPayload(info.code, n), qrRight, 10);
+  const lay = qrLayout(qrMatrix(qrPayload(info.code, n)).size);
+  const qrRight = lay.x + QR_SIZE;
+  drawQr(page, qrPayload(info.code, n), qrRight, lay.y);
   const label = readable(info.code, n);
   const lw = font.widthOfTextAtSize(label, 7);
   page.drawText(label, {
@@ -247,13 +312,13 @@ export async function buildCopy(
 
   embedded.forEach((ep, i) => {
     const page = out.addPage([A4.width, A4.height]);
-    const f = fitPage(ep.width, ep.height);
+    const f = fitPage(ep.width, ep.height, srcPages[i].getRotation().angle);
     page.drawPage(ep, {
-      x: f.rotate === 90 ? f.x + ep.height * f.scale : f.x,
-      y: f.y,
+      x: f.ox,
+      y: f.oy,
       xScale: f.scale,
       yScale: f.scale,
-      rotate: degrees(f.rotate),
+      rotate: degrees(f.angle),
     });
     drawBands(page, font, bold, info, i + 1, total);
   });
