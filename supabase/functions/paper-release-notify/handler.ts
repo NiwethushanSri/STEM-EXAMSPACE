@@ -7,8 +7,9 @@
 //   releases.
 // - An exam (or paper version) is claimed, by setting its notified column, before sending so overlapping runs
 //   cannot send twice. Sending is at most MAX_PARALLEL at a time, paced to stay under the provider's rate limit.
-// - If every attempt failed (for example a missing key) the claim is rolled back so the next tick retries.
-//   A partial failure is not retried: delivery is at-most-once per family.
+// - If nothing was sent (every attempt failed, for example a missing key, or the time ran out first) the claim is
+//   rolled back so the next tick retries, but only while the row still holds this run's own claim value (a
+//   reschedule or a newer run may have replaced it). A partial send is not retried: at-most-once per family.
 // - No new send starts after BUDGET_MS; the unsent rest is left unsent (at-most-once) rather than overrunning the
 //   function's time limit.
 // Logs hold counts and error codes only, never an address or a name.
@@ -30,6 +31,8 @@ export interface Outcome {
   attempted: number;
   sent: number;
   failed: number;
+  /** Distinct addresses to email. */
+  total: number;
   /** Left unsent because the time budget ran out. */
   unsent: number;
   /** True when every attempt failed and the claim was rolled back for a retry. */
@@ -111,7 +114,7 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
         }
       };
       await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL, queue.length) }, worker));
-      return { attempted, sent, failed, unsent: queue.length - attempted };
+      return { total: queue.length, attempted, sent, failed, unsent: queue.length - attempted };
     }
 
     const logOutcome = (kind: string, o: Outcome) =>
@@ -126,24 +129,26 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     }
     for (const e of (due.data ?? []) as { exam_id: string; title: string; paper: string | null }[]) {
       if (outOfTime()) break;
-      const claim = await svc.from("exams").update({ release_notified_at: new Date(deps.now()).toISOString() })
+      const claimedAt = new Date(deps.now()).toISOString();
+      const claim = await svc.from("exams").update({ release_notified_at: claimedAt })
         .eq("id", e.exam_id).is("release_notified_at", null).eq("release_held", false).select("id");
       if (claim.error || !claim.data?.length) {
         if (claim.error) failures++;
         continue;
       }
       const who = await svc.rpc("paper_release_recipients", { p_exam: e.exam_id });
-      let r: Omit<Outcome, "exam_id" | "retry"> = { attempted: 0, sent: 0, failed: 0, unsent: 0 };
+      let r: Omit<Outcome, "exam_id" | "retry">;
       if (who.error) {
         console.error(`[paper-release-notify] recipients failed code=${who.error.code ?? "unknown"}`);
         failures++;
-        r = { attempted: 1, sent: 0, failed: 1, unsent: 0 }; // roll back and retry
+        r = { total: 1, attempted: 1, sent: 0, failed: 1, unsent: 0 }; // roll back and retry
       } else {
         r = await sendAll((who.data ?? []) as Recipient[], "paper_released", label(e.title, e.paper));
       }
-      const retry = r.sent === 0 && r.attempted > 0;
+      const retry = r.sent === 0 && r.total > 0;
       if (retry) {
-        const back = await svc.from("exams").update({ release_notified_at: null }).eq("id", e.exam_id);
+        const back = await svc.from("exams").update({ release_notified_at: null }).eq("id", e.exam_id)
+          .eq("release_notified_at", claimedAt);
         if (back.error) failures++;
       }
       const o = { exam_id: e.exam_id, ...r, retry };
@@ -160,7 +165,8 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       const e of (fixed.data ?? []) as { exam_id: string; title: string; paper: string | null; paper_ids: string[] }[]
     ) {
       if (outOfTime()) break;
-      const claim = await svc.from("exam_papers").update({ corrected_notified_at: new Date(deps.now()).toISOString() })
+      const claimedAt = new Date(deps.now()).toISOString();
+      const claim = await svc.from("exam_papers").update({ corrected_notified_at: claimedAt })
         .in("id", e.paper_ids).is("corrected_notified_at", null).select("id");
       if (claim.error || !claim.data?.length) {
         if (claim.error) failures++;
@@ -168,17 +174,18 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       }
       const ids = claim.data.map((p) => p.id as string);
       const who = await svc.rpc("paper_corrected_recipients", { p_paper_ids: ids });
-      let r: Omit<Outcome, "exam_id" | "retry"> = { attempted: 0, sent: 0, failed: 0, unsent: 0 };
+      let r: Omit<Outcome, "exam_id" | "retry">;
       if (who.error) {
         console.error(`[paper-release-notify] recipients failed code=${who.error.code ?? "unknown"}`);
         failures++;
-        r = { attempted: 1, sent: 0, failed: 1, unsent: 0 };
+        r = { total: 1, attempted: 1, sent: 0, failed: 1, unsent: 0 };
       } else {
         r = await sendAll((who.data ?? []) as Recipient[], "paper_corrected", label(e.title, e.paper));
       }
-      const retry = r.sent === 0 && r.attempted > 0;
+      const retry = r.sent === 0 && r.total > 0;
       if (retry) {
-        const back = await svc.from("exam_papers").update({ corrected_notified_at: null }).in("id", ids);
+        const back = await svc.from("exam_papers").update({ corrected_notified_at: null }).in("id", ids)
+          .eq("corrected_notified_at", claimedAt);
         if (back.error) failures++;
       }
       const o = { exam_id: e.exam_id, ...r, retry };

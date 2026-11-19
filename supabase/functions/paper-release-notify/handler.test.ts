@@ -26,7 +26,10 @@ function fakeSvc(who: { email: string; first_name: string | null }[], kind: "rel
       calls.push(`update:${JSON.stringify(v)}`);
       return q;
     },
-    eq: () => q,
+    eq(col: string, val: unknown) {
+      calls.push(`eq:${col}=${val}`);
+      return q;
+    },
     is: () => q,
     in: () => q,
     select: () => Promise.resolve({ data: [{ id: "p1" }], error: null }),
@@ -171,5 +174,36 @@ Deno.test("stops starting sends when the time budget is used up", async () => {
     assert(o.attempted >= 1 && o.attempted <= 2); // only sends already in flight
     assertEquals(o.attempted + o.unsent, 6);
     assertEquals(o.retry, false);
+  });
+});
+
+Deno.test("rollback only while the row still holds this run's claim", async () => {
+  await quiet(async () => {
+    const { svc, calls } = fakeSvc(people(2));
+    const h = makeHandler(deps({ svc: () => svc, send: () => Promise.resolve(false) }));
+    await (await h(req())).json();
+    const claimed = new Date(0).toISOString();
+    const i = calls.findIndex((c) => c.includes('"release_notified_at":null'));
+    assert(i >= 0);
+    assert(calls.slice(i + 1, i + 4).includes("eq:release_notified_at=" + claimed));
+  });
+  await quiet(async () => {
+    const { svc, calls } = fakeSvc(people(2), "corrected");
+    const h = makeHandler(deps({ svc: () => svc, send: () => Promise.resolve(false) }));
+    await (await h(req())).json();
+    const i = calls.findIndex((c) => c.includes('"corrected_notified_at":null'));
+    assert(i >= 0);
+    assert(calls.slice(i + 1, i + 4).includes("eq:corrected_notified_at=" + new Date(0).toISOString()));
+  });
+});
+
+Deno.test("time runs out after the claim but before any send: claim rolled back", async () => {
+  await quiet(async () => {
+    const { svc, calls } = fakeSvc(people(3));
+    let n = 0;
+    const h = makeHandler(deps({ svc: () => svc, now: () => (++n <= 3 ? 0 : BUDGET_MS) }));
+    const o = (await (await h(req())).json()).released[0];
+    assertEquals([o.attempted, o.sent, o.unsent, o.retry], [0, 0, 3, true]);
+    assert(calls.some((c) => c.includes('"release_notified_at":null')));
   });
 });

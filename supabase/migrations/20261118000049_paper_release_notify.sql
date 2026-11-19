@@ -145,7 +145,7 @@ begin
     url := v_url,
     headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', v_secret),
     body := '{}'::jsonb,
-    timeout_milliseconds := 20000
+    timeout_milliseconds := 120000
   );
 end;
 $$;
