@@ -33,11 +33,9 @@ export async function callSaveExam(supabase: Client, v: ExamValues, pricePence: 
     p_title: v.title,
     p_paper: v.paper,
     p_format: v.format,
-    p_venue_id: v.venueId as unknown as string,
-    p_room: v.room as unknown as string,
+    p_centres: v.centres.map((c) => ({ ...(c.id ? { id: c.id } : {}), venue_id: c.venueId, room: c.room, seat_limit: c.seatLimit })),
     p_starts_at: v.startsAt,
     p_duration_minutes: v.durationMinutes,
-    p_seat_limit: v.seatLimit,
     p_price_pence: pricePence,
     p_booking_deadline: v.bookingDeadline,
   });
@@ -70,8 +68,32 @@ export async function explainSaveConflict(supabase: Client, v: ExamValues): Prom
     .select("id", { count: "exact", head: true })
     .eq("exam_id", v.id)
     .in("status", ["awaiting_payment", "paid", "cancel_requested"]);
-  if (taken !== null && v.seatLimit < taken) {
-    return `The seat limit cannot be lower than the ${taken} seat${taken === 1 ? "" : "s"} already booked. Cancel some bookings first, or choose ${taken} or more.`;
+  // Seats taken per centre, to tell which centre was shrunk or removed too far.
+  const { data: current } = await supabase
+    .from("exam_centres")
+    .select("id, room, seat_limit, venue:venues(name)")
+    .eq("exam_id", v.id)
+    .is("removed_at", null);
+  const { data: held } = await supabase
+    .from("bookings")
+    .select("centre_id")
+    .eq("exam_id", v.id)
+    .not("centre_id", "is", null)
+    .in("status", ["awaiting_payment", "paid", "cancel_requested"]);
+  const takenAt = new Map<string, number>();
+  for (const b of held ?? []) if (b.centre_id) takenAt.set(b.centre_id, (takenAt.get(b.centre_id) ?? 0) + 1);
+  type CurrentCentre = { id: string; room: string; seat_limit: number; venue: { name: string } | { name: string }[] | null };
+  for (const c of (current ?? []) as unknown as CurrentCentre[]) {
+    const name = `${(Array.isArray(c.venue) ? c.venue[0]?.name : c.venue?.name) ?? "Venue"} · ${c.room}`;
+    const n = takenAt.get(c.id) ?? 0;
+    if (n === 0) continue;
+    const kept = v.centres.find((k) => k.id === c.id);
+    if (!kept) {
+      return `${name} cannot be removed: it has ${n} booking${n === 1 ? "" : "s"}. Cancel or move them first.`;
+    }
+    if (kept.seatLimit < n) {
+      return `The seat limit at ${name} cannot be lower than the ${n} seat${n === 1 ? "" : "s"} already booked there. Cancel some bookings first, or choose ${n} or more.`;
+    }
   }
   if (v.pricePence !== null && v.pricePence !== exam.price_pence) {
     return `The price cannot be changed (it is currently ${formatPence(exam.price_pence)}) because this exam already has bookings.`;

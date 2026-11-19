@@ -2,18 +2,35 @@ import { londonLocalToUtc, utcToLondonParts } from "./london-time";
 import { poundsToPence } from "./money";
 import { isUuid } from "./uuid";
 
+export type ExamFormat = "in_person" | "online" | "both";
+
+/** How an exam is sat, in the words used on every screen. */
+export const SITTING_LABEL: Record<ExamFormat, string> = {
+  in_person: "At the centre",
+  online: "At home",
+  both: "At the centre or at home",
+};
+export const SITTING_MODE_LABEL: Record<"centre" | "home", string> = {
+  centre: "At the centre",
+  home: "At home",
+};
+
+/** One place the exam is sat: a venue and room with its own seat limit. `id` is set for a centre already saved. */
+export type CentreValues = { id?: string; venueId: string; room: string; seatLimit: number };
+
+const MAX_CENTRES = 20;
+
 /** The values save_exam takes, read from the exam form. Times are already UTC instants. */
 export type ExamValues = {
   id: string | null;
   subjectId: number;
   title: string;
   paper: string;
-  format: "in_person" | "online";
-  venueId: string | null;
-  room: string | null;
+  format: ExamFormat;
+  /** Empty for a home-only exam. */
+  centres: CentreValues[];
   startsAt: string;
   durationMinutes: number;
-  seatLimit: number;
   /** Null when the form has no price field (teachers). */
   pricePence: number | null;
   bookingDeadline: string;
@@ -67,14 +84,39 @@ export function parseExamForm(
   if (paper.length > 80) return fail("The paper can be at most 80 characters.");
 
   const format = get("format");
-  if (format !== "in_person" && format !== "online") return fail("Choose in person or online.");
-  let venueId: string | null = null;
-  let room: string | null = null;
-  if (format === "in_person") {
-    if (!isUuid(get("venue"))) return fail("Choose a venue for an in-person exam.");
-    if (!get("room")) return fail("Choose a room for an in-person exam.");
-    venueId = get("venue");
-    room = get("room");
+  if (format !== "in_person" && format !== "online" && format !== "both") return fail("Choose where the exam is sat.");
+  const centres: CentreValues[] = [];
+  if (format !== "online") {
+    // Centre rows are numbered from 0 in the form, but a removed row can leave a gap: read what is there, in order.
+    const indexes = [
+      ...new Set(
+        Object.keys(raw)
+          .map((k) => /^centre\.(\d{1,3})\./.exec(k)?.[1])
+          .filter((v): v is string => v !== undefined)
+          .map(Number),
+      ),
+    ].sort((a, b) => a - b);
+    if (indexes.length === 0) return fail("Add at least one centre.");
+    if (indexes.length > MAX_CENTRES) return fail(`An exam can have at most ${MAX_CENTRES} centres.`);
+    const seen = new Set<string>();
+    for (const [n, i] of indexes.entries()) {
+      const where = `Centre ${n + 1}`;
+      const venue = get(`centre.${i}.venue`);
+      const room = get(`centre.${i}.room`);
+      const seats = get(`centre.${i}.seats`);
+      const cid = get(`centre.${i}.id`);
+      if (!isUuid(venue)) return fail(`${where}: choose a venue.`);
+      if (!room) return fail(`${where}: choose a room.`);
+      if (cid && !isUuid(cid)) return fail("This exam could not be found. Refresh the page.");
+      if (!WHOLE.test(seats)) return fail(`${where}: enter the seat limit as a whole number.`);
+      const seatLimit = Number(seats);
+      if (seatLimit < 1 || seatLimit > 1000) return fail(`${where}: the seat limit must be between 1 and 1000.`);
+      const key = `${venue}
+${room}`;
+      if (seen.has(key)) return fail(`${where}: this room is already used by another centre of this exam.`);
+      seen.add(key);
+      centres.push({ ...(cid ? { id: cid } : {}), venueId: venue, room, seatLimit });
+    }
   }
 
   if (!get("startDate") || !get("startTime")) return fail("Choose the exam date and time.");
@@ -88,10 +130,6 @@ export function parseExamForm(
   if (!WHOLE.test(get("duration"))) return fail("Enter the duration in whole minutes.");
   const durationMinutes = Number(get("duration"));
   if (durationMinutes < 15 || durationMinutes > 600) return fail("The duration must be between 15 and 600 minutes.");
-
-  if (!WHOLE.test(get("seats"))) return fail("Enter the seat limit as a whole number.");
-  const seatLimit = Number(get("seats"));
-  if (seatLimit < 1 || seatLimit > 1000) return fail("The seat limit must be between 1 and 1000.");
 
   let pricePence: number | null = null;
   if (opts.withPrice) {
@@ -108,11 +146,9 @@ export function parseExamForm(
       title,
       paper,
       format,
-      venueId,
-      room,
+      centres,
       startsAt,
       durationMinutes,
-      seatLimit,
       pricePence,
       bookingDeadline,
     },

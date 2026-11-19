@@ -41,6 +41,8 @@ let admin: TestAccount;
 let subjectId: number;
 let subjectBId: number;
 let venueId: string;
+/** The centre each seeded exam sits at, so bookings can name it. */
+const centreOf = new Map<string, string>();
 
 async function makeExam(o: {
   title: string;
@@ -60,11 +62,8 @@ async function makeExam(o: {
       title: `${tag} ${o.title}`,
       paper: "Paper 1",
       format: "in_person",
-      venue_id: venueId,
-      room: "Hall A",
       starts_at: starts,
       duration_minutes: 90,
-      seat_limit: o.seats ?? 10,
       price_pence: o.price ?? 1500,
       price_confirmed: o.confirmed ?? true,
       booking_deadline: new Date(Date.parse(starts) - 3 * 86400_000).toISOString(),
@@ -74,16 +73,26 @@ async function makeExam(o: {
     .select("id")
     .single();
   if (error || !data) throw new Error(`exam insert failed: ${error?.message}`);
+  const c = await svc().from("exam_centres").insert({ exam_id: data.id, venue_id: venueId, room: "Hall A", seat_limit: o.seats ?? 10 }).select("id").single();
+  if (c.error || !c.data) throw new Error(`centre insert failed: ${c.error?.message}`);
+  centreOf.set(data.id, c.data.id);
   return data.id;
 }
 
 async function insertBooking(examId: string, studentId: string, status: "awaiting_payment" | "paid", amount = 1500) {
-  const { error } = await svc().from("bookings").insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: amount });
+  const { error } = await svc()
+    .from("bookings")
+    .insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: amount, sitting: "centre", centre_id: centreOf.get(examId)! });
   if (error) throw new Error(`booking insert failed: ${error.message}`);
 }
 
 async function exam(title: string) {
   const { data } = await svc().from("exams").select("*").eq("title", `${tag} ${title}`).maybeSingle();
+  return data;
+}
+
+async function centreRow(examId: string) {
+  const { data } = await svc().from("exam_centres").select("seat_limit, removed_at").eq("exam_id", examId).is("removed_at", null).maybeSingle();
   return data;
 }
 
@@ -97,7 +106,7 @@ async function removeData() {
   const ids = (data ?? []).map((e) => e.id);
   if (ids.length) {
     await svc().from("bookings").delete().in("exam_id", ids);
-    await svc().from("exams").delete().in("id", ids);
+    await svc().from("exams").delete().in("id", ids); // its centres go with it
   }
 }
 
@@ -138,7 +147,7 @@ test.afterAll(async () => {
   expect(await countTestUsers()).toBe(0);
 });
 
-test("admin_creates_in_person_exam_publishes_and_edits_the_date_in_london_time", async ({ page }) => {
+test("admin_creates_exam_at_two_centres_publishes_and_edits_the_date_in_london_time", async ({ page }) => {
   await signInAdmin(page);
   await page.goto("/admin/exams");
   await expect(page.getByRole("heading", { name: "Exams", exact: true })).toBeVisible();
@@ -149,14 +158,21 @@ test("admin_creates_in_person_exam_publishes_and_edits_the_date_in_london_time",
   await form.getByLabel("Subject", { exact: true }).selectOption({ label: SUBJECT });
   await form.getByLabel("Title").fill(`${tag} In person`);
   await form.getByLabel("Paper (optional)").fill("Paper 2");
-  await form.getByLabel("Venue", { exact: true }).selectOption({ label: VENUE });
-  await form.getByLabel("Room", { exact: true }).selectOption("Hall B");
+  await expect(form.getByLabel("Where it is sat").locator("option")).toHaveText(["At the centre", "At home", "At the centre or at home"]);
+  const first = form.getByRole("group", { name: "Centre 1" });
+  await first.getByLabel("Venue", { exact: true }).selectOption({ label: VENUE });
+  await first.getByLabel("Room", { exact: true }).selectOption("Hall B");
+  await first.getByLabel("Seat limit").fill("20");
+  await form.getByRole("button", { name: "Add centre" }).click();
+  const second = form.getByRole("group", { name: "Centre 2" });
+  await second.getByLabel("Venue", { exact: true }).selectOption({ label: VENUE });
+  await second.getByLabel("Room", { exact: true }).selectOption("Hall A");
+  await second.getByLabel("Seat limit").fill("8");
   await form.getByLabel("Exam date (UK time)").fill(ymd(SUMMER));
   await form.getByLabel("Start time (UK time)").fill("10:30");
   await form.getByLabel("Duration (minutes)").fill("120");
   await form.getByLabel("Booking deadline date").fill(ymd(daysBefore(SUMMER, 3)));
   await form.getByLabel("Booking deadline time").fill("17:00");
-  await form.getByLabel("Seat limit").fill("20");
   await form.getByLabel("Price (£)").fill("12.50");
   await form.getByRole("button", { name: "Create exam" }).click();
   await expect(page.getByRole("status")).toContainText("Exam created as a draft");
@@ -165,9 +181,14 @@ test("admin_creates_in_person_exam_publishes_and_edits_the_date_in_london_time",
   await expect(r).toContainText("Draft");
   await expect(r).toContainText(label(SUMMER, "10:30"));
   await expect(r).toContainText("£12.50");
-  await expect(r).toContainText("0 / 20");
-  await expect(r).toContainText(`${VENUE} · Hall B`);
+  await expect(r.getByTestId("exam-centre")).toHaveText([`${VENUE} · Hall A0 of 8 seats`, `${VENUE} · Hall B0 of 20 seats`]);
+  await expect(r).toContainText("At the centre");
   const created = await exam("In person");
+  const { data: centreRows } = await svc().from("exam_centres").select("room, seat_limit, removed_at").eq("exam_id", created!.id).order("room");
+  expect(centreRows).toEqual([
+    { room: "Hall A", seat_limit: 8, removed_at: null },
+    { room: "Hall B", seat_limit: 20, removed_at: null },
+  ]);
   expect(created?.status).toBe("draft");
   expect(created?.price_pence).toBe(1250);
   expect(created?.price_confirmed).toBe(true);
@@ -206,12 +227,12 @@ test("admin_creates_an_online_free_exam_and_bad_money_is_refused", async ({ page
   const form = page.getByRole("form", { name: "New exam" });
   await form.getByLabel("Subject", { exact: true }).selectOption({ label: SUBJECT });
   await form.getByLabel("Title").fill(`${tag} Online`);
-  await form.getByLabel("Format").selectOption("online");
+  await form.getByLabel("Where it is sat").selectOption("online");
   await expect(form.getByLabel("Venue", { exact: true })).toHaveCount(0);
+  await expect(form.getByRole("button", { name: "Add centre" })).toHaveCount(0);
   await form.getByLabel("Exam date (UK time)").fill(ymd(WINTER));
   await form.getByLabel("Start time (UK time)").fill("09:00");
   await form.getByLabel("Booking deadline date").fill(ymd(daysBefore(WINTER, 2)));
-  await form.getByLabel("Seat limit").fill("50");
 
   for (const bad of ["-5", "1.234", "abc"]) {
     await form.getByLabel("Price (£)").fill(bad);
@@ -224,11 +245,13 @@ test("admin_creates_an_online_free_exam_and_bad_money_is_refused", async ({ page
   await form.getByRole("button", { name: "Create exam" }).click();
   await expect(page.getByRole("status")).toContainText("Exam created as a draft");
   const r = row(page, "Online");
-  await expect(r).toContainText("Online");
+  await expect(r).toContainText("At home");
   await expect(r).toContainText("Free");
   await expect(r).toContainText(label(WINTER, "09:00"));
   const created = await exam("Online");
-  expect(created).toMatchObject({ format: "online", venue_id: null, room: null, price_pence: 0, status: "draft" });
+  expect(created).toMatchObject({ format: "online", price_pence: 0, status: "draft" });
+  const { count: noCentres } = await svc().from("exam_centres").select("id", { count: "exact", head: true }).eq("exam_id", created!.id);
+  expect(noCentres).toBe(0);
   expect(created?.starts_at).toBe(`${ymd(WINTER)}T09:00:00+00:00`);
 
   await r.getByRole("button", { name: "Publish" }).click();
@@ -245,7 +268,7 @@ test("admin_cannot_lower_the_seat_limit_below_bookings_or_change_a_locked_price"
   await signInAdmin(page);
   await page.goto("/admin/exams");
   const r = row(page, "Seats");
-  await expect(r).toContainText("2 / 5");
+  await expect(r.getByTestId("exam-centre")).toContainText("2 of 5 seats");
   await expect(r).toContainText("£15.00"); // price column
   await expect(r).toContainText("£15.00"); // money taken: one paid booking
 
@@ -253,8 +276,10 @@ test("admin_cannot_lower_the_seat_limit_below_bookings_or_change_a_locked_price"
   const edit = page.getByRole("form", { name: "Edit exam" });
   await edit.getByLabel("Seat limit").fill("1");
   await edit.getByRole("button", { name: "Save exam" }).click();
-  await expect(edit.getByRole("alert")).toHaveText("The seat limit cannot be lower than the 2 seats already booked. Cancel some bookings first, or choose 2 or more.");
-  expect((await exam("Seats"))?.seat_limit).toBe(5);
+  await expect(edit.getByRole("alert")).toHaveText(
+    `The seat limit at ${VENUE} · Hall A cannot be lower than the 2 seats already booked there. Cancel some bookings first, or choose 2 or more.`,
+  );
+  expect((await centreRow(id))?.seat_limit).toBe(5);
 
   await edit.getByLabel("Seat limit").fill("5");
   await edit.getByLabel("Price (£)").fill("20");
@@ -266,8 +291,8 @@ test("admin_cannot_lower_the_seat_limit_below_bookings_or_change_a_locked_price"
   await edit.getByLabel("Seat limit").fill("2");
   await edit.getByRole("button", { name: "Save exam" }).click();
   await expect(page.getByRole("status")).toContainText("Exam saved");
-  await expect(r).toContainText("2 / 2");
-  expect((await exam("Seats"))?.seat_limit).toBe(2);
+  await expect(r.getByTestId("exam-centre")).toContainText("2 of 2 seats");
+  expect((await centreRow(id))?.seat_limit).toBe(2);
 });
 
 test("cancelling_an_exam_flags_paid_bookings_for_refund", async ({ page }) => {
@@ -281,7 +306,7 @@ test("cancelling_an_exam_flags_paid_bookings_for_refund", async ({ page }) => {
   await signInAdmin(page);
   await page.goto("/admin/exams");
   const r = row(page, "Cancel me");
-  await expect(r).toContainText("3 / 10");
+  await expect(r.getByTestId("exam-centre")).toContainText("3 of 10 seats");
 
   await r.getByRole("button", { name: "Cancel exam" }).click();
   const dialog = page.getByRole("dialog");
@@ -329,6 +354,7 @@ test("teacher_sees_only_own_subjects_and_drafts_without_price_or_publish", async
   // No money and no publish or cancel controls anywhere.
   await expect(page.locator("body")).not.toContainText(SECRET_PRICE);
   await expect(page.getByRole("button", { name: /publish|cancel exam/i })).toHaveCount(0);
+  await expect(page.getByTestId("exam-row").filter({ hasText: `${tag} Mine published` }).getByTestId("exam-centre")).toContainText("10 seats");
   await expect(page.getByRole("columnheader", { name: /price|money/i })).toHaveCount(0);
   // Published exams cannot be edited; the draft can.
   await expect(page.getByTestId("exam-row").filter({ hasText: `${tag} Mine published` }).getByRole("button")).toHaveCount(0);
@@ -340,6 +366,7 @@ test("teacher_sees_only_own_subjects_and_drafts_without_price_or_publish", async
   await form.getByLabel("Title").fill(`${tag} Teacher draft`);
   await form.getByLabel("Venue", { exact: true }).selectOption({ label: VENUE });
   await form.getByLabel("Room", { exact: true }).selectOption("Hall A");
+  await form.getByLabel("Seat limit").fill("12");
   await form.getByLabel("Exam date (UK time)").fill(ymd(SUMMER));
   await form.getByLabel("Start time (UK time)").fill("09:00");
   await form.getByLabel("Booking deadline date").fill(ymd(daysBefore(SUMMER, 5)));

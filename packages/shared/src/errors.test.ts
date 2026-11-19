@@ -26,6 +26,10 @@ describe("messageFor", () => {
 describe("bookingMessageFor", () => {
   it("maps booking codes", () => {
     expect(bookingMessageFor("fully_booked")).toBe("This exam is fully booked");
+    expect(bookingMessageFor("centre_full")).toBe("That centre is full. Choose another centre if there is one.");
+    for (const code of ["choose_sitting", "choose_centre", "sitting_not_offered"]) {
+      expect(bookingMessageFor(code)).not.toBe("Something went wrong. Please try again.");
+    }
     expect(bookingMessageFor("too_many_unpaid")).toBe("You have 3 unpaid bookings. Pay or cancel one before booking another.");
   });
   it("falls back to the generic message", () => {
@@ -44,7 +48,7 @@ describe("examMessageFor", () => {
   it("maps each code per context", () => {
     expect(examMessageFor("conflict", "save_venue")).toContain("upcoming exam still uses this venue");
     expect(examMessageFor("conflict", "set_status")).toContain("status has already changed");
-    expect(examMessageFor("invalid_input", "save_exam")).toContain("seat limit (1 to 1000)");
+    expect(examMessageFor("invalid_input", "save_exam")).toContain("1 to 1000 seats");
     expect(examMessageFor("not_found", "set_status")).toBe("This exam no longer exists. Refresh the page.");
   });
   it("falls back to the generic message", () => {

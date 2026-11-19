@@ -49,6 +49,9 @@ const SOON_AT = minutes(120);
 let started: string; // started 30 minutes ago: late
 let otherSubject: string; // subject B
 let cameraExam: string;
+let venueId: string;
+/** The centres of each seeded exam, in the order they were given. */
+const centresOf = new Map<string, string[]>();
 const students: Student[] = [];
 
 async function makeStudent(first: string, photo = false): Promise<Student> {
@@ -65,17 +68,16 @@ async function makeStudent(first: string, photo = false): Promise<Student> {
   return s;
 }
 
-async function makeExam(title: string, starts: string, subject: number): Promise<string> {
+async function makeExam(title: string, starts: string, subject: number, rooms: string[] = ["Hall 1"]): Promise<string> {
   const { data, error } = await svc()
     .from("exams")
     .insert({
       subject_id: subject,
       title: `${tag} ${title}`,
       paper: "Paper 1",
-      format: "online",
+      format: "in_person",
       starts_at: starts,
       duration_minutes: 90,
-      seat_limit: 20,
       price_pence: 1500,
       price_confirmed: true,
       booking_deadline: new Date(Date.parse(starts) - 3 * 86400_000).toISOString(),
@@ -85,11 +87,20 @@ async function makeExam(title: string, starts: string, subject: number): Promise
     .select("id")
     .single();
   if (error || !data) throw new Error(`exam insert failed: ${error?.message}`);
+  const { data: cs, error: ce } = await svc()
+    .from("exam_centres")
+    .insert(rooms.map((room) => ({ exam_id: data.id, venue_id: venueId, room, seat_limit: 20 })))
+    .select("id, room")
+    .order("room");
+  if (ce || !cs) throw new Error(`centre insert failed: ${ce?.message}`);
+  centresOf.set(data.id, cs.map((c) => c.id));
   return data.id;
 }
 
-async function book(examId: string, studentId: string, status: "paid" | "awaiting_payment" = "paid") {
-  const { error } = await svc().from("bookings").insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: 1500 });
+/** A booking at the exam's n-th centre, or at home when `centre` is "home". */
+async function book(examId: string, studentId: string, status: "paid" | "awaiting_payment" = "paid", centre: number | "home" = 0) {
+  const at = centre === "home" ? { sitting: "home" as const, centre_id: null } : { sitting: "centre" as const, centre_id: centresOf.get(examId)![centre] };
+  const { error } = await svc().from("bookings").insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: 1500, ...at });
   if (error) throw new Error(`booking insert failed: ${error.message}`);
 }
 
@@ -151,6 +162,9 @@ test.beforeAll(async () => {
     if (error) throw new Error(`teacher link failed: ${error.message}`);
   }
 
+  const v = await svc().from("venues").insert({ name: `E2E Venue ${tag}`, rooms: ["Hall 1", "Hall 2"] }).select("id").single();
+  if (v.error || !v.data) throw new Error(`venue insert failed: ${v.error?.message}`);
+  venueId = v.data.id;
   s1 = await makeStudent("Ada", true);
   s2 = await makeStudent("Ben");
   s3 = await makeStudent("Cleo", true);
@@ -174,6 +188,7 @@ test.beforeEach(async () => {
 });
 test.afterAll(async () => {
   await removeData();
+  await svc().from("venues").delete().like("name", `E2E Venue ${tag}%`);
   await svc().from("subjects").delete().like("name", `E2E Subject ${tag}%`);
   await cleanup();
   expect(await countTestUsers()).toBe(0);
@@ -199,6 +214,8 @@ test("admin_picks_an_exam_and_marks_a_typed_index_present_with_photo_and_name", 
   await expect(page.getByTestId("count-unmarked")).toHaveText("2");
   await expect(page.getByTestId("unmarked-list")).toContainText(s1.name);
   await expect(page.getByTestId("unmarked-list")).toContainText(s3.name);
+  // One centre: its register opens straight away.
+  await expect(page.getByTestId("register-centre")).toHaveText(`E2E Venue ${tag}, Hall 1`);
   // The exam has not started: no close control.
   await expect(page.getByRole("button", { name: "Close register" })).toHaveCount(0);
 
@@ -269,17 +286,68 @@ test("late_mark_then_close_register_shows_the_absent_list", async ({ page }) => 
   await dialog.getByRole("button", { name: "Confirm close register" }).click();
   await expect(page.getByText("Register closed. 1 marked absent.")).toBeVisible();
   expect(await attendanceOf(started, s4.id)).toBe("absent");
+  // Closing a register closes that centre only: the exam completes by itself later.
   const { data } = await svc().from("exams").select("status").eq("id", started).single();
-  expect(data?.status).toBe("completed");
+  expect(data?.status).toBe("published");
+  const { data: closed } = await svc().from("exam_centres").select("register_closed_at").eq("id", centresOf.get(started)![0]).single();
+  expect(closed?.register_closed_at).not.toBeNull();
 
   await page.reload();
   await expect(page.getByTestId("absent-list")).toContainText(s4.name);
   await expect(page.getByTestId("absent-list")).not.toContainText(s3.name);
   await expect(page.getByRole("button", { name: "Close register" })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Index number" })).toHaveCount(0);
-  // A completed exam stays on the picker for a while.
+  await expect(page.getByTestId("register-centre")).toHaveText(`E2E Venue ${tag}, Hall 1`);
   await page.goto("/admin/attendance");
-  await expect(page.getByTestId("attendance-exam").filter({ hasText: `${tag} Started` })).toContainText("Completed");
+  await expect(page.getByTestId("attendance-exam").filter({ hasText: `${tag} Started` })).toContainText("Published");
+});
+
+test("several_centres_ask_which_register_and_each_closes_on_its_own", async ({ page }) => {
+  const pair = await makeExam("Pair", minutes(-30), subjectA, ["Hall 1", "Hall 2"]);
+  await book(pair, s1.id, "paid", 0);
+  await book(pair, s3.id, "paid", 1);
+  await book(pair, s5.id, "paid", "home");
+  await signInAdmin(page);
+  await page.goto(`/admin/attendance/${pair}`);
+
+  // The page asks for the centre first, with each register's state.
+  const choices = page.getByTestId("centre-choice");
+  await expect(choices).toHaveCount(2);
+  await expect(choices.nth(0)).toContainText(`E2E Venue ${tag} · Hall 1`);
+  await expect(choices.nth(0)).toContainText("Register open");
+  await expect(page.getByRole("textbox", { name: "Index number" })).toHaveCount(0);
+
+  await choices.nth(0).getByRole("link").click();
+  await expect(page).toHaveURL(new RegExp(`/admin/attendance/${pair}\\?centre=${centresOf.get(pair)![0]}$`));
+  await expect(page.getByTestId("register-centre")).toHaveText(`E2E Venue ${tag}, Hall 1`);
+  await expect(page.getByTestId("count-booked")).toHaveText("1");
+
+  // A candidate booked at the other centre, and one sitting at home, are not on this register.
+  await lookup(page, s3.indexNumber!);
+  await expect(result(page)).toHaveText("No paid booking");
+  await lookup(page, s5.indexNumber!);
+  await expect(result(page)).toHaveText("No paid booking");
+  expect(await attendanceOf(pair, s3.id)).toBeNull();
+  expect(await attendanceOf(pair, s5.id)).toBeNull();
+
+  await lookup(page, s1.indexNumber!);
+  await result(page).getByRole("button", { name: "Mark present" }).click();
+  await expect(result(page)).toContainText("Marked");
+
+  // Closing this register leaves the other open and the exam published.
+  await page.getByRole("button", { name: "Close register" }).click();
+  await expect(page.getByText("The exam completes by itself two hours after it is scheduled to end")).toBeVisible();
+  await page.getByRole("alertdialog", { name: "Confirm close register" }).getByRole("button", { name: "Confirm close register" }).click();
+  await expect(page.getByText("Register closed. 0 marked absent.")).toBeVisible();
+  expect((await svc().from("exams").select("status").eq("id", pair).single()).data?.status).toBe("published");
+  expect(await attendanceOf(pair, s3.id)).toBeNull();
+
+  await page.goto(`/admin/attendance/${pair}`);
+  await expect(choices.nth(0)).toContainText("Register closed");
+  await expect(choices.nth(1)).toContainText("Register open");
+  await choices.nth(1).getByRole("link").click();
+  await expect(page.getByTestId("count-booked")).toHaveText("1");
+  await expect(page.getByRole("textbox", { name: "Index number" })).toBeVisible();
 });
 
 test("teacher_marks_in_own_subject_sees_no_names_and_photo_unavailable", async ({ page }) => {
@@ -323,11 +391,12 @@ test("teacher_of_another_subject_cannot_open_the_register_or_use_it", async ({ p
   const c = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
   const { error: se } = await c.auth.signInWithPassword({ email: teacherB.email, password: teacherB.password });
   expect(se).toBeNull();
-  const look = await c.rpc("attendance_lookup", { p_exam: soon, p_index: s1.indexNumber! });
+  const soonCentre = centresOf.get(soon)![0];
+  const look = await c.rpc("attendance_lookup", { p_centre: soonCentre, p_index: s1.indexNumber! });
   expect(look.data).toMatchObject({ ok: false, code: "forbidden" });
-  const mark = await c.rpc("mark_attendance", { p_exam: soon, p_student: s1.id });
+  const mark = await c.rpc("mark_attendance", { p_centre: soonCentre, p_student: s1.id });
   expect(mark.data).toMatchObject({ ok: false, code: "forbidden" });
-  const close = await c.rpc("close_register", { p_exam: soon });
+  const close = await c.rpc("close_register", { p_centre: soonCentre });
   expect(close.data).toMatchObject({ ok: false, code: "forbidden" });
   await c.auth.signOut();
   expect(await attendanceOf(soon, s1.id)).toBe("present");

@@ -5,6 +5,7 @@ import { Badge, Card } from "@/components/AppShell";
 import { ExamForm } from "@/components/exams/ExamForm";
 import { saveTeacherExamAction, type TeacherExamResult } from "@/app/teacher/exams/actions";
 import type { ExamRow, SubjectOption, VenueOption } from "@/lib/exams-staff";
+import { SITTING_LABEL } from "@/lib/exam-form";
 import { formatLondon } from "@/lib/money";
 
 const STATUS_TONE = { draft: "slate", published: "green", cancelled: "red", completed: "blue" } as const;
@@ -91,7 +92,7 @@ export function TeacherExams({ exams, subjects, venues }: { exams: ExamRow[]; su
             <table className="w-full text-left text-sm">
               <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  {["When (UK time)", "Exam", "Where", "Status", "Seat limit", "Actions"].map((h) => (
+                  {["When (UK time)", "Exam", "Where", "Status", "Actions"].map((h) => (
                     <th key={h} className="py-2 pr-4 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -107,9 +108,16 @@ export function TeacherExams({ exams, subjects, venues }: { exams: ExamRow[]; su
                         {e.paper ? ` · ${e.paper}` : ""} · {e.durationMinutes} min
                       </div>
                     </td>
-                    <td className="py-2.5 pr-4">{e.format === "online" ? "Online" : [e.venue, e.room].filter(Boolean).join(" · ")}</td>
+                    <td className="py-2.5 pr-4">
+                      <div className="text-xs font-medium text-slate-500">{SITTING_LABEL[e.format]}</div>
+                      {e.centres.map((c) => (
+                        <div key={c.id} data-testid="exam-centre">
+                          {c.venue} · {c.room}
+                          <span className="ml-2 text-xs text-slate-500">{c.seatLimit} seats</span>
+                        </div>
+                      ))}
+                    </td>
                     <td className="py-2.5 pr-4"><Badge tone={STATUS_TONE[e.status]}>{STATUS_LABEL[e.status]}</Badge></td>
-                    <td className="py-2.5 pr-4">{e.seatLimit}</td>
                     <td className="py-2.5">
                       {e.status === "draft" ? (
                         <button

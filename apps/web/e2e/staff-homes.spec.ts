@@ -26,6 +26,9 @@ let tutor: TestAccount;
 let corrector: TestAccount;
 let subjectA: number;
 let subjectB: number;
+let venueId: string;
+/** The centres of each seeded exam, in the order they were given. */
+const centresOf = new Map<string, string[]>();
 const studentNames: Record<string, string> = {};
 const students: Record<string, TestAccount> = {};
 const SOON = day(3);
@@ -39,17 +42,23 @@ async function makeStudent(key: string): Promise<TestAccount> {
   return a;
 }
 
-async function makeExam(title: string, starts: string, subject: number, status: "draft" | "published" | "completed", seatLimit = 20): Promise<string> {
+async function makeExam(
+  title: string,
+  starts: string,
+  subject: number,
+  status: "draft" | "published" | "completed",
+  seatLimits: number[] = [20],
+  format: "in_person" | "both" = "in_person",
+): Promise<string> {
   const { data, error } = await svc()
     .from("exams")
     .insert({
       subject_id: subject,
       title: `${tag} ${title}`,
       paper: "Paper 1",
-      format: "online",
+      format,
       starts_at: starts,
       duration_minutes: 90,
-      seat_limit: seatLimit,
       price_pence: 1500,
       price_confirmed: true,
       booking_deadline: new Date(Date.parse(starts) - 86400_000).toISOString(),
@@ -59,11 +68,25 @@ async function makeExam(title: string, starts: string, subject: number, status: 
     .select("id")
     .single();
   if (error || !data) throw new Error(`exam insert failed: ${error?.message}`);
+  const { data: cs, error: ce } = await svc()
+    .from("exam_centres")
+    .insert(seatLimits.map((n, i) => ({ exam_id: data.id, venue_id: venueId, room: `Hall ${i + 1}`, seat_limit: n })))
+    .select("id, room")
+    .order("room");
+  if (ce || !cs) throw new Error(`centre insert failed: ${ce?.message}`);
+  centresOf.set(data.id, cs.map((c) => c.id));
   return data.id;
 }
 
-async function book(examId: string, studentId: string, status: "paid" | "awaiting_payment" | "cancel_requested" | "cancelled") {
-  const { error } = await svc().from("bookings").insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: 1500 });
+/** A booking at the exam's n-th centre, or at home when `centre` is "home". */
+async function book(
+  examId: string,
+  studentId: string,
+  status: "paid" | "awaiting_payment" | "cancel_requested" | "cancelled",
+  centre: number | "home" = 0,
+) {
+  const at = centre === "home" ? { sitting: "home" as const, centre_id: null } : { sitting: "centre" as const, centre_id: centresOf.get(examId)![centre] };
+  const { error } = await svc().from("bookings").insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: 1500, ...at });
   if (error) throw new Error(`booking insert failed: ${error.message}`);
 }
 
@@ -94,6 +117,9 @@ test.beforeAll(async () => {
   if (a.error || !a.data || b.error || !b.data) throw new Error(`subject insert failed: ${a.error?.message ?? b.error?.message}`);
   subjectA = a.data.id;
   subjectB = b.data.id;
+  const v = await svc().from("venues").insert({ name: `E2E Venue ${tag}`, rooms: ["Hall 1", "Hall 2"] }).select("id").single();
+  if (v.error || !v.data) throw new Error(`venue insert failed: ${v.error?.message}`);
+  venueId = v.data.id;
   const link = await svc().from("teacher_subjects").insert({ teacher_id: teacher.id, subject_id: subjectA });
   if (link.error) throw new Error(`teacher link failed: ${link.error.message}`);
 
@@ -101,25 +127,27 @@ test.beforeAll(async () => {
   const s2 = await makeStudent("Ben");
   const s3 = await makeStudent("Cleo");
   const s4 = await makeStudent("Dev"); // not assigned to the tutor
+  const s5 = await makeStudent("Eli"); // not assigned to the tutor; sits at home
   const ts = await svc()
     .from("tutor_students")
     .insert([s1, s2, s3].map((s) => ({ tutor_id: tutor.id, student_id: s.id })));
   if (ts.error) throw new Error(`tutor link failed: ${ts.error.message}`);
 
-  const soon = await makeExam("Soon", SOON, subjectA, "published", 10);
-  const later = await makeExam("Later", LATER, subjectA, "published", 5);
+  const soon = await makeExam("Soon", SOON, subjectA, "published", [10, 4]);
+  const later = await makeExam("Later", LATER, subjectA, "published", [5], "both");
   await makeExam("Draft one", day(10), subjectA, "draft");
   await makeExam("Draft two", day(11), subjectA, "draft");
   const past = await makeExam("Past", day(-3), subjectA, "completed");
   const other = await makeExam("Other subject", SOON, subjectB, "published");
 
-  // soon: 3 seats (paid, awaiting, cancel_requested); a cancelled booking takes none.
+  // soon, centre 1: 2 seats (paid, awaiting); centre 2: 1 seat (cancel_requested). A cancelled booking takes none.
   await book(soon, s1.id, "paid");
   await book(soon, s2.id, "awaiting_payment");
-  await book(soon, s3.id, "cancel_requested");
+  await book(soon, s3.id, "cancel_requested", 1);
   await book(soon, s4.id, "cancelled");
-  // later: 1 seat.
+  // later: 1 seat at the centre and 1 candidate at home (no seat limit).
   await book(later, s4.id, "paid");
+  await book(later, s5.id, "paid", "home");
   const started = await makeExam("Started", day(-2), subjectA, "published"); // readable by RLS, so only the start-time filter hides it
   await book(started, s1.id, "paid");
   await book(past, s1.id, "paid"); // a past exam: not shown to the tutor
@@ -132,6 +160,7 @@ test.beforeEach(async () => {
 });
 test.afterAll(async () => {
   await removeData();
+  await svc().from("venues").delete().like("name", `E2E Venue ${tag}%`);
   await svc().from("subjects").delete().like("name", `E2E Subject ${tag}%`);
   await cleanup();
   expect(await countTestUsers()).toBe(0);
@@ -143,9 +172,11 @@ test("teacher_sees_own_upcoming_exams_with_exact_seats_and_draft_count", async (
   const exams = page.getByTestId("home-exam");
   await expect(exams).toHaveCount(2);
   const soon = exams.filter({ hasText: `${tag} Soon` });
-  await expect(soon.getByTestId("home-seats")).toHaveText("3 of 10 seats booked");
+  await expect(soon.getByTestId("home-centre")).toHaveText([`E2E Venue ${tag} · Hall 1: 2 of 10 seats booked`, `E2E Venue ${tag} · Hall 2: 1 of 4 seats booked`]);
   await expect(soon).toContainText(formatLondon(SOON));
-  await expect(exams.filter({ hasText: `${tag} Later` }).getByTestId("home-seats")).toHaveText("1 of 5 seats booked");
+  const later = exams.filter({ hasText: `${tag} Later` });
+  await expect(later.getByTestId("home-centre")).toHaveText([`E2E Venue ${tag} · Hall 1: 1 of 5 seats booked`]);
+  await expect(later.getByTestId("home-seats")).toContainText("1 at home");
   await expect(page.getByText(`${tag} Other subject`)).toHaveCount(0);
   await expect(page.getByText(`${tag} Past`)).toHaveCount(0);
   await expect(page.getByText(`${tag} Draft`)).toHaveCount(0);

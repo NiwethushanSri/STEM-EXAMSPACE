@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseExamForm, parseRooms } from "./exam-form";
+import { parseExamForm, parseRooms, SITTING_LABEL, SITTING_MODE_LABEL } from "./exam-form";
 
 const VENUE = "11111111-2222-3333-4444-555555555555";
 const base = {
@@ -7,12 +7,12 @@ const base = {
   title: "Maths mock",
   paper: "Paper 1",
   format: "in_person",
-  venue: VENUE,
-  room: "Hall A",
+  "centre.0.venue": VENUE,
+  "centre.0.room": "Hall A",
+  "centre.0.seats": "30",
   startDate: "2027-06-12",
   startTime: "09:00",
   duration: "90",
-  seats: "30",
   price: "15.50",
   deadlineDate: "2027-06-09",
   deadlineTime: "17:00",
@@ -26,19 +26,54 @@ describe("parseExamForm", () => {
       value: {
         id: null,
         subjectId: 3,
-        venueId: VENUE,
-        room: "Hall A",
+        centres: [{ venueId: VENUE, room: "Hall A", seatLimit: 30 }],
         startsAt: "2027-06-12T08:00:00.000Z",
         bookingDeadline: "2027-06-09T16:00:00.000Z",
         durationMinutes: 90,
-        seatLimit: 30,
         pricePence: 1550,
       },
     });
   });
-  it("online exams drop venue and room; teachers send no price", () => {
+  it("online_exam_drops_centres", () => {
     const r = parseExamForm({ ...base, format: "online", price: "" }, { withPrice: false });
-    expect(r).toMatchObject({ ok: true, value: { venueId: null, room: null, pricePence: null } });
+    expect(r).toMatchObject({ ok: true, value: { centres: [], pricePence: null } });
+  });
+  it("in_person_needs_at_least_one_centre", () => {
+    const none = Object.fromEntries(Object.entries(base).filter(([k]) => !k.startsWith("centre.")));
+    expect(parseExamForm(none, { withPrice: true }).ok).toBe(false);
+    expect(parseExamForm({ ...none, format: "both" }, { withPrice: true }).ok).toBe(false);
+    expect(parseExamForm({ ...base, "centre.0.venue": "" }, { withPrice: true }).ok).toBe(false);
+    expect(parseExamForm({ ...base, "centre.0.room": "" }, { withPrice: true }).ok).toBe(false);
+  });
+  it("both_keeps_two_centres", () => {
+    const id = "99999999-2222-3333-4444-555555555555";
+    const r = parseExamForm(
+      { ...base, format: "both", "centre.1.venue": VENUE, "centre.1.room": "Hall B", "centre.1.seats": "12", "centre.1.id": id },
+      { withPrice: true },
+    );
+    expect(r).toMatchObject({
+      ok: true,
+      value: {
+        format: "both",
+        centres: [
+          { venueId: VENUE, room: "Hall A", seatLimit: 30 },
+          { id, venueId: VENUE, room: "Hall B", seatLimit: 12 },
+        ],
+      },
+    });
+  });
+  it("rejects_duplicate_centre", () => {
+    const r = parseExamForm({ ...base, "centre.1.venue": VENUE, "centre.1.room": "Hall A", "centre.1.seats": "5" }, { withPrice: true });
+    expect(r.ok).toBe(false);
+  });
+  it("rejects_centre_seats_out_of_range", () => {
+    for (const seats of ["0", "1001", "", "x"]) {
+      expect(parseExamForm({ ...base, "centre.0.seats": seats }, { withPrice: true }).ok, seats).toBe(false);
+    }
+  });
+  it("uses_the_agreed_sitting_words", () => {
+    expect(SITTING_LABEL).toEqual({ in_person: "At the centre", online: "At home", both: "At the centre or at home" });
+    expect(SITTING_MODE_LABEL).toEqual({ centre: "At the centre", home: "At home" });
   });
   it("rejects bad money", () => {
     for (const price of ["-1", "1.234", "", "abc", "1001"]) {
@@ -46,9 +81,7 @@ describe("parseExamForm", () => {
       expect(r.ok, price).toBe(false);
     }
   });
-  it("rejects in-person without venue or room, and a deadline after the start", () => {
-    expect(parseExamForm({ ...base, venue: "" }, { withPrice: true }).ok).toBe(false);
-    expect(parseExamForm({ ...base, room: "" }, { withPrice: true }).ok).toBe(false);
+  it("rejects a deadline after the start", () => {
     expect(parseExamForm({ ...base, deadlineDate: "2027-06-13" }, { withPrice: true }).ok).toBe(false);
   });
   it("rejects a start time that does not exist on the clock change", () => {
@@ -57,8 +90,6 @@ describe("parseExamForm", () => {
   });
   it("rejects out of range numbers", () => {
     expect(parseExamForm({ ...base, duration: "5" }, { withPrice: true }).ok).toBe(false);
-    expect(parseExamForm({ ...base, seats: "0" }, { withPrice: true }).ok).toBe(false);
-    expect(parseExamForm({ ...base, seats: "1001" }, { withPrice: true }).ok).toBe(false);
   });
 });
 
