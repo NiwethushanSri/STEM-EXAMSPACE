@@ -25,12 +25,15 @@ describe("messageFor", () => {
 
 describe("bookingMessageFor", () => {
   it("maps booking codes", () => {
-    expect(bookingMessageFor("fully_booked")).toBe("This exam is fully booked");
     expect(bookingMessageFor("centre_full")).toBe("That centre is full. Choose another centre if there is one.");
     for (const code of ["choose_sitting", "choose_centre", "sitting_not_offered"]) {
       expect(bookingMessageFor(code)).not.toBe("Something went wrong. Please try again.");
     }
     expect(bookingMessageFor("too_many_unpaid")).toBe("You have 3 unpaid bookings. Pay or cancel one before booking another.");
+  });
+  it("maps change_sitting codes", () => {
+    expect(adminBookingMessageFor("centre_full", "change_sitting")).toBe("That centre is full. Choose another centre if there is one.");
+    expect(adminBookingMessageFor("choose_centre", "change_sitting")).toContain("centre");
   });
   it("falls back to the generic message", () => {
     expect(bookingMessageFor("nope")).toBe("Something went wrong. Please try again.");
@@ -72,7 +75,7 @@ describe("adminBookingMessageFor", () => {
   it("falls back to the generic message", () => {
     expect(adminBookingMessageFor("nope", "add")).toBe("Something went wrong. Please try again.");
     expect(adminBookingMessageFor(undefined, "finance")).toBe("Something went wrong. Please try again.");
-    expect(adminBookingMessageFor("fully_booked", "finance")).toBe("Something went wrong. Please try again.");
+    expect(adminBookingMessageFor("centre_full", "finance")).toBe("Something went wrong. Please try again.");
   });
   it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
     expect(adminBookingMessageFor(code, "add")).toBe("Something went wrong. Please try again.");

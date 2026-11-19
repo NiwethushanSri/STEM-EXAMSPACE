@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { bookingMessageFor, messageFor } from "@stem/shared";
+import { parseBookingChoice } from "@/lib/booking-choice";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
 
@@ -20,8 +21,17 @@ export async function bookExam(_prev: BookState, form: FormData): Promise<BookSt
   const studentId = me.role === "student" ? me.id : String(form.get("student") ?? "");
   if (!isUuid(examId) || !isUuid(studentId)) return { error: messageFor("invalid_input") };
 
+  // The sitting and centre are sent only when the screen asked for them; create_booking re-checks both.
+  const choice = parseBookingChoice(form);
+  if (!choice.ok) return { error: messageFor("invalid_input") };
+
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("create_booking", { p_exam: examId, p_student: studentId });
+  const { data, error } = await supabase.rpc("create_booking", {
+    p_exam: examId,
+    p_student: studentId,
+    ...(choice.sitting ? { p_sitting: choice.sitting } : {}),
+    ...(choice.centre ? { p_centre: choice.centre } : {}),
+  });
   if (error || !data || typeof data !== "object" || Array.isArray(data)) return { error: messageFor("internal") };
   const res = data as { ok?: boolean; code?: string };
   if (!res.ok) return { error: bookingMessageFor(res.code) };

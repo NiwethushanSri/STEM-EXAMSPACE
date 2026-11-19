@@ -16,6 +16,7 @@ import {
 const tag = crypto.randomUUID().slice(0, 8);
 const SUBJECT = `E2E Subject ${tag}`;
 const VENUE = `E2E Venue ${tag}`;
+const VENUE_B = `E2E Venue B ${tag}`;
 const SECRET = `SECRET-${tag}`;
 
 // Dates come from the clock: next year's first Saturday of June (BST, 08:00Z = 09:00 London) and of December (GMT, 09:00Z = 09:00).
@@ -38,31 +39,39 @@ const SUMMER_DEADLINE = new Date(SUMMER.getTime() - 3 * 86400_000);
 
 let subjectId: number;
 let venueId: string;
+let venueBId: string;
 let adminId: string;
 const examIds: string[] = [];
 
 type ExamOpts = {
   starts: string;
   deadline?: string;
+  /** Seats of the single centre when `centres` is not given. */
   seats?: number;
   price?: number;
   status?: "draft" | "published";
   online?: boolean;
+  /** "both" offers the centre and home; the default follows `online`. */
+  format?: "in_person" | "online" | "both";
+  /** One entry per centre (venue A or B, and its seat limit). Not used for a home-only exam. */
+  centres?: { venue: "a" | "b"; seats: number }[];
 };
 
+/** The centres of each exam made here, in the order given, and its format, so a booking can be placed. */
+const centresOf = new Map<string, string[]>();
+const formatOf = new Map<string, string>();
+
 async function makeExam(o: ExamOpts): Promise<string> {
+  const format = o.format ?? (o.online ? "online" : "in_person");
   const { data, error } = await svc()
     .from("exams")
     .insert({
       subject_id: subjectId,
       title: `${SECRET} title`,
       paper: `${SECRET} paper`,
-      format: o.online ? "online" : "in_person",
-      venue_id: o.online ? null : venueId,
-      room: o.online ? null : `${SECRET} room`,
+      format,
       starts_at: o.starts,
       duration_minutes: 90,
-      seat_limit: o.seats ?? 10,
       price_pence: o.price ?? 1500,
       price_confirmed: true,
       booking_deadline: o.deadline ?? new Date(Date.parse(o.starts) - 3 * 86400_000).toISOString(),
@@ -73,12 +82,43 @@ async function makeExam(o: ExamOpts): Promise<string> {
     .single();
   if (error || !data) throw new Error(`exam insert failed: ${error?.message}`);
   examIds.push(data.id);
+  formatOf.set(data.id, format);
+  const ids: string[] = [];
+  if (format !== "online") {
+    const specs = o.centres ?? [{ venue: "a" as const, seats: o.seats ?? 10 }];
+    for (const [i, c] of specs.entries()) {
+      const r = await svc()
+        .from("exam_centres")
+        .insert({ exam_id: data.id, venue_id: c.venue === "a" ? venueId : venueBId, room: `${SECRET} room ${i}`, seat_limit: c.seats })
+        .select("id")
+        .single();
+      if (r.error || !r.data) throw new Error(`centre insert failed: ${r.error?.message}`);
+      ids.push(r.data.id);
+    }
+  }
+  centresOf.set(data.id, ids);
   return data.id;
 }
 
-async function insertBooking(examId: string, studentId: string, status: "awaiting_payment" | "paid", amount = 1500) {
-  const { error } = await svc().from("bookings").insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: amount });
+/** A booking at the exam's first centre, or at home for a home-only exam (or when `home` is set on one that offers both). */
+async function insertBooking(
+  examId: string,
+  studentId: string,
+  status: "awaiting_payment" | "paid",
+  amount = 1500,
+  at: { home?: boolean; centre?: number } = {},
+) {
+  const home = formatOf.get(examId) === "online" || at.home;
+  const row = home
+    ? { sitting: "home" as const, centre_id: null }
+    : { sitting: "centre" as const, centre_id: centresOf.get(examId)![at.centre ?? 0] };
+  const { error } = await svc().from("bookings").insert({ exam_id: examId, student_id: studentId, booked_by: studentId, status, amount_pence: amount, ...row });
   if (error) throw new Error(`booking insert failed: ${error.message}`);
+}
+
+async function bookingRow(examId: string, studentId: string) {
+  const { data } = await svc().from("bookings").select("status, sitting, centre_id").eq("exam_id", examId).eq("student_id", studentId).maybeSingle();
+  return data;
 }
 
 async function bookingStatus(examId: string, studentId: string): Promise<string | undefined> {
@@ -113,6 +153,9 @@ test.beforeAll(async () => {
   const v = await svc().from("venues").insert({ name: VENUE }).select("id").single();
   if (v.error || !v.data) throw new Error(`venue insert failed: ${v.error?.message}`);
   venueId = v.data.id;
+  const vb = await svc().from("venues").insert({ name: VENUE_B }).select("id").single();
+  if (vb.error || !vb.data) throw new Error(`venue insert failed: ${vb.error?.message}`);
+  venueBId = vb.data.id;
   for (const path of ["/exams", "/login", "/account/bookings"]) await fetch(`${BASE}${path}`, { redirect: "manual" }).catch(() => undefined);
 });
 test.beforeEach(async () => {
@@ -123,7 +166,7 @@ test.afterEach(async () => {
 });
 test.afterAll(async () => {
   await removeData();
-  await svc().from("venues").delete().eq("id", venueId);
+  await svc().from("venues").delete().in("id", [venueId, venueBId]);
   await svc().from("subjects").delete().eq("id", subjectId);
   await cleanup();
   expect(await countTestUsers()).toBe(0);
@@ -140,12 +183,14 @@ test("public_timetable_shows_published_exams_in_london_time_and_hides_drafts", a
   await expect(rows).toHaveCount(2);
   await expect(rows.nth(0)).toContainText(label(SUMMER));
   await expect(rows.nth(0)).toContainText("90 min");
+  await expect(rows.nth(0)).toContainText("At the centre");
   await expect(rows.nth(0)).toContainText(VENUE);
   await expect(rows.nth(0)).toContainText("£15.00");
   await expect(rows.nth(0)).toContainText("10 seats left");
   await expect(rows.nth(0)).toContainText(`Book by ${label(SUMMER_DEADLINE)}`);
   await expect(rows.nth(1)).toContainText(label(WINTER));
-  await expect(rows.nth(1)).toContainText("Online");
+  await expect(rows.nth(1)).toContainText("At home");
+  await expect(rows.nth(1)).not.toContainText("seat");
   await expect(rows.nth(1)).toContainText("Free");
   // Nothing beyond the public fields is rendered.
   await expect(page.locator("body")).not.toContainText(SECRET);
@@ -250,17 +295,98 @@ test("fully_booked_exam_shows_message", async ({ page }) => {
   const other = await student("Early");
   await signInUI(page, me.email, me.password);
   await expect(page).toHaveURL(/\/account\/home$/);
-  // The last seat goes while the page is open: the action reports it.
+  // The last seat goes while the page is open: the action says the centre is full.
   await page.goto(`/exams/${exam}/book`);
   await expect(page.getByRole("button", { name: "Confirm booking" })).toBeVisible();
   await insertBooking(exam, other.id, "paid");
   await page.getByRole("button", { name: "Confirm booking" }).click();
-  await expect(page.locator("main [role=alert]")).toHaveText("This exam is fully booked");
-  // A fresh visit shows the same message instead of the form.
+  await expect(page.locator("main [role=alert]")).toHaveText("That centre is full. Choose another centre if there is one.");
+  // A fresh visit shows that the exam is fully booked instead of the form.
   await page.goto(`/exams/${exam}/book`);
   await expect(page.locator("main [role=alert]")).toHaveText("This exam is fully booked");
   await expect(page.getByRole("button", { name: "Confirm booking" })).toHaveCount(0);
   expect(await bookingStatus(exam, me.id)).toBeUndefined();
+});
+
+test("family_books_home_sitting", async ({ page }) => {
+  // A full centre does not close an exam that can also be sat at home.
+  const exam = await makeExam({ starts: SUMMER_ISO, format: "both", centres: [{ venue: "a", seats: 1 }] });
+  const other = await student("Seated");
+  await insertBooking(exam, other.id, "paid");
+  const me = await student("Homer");
+  await signInUI(page, me.email, me.password);
+  await expect(page).toHaveURL(/\/account\/home$/);
+  await filtered(page);
+  const row = page.getByTestId("exam-row");
+  await expect(row).toContainText("At the centre or at home");
+  await expect(row).toContainText("Centre full");
+  await expect(row.getByRole("link", { name: "Book" })).toBeVisible();
+  await row.getByRole("link", { name: "Book" }).click();
+  await expect(page.getByText("Where will they sit it?")).toBeVisible();
+  // The sitting must be chosen, and the only centre is not asked about.
+  await expect(page.getByLabel("At the centre")).not.toBeChecked();
+  await expect(page.getByText("Which centre?")).toHaveCount(0);
+  await page.getByLabel("At home").check();
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await expect(page).toHaveURL(/\/account\/bookings\?booked=1$/);
+  const mine = page.getByTestId("booking-row");
+  await expect(mine).toContainText("At home");
+  await expect(mine).not.toContainText(SECRET);
+  expect(await bookingRow(exam, me.id)).toMatchObject({ status: "awaiting_payment", sitting: "home", centre_id: null });
+
+  // The centre is full, so a second family cannot take it; a student who skips the question is told to choose.
+  const late = await student("Latecomer");
+  await page.context().clearCookies();
+  await signInUI(page, late.email, late.password);
+  await expect(page).toHaveURL(/\/account\/home$/);
+  await page.goto(`/exams/${exam}/book`);
+  await page.getByLabel("At the centre").check();
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await expect(page.locator("main [role=alert]")).toHaveText("That centre is full. Choose another centre if there is one.");
+  expect(await bookingStatus(exam, late.id)).toBeUndefined();
+});
+
+test("family_picks_a_centre", async ({ page }) => {
+  const exam = await makeExam({
+    starts: SUMMER_ISO,
+    centres: [
+      { venue: "a", seats: 1 },
+      { venue: "b", seats: 5 },
+    ],
+  });
+  const other = await student("Taken");
+  await insertBooking(exam, other.id, "paid", 1500, { centre: 0 });
+  const parent = await createAccount({ role: "parent", firstName: "Pia" });
+  const kid = await student("Chooser");
+  await link(parent.id, kid.id);
+  await signInUI(page, parent.email, parent.password);
+  await expect(page).toHaveURL(/\/account\/home$/);
+
+  // The timetable lists each centre with its seats.
+  await filtered(page);
+  const row = page.getByTestId("exam-row");
+  await expect(row).toContainText(VENUE);
+  await expect(row).toContainText(VENUE_B);
+  await expect(row).toContainText("5 seats left");
+
+  await page.goto(`/exams/${exam}/book`);
+  await expect(page.getByText("Where will they sit it?")).toHaveCount(0);
+  await expect(page.getByText("Which centre?")).toBeVisible();
+  const full = page.getByRole("radio", { name: new RegExp(VENUE + "(?! B)") });
+  await expect(full).toBeDisabled();
+  await expect(page.getByText("full", { exact: true })).toBeVisible();
+  // A centre must be chosen.
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await expect(page.getByTestId("booking-row")).toHaveCount(0);
+  await page.getByRole("radio", { name: new RegExp(VENUE_B) }).check();
+  await page.getByRole("button", { name: "Confirm booking" }).click();
+  await expect(page).toHaveURL(/\/account\/bookings\?booked=1$/);
+  const mine = page.getByTestId("booking-row");
+  await expect(mine).toContainText("At the centre");
+  await expect(mine).toContainText(VENUE_B);
+  await expect(mine).not.toContainText(SECRET);
+  const saved = await bookingRow(exam, kid.id);
+  expect(saved).toMatchObject({ sitting: "centre", centre_id: centresOf.get(exam)![1] });
 });
 
 test("paid_booking_can_request_cancellation", async ({ page }) => {

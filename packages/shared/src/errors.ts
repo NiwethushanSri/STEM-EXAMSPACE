@@ -25,7 +25,6 @@ export function messageFor(code: ErrorCode): string {
 
 /** Failure codes returned by the booking RPCs (create_booking, request_cancellation). */
 const bookingMessages: Record<string, string> = {
-  fully_booked: "This exam is fully booked",
   choose_sitting: "Choose whether to sit this exam at the centre or at home.",
   choose_centre: "Choose which centre you will sit this exam at.",
   centre_full: "That centre is full. Choose another centre if there is one.",
@@ -81,7 +80,7 @@ export function examMessageFor(code: string | null | undefined, context: ExamCon
 }
 
 /** Which admin booking or finance RPC a failure code came from; the same code reads differently for each. */
-export type AdminBookingContext = "add" | "mark_paid" | "cancel" | "approve" | "decline" | "finance";
+export type AdminBookingContext = "add" | "mark_paid" | "cancel" | "approve" | "decline" | "finance" | "change_sitting";
 
 const FORBIDDEN = "You do not have permission to do that.";
 const REFRESH = "This booking has already changed. Refresh the page to see where it stands.";
@@ -94,7 +93,6 @@ const adminBookingMessages: Record<AdminBookingContext, Record<string, string>> 
     not_bookable: "This exam cannot be booked: it must be published, have a confirmed price and not have started.",
     deadline_passed: "The booking deadline has passed, so an unpaid booking cannot be added. Add it as paid instead.",
     already_booked: "This student already has a booking for this exam.",
-    fully_booked: "This exam is fully booked",
     choose_sitting: "Choose whether the student sits at the centre or at home.",
     choose_centre: "Choose which centre the student sits at.",
     centre_full: "That centre is full. Choose another centre if there is one.",
@@ -124,6 +122,16 @@ const adminBookingMessages: Record<AdminBookingContext, Record<string, string>> 
     not_found: "This booking no longer exists. Refresh the page.",
     conflict:
       "This request cannot be declined: it may already be decided, or the exam was cancelled so the family is owed a refund. Refresh the page.",
+  },
+  change_sitting: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Give a reason of up to 300 characters, and choose a centre of this exam.",
+    not_found: "This booking no longer exists. Refresh the page.",
+    conflict:
+      "This booking cannot be moved there: it is already there, its exam is not running, or that register is closed. Refresh the page.",
+    choose_centre: "Choose which centre the student sits at.",
+    centre_full: "That centre is full. Choose another centre if there is one.",
+    sitting_not_offered: "This exam is not offered that way.",
   },
   finance: {
     forbidden: FORBIDDEN,

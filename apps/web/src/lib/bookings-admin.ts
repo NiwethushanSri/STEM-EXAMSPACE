@@ -21,6 +21,12 @@ export type AdminBookingRow = {
   subject: string;
   startsAt: string;
   examStatus: "draft" | "published" | "cancelled" | "completed";
+  examFormat: "in_person" | "online" | "both";
+  /** Where the student sits. A removed centre still shows here, with its history. */
+  sitting: "centre" | "home";
+  centreId: string | null;
+  venue: string | null;
+  room: string | null;
   amountPence: number;
   refundedPence: number;
   refundDue: boolean;
@@ -35,9 +41,13 @@ export type ExamOption = {
   label: string;
   startsAt: string;
   status: string;
+  format: "in_person" | "online" | "both";
   /** Published, price confirmed and not started: the add form offers only these. */
   bookable: boolean;
 };
+
+/** A current centre of an exam, for choosing where a booking sits. Rooms are for staff only. */
+export type ExamCentre = { id: string; venue: string; room: string };
 
 export type StudentOption = { id: string; name: string; indexNumber: string | null };
 
@@ -51,8 +61,9 @@ const STUDENT_MATCH_CAP = 300;
 const STATUSES = Object.keys(STATUS_LABEL) as BookingStatus[];
 
 const COLUMNS =
-  "id, status, amount_pence, refunded_pence, refund_due, paid_offline, paid_at, notes, created_at, exam_id, student_id, " +
-  "exam:exams(title, paper, starts_at, status, subject:subjects(name)), " +
+  "id, status, amount_pence, refunded_pence, refund_due, paid_offline, paid_at, notes, created_at, exam_id, student_id, sitting, centre_id, " +
+  "centre:exam_centres(room, venue:venues(name)), " +
+  "exam:exams(title, paper, starts_at, status, format, subject:subjects(name)), " +
   "student:profiles!bookings_student_id_fkey(first_name, last_name, student_details!profile_id(index_number))";
 
 type QueryRow = {
@@ -66,13 +77,17 @@ type QueryRow = {
   notes: string | null;
   created_at: string;
   exam_id: string;
-  exam: Embedded<{ title: string; paper: string; starts_at: string; status: AdminBookingRow["examStatus"]; subject: Embedded<{ name: string }> }>;
+  sitting: "centre" | "home";
+  centre_id: string | null;
+  centre: Embedded<{ room: string; venue: Embedded<{ name: string }> }>;
+  exam: Embedded<{ title: string; paper: string; starts_at: string; status: AdminBookingRow["examStatus"]; format: AdminBookingRow["examFormat"]; subject: Embedded<{ name: string }> }>;
   student: Embedded<{ first_name: string; last_name: string; student_details: Embedded<{ index_number: string | null }> }>;
 };
 
 function toRow(r: QueryRow): AdminBookingRow {
   const exam = one(r.exam);
   const st = one(r.student);
+  const centre = one(r.centre);
   return {
     id: r.id,
     status: r.status,
@@ -83,6 +98,11 @@ function toRow(r: QueryRow): AdminBookingRow {
     subject: exam ? (one(exam.subject)?.name ?? "") : "",
     startsAt: exam?.starts_at ?? "",
     examStatus: exam?.status ?? "published",
+    examFormat: exam?.format ?? "in_person",
+    sitting: r.sitting,
+    centreId: r.centre_id,
+    venue: centre ? (one(centre.venue)?.name ?? null) : null,
+    room: centre?.room ?? null,
     amountPence: r.amount_pence,
     refundedPence: r.refunded_pence,
     refundDue: r.refund_due,
@@ -216,19 +236,39 @@ async function loadDecidable(supabase: Client): Promise<AdminBookingRow[]> {
 async function loadExamOptions(supabase: Client): Promise<ExamOption[]> {
   const { data, error } = await supabase
     .from("exams")
-    .select("id, title, paper, starts_at, status, price_confirmed, subject:subjects(name)")
+    .select("id, title, paper, starts_at, status, format, price_confirmed, subject:subjects(name)")
     .order("starts_at", { ascending: false })
     .limit(500);
   if (error) throw new Error("exams could not be loaded");
   const now = Date.now();
-  const rows = (data ?? []) as unknown as { id: string; title: string; paper: string; starts_at: string; status: string; price_confirmed: boolean; subject: Embedded<{ name: string }> }[];
+  const rows = (data ?? []) as unknown as { id: string; title: string; paper: string; starts_at: string; status: string; format: ExamOption["format"]; price_confirmed: boolean; subject: Embedded<{ name: string }> }[];
   return rows.map((e) => ({
     id: e.id,
     label: `${one(e.subject)?.name ?? ""} · ${e.title}${e.paper ? ` (${e.paper})` : ""}`,
     startsAt: e.starts_at,
     status: e.status,
+    format: e.format,
     bookable: e.status === "published" && e.price_confirmed && Date.parse(e.starts_at) > now,
   }));
+}
+
+/** The current centres of these exams (removed ones are not offered as choices), by exam, in venue and room order. */
+async function loadCentres(supabase: Client, examIds: string[]): Promise<Record<string, ExamCentre[]>> {
+  const out: Record<string, ExamCentre[]> = {};
+  for (const ids of chunk([...new Set(examIds)], ID_BATCH)) {
+    const { data, error } = await supabase
+      .from("exam_centres")
+      .select("id, exam_id, room, venue:venues(name)")
+      .in("exam_id", ids)
+      .is("removed_at", null)
+      .order("created_at")
+      .order("id");
+    if (error) throw new Error("centres could not be loaded");
+    const rows = (data ?? []) as unknown as { id: string; exam_id: string; room: string; venue: Embedded<{ name: string }> }[];
+    for (const c of rows) (out[c.exam_id] ??= []).push({ id: c.id, venue: one(c.venue)?.name ?? "", room: c.room });
+  }
+  for (const list of Object.values(out)) list.sort((a, b) => a.venue.localeCompare(b.venue) || a.room.localeCompare(b.room));
+  return out;
 }
 
 /** The admin bookings screen. Owner and admin only; reads through the signed-in session (RLS applies). */
@@ -236,5 +276,9 @@ export async function loadAdminBookings(filters: BookingFilters) {
   await requireStaff(["admin", "owner"]);
   const supabase = await createClient();
   const [list, decidable, exams] = await Promise.all([loadList(supabase, filters), loadDecidable(supabase), loadExamOptions(supabase)]);
-  return { rows: list.rows, capped: list.capped, truncated: list.truncated, decidable, exams };
+  const centres = await loadCentres(
+    supabase,
+    [...list.rows, ...decidable].map((r) => r.examId).concat(exams.filter((e) => e.bookable).map((e) => e.id)),
+  );
+  return { rows: list.rows, capped: list.capped, truncated: list.truncated, decidable, exams, centres };
 }

@@ -25,6 +25,7 @@ let admin: TestAccount;
 let subjectId: number;
 let indexCounter = 9000 + Math.floor(Math.random() * 800);
 const examIds: string[] = [];
+const venueIds: string[] = [];
 
 async function makeExam(o: {
   title: string;
@@ -44,7 +45,6 @@ async function makeExam(o: {
       format: "online",
       starts_at: starts,
       duration_minutes: 60,
-      seat_limit: 50,
       price_pence: o.price ?? 2000,
       price_confirmed: o.confirmed ?? true,
       booking_deadline: o.deadline ?? new Date(Date.parse(starts) - 3 * 86400_000).toISOString(),
@@ -72,6 +72,7 @@ async function insertBooking(examId: string, studentId: string, s: Seed): Promis
     student_id: studentId,
     booked_by: studentId,
     status: s.status,
+    sitting: "home", // the exams made here are sat at home
     amount_pence: s.amount ?? 2000,
     refunded_pence: s.refunded ?? 0,
     refund_due: s.due ?? false,
@@ -108,6 +109,10 @@ async function removeData() {
     await svc().from("bookings").delete().in("exam_id", examIds);
     await svc().from("exams").delete().in("id", examIds);
     examIds.length = 0;
+  }
+  if (venueIds.length) {
+    await svc().from("venues").delete().in("id", venueIds);
+    venueIds.length = 0;
   }
 }
 
@@ -209,6 +214,7 @@ test("list_is_capped_at_500_with_a_note", async ({ page }) => {
     student_id: a.id,
     booked_by: a.id,
     status: "cancelled" as const,
+    sitting: "home" as const,
     amount_pence: 2000,
   }));
   const { error } = await svc().from("bookings").insert(rows);
@@ -323,7 +329,7 @@ test("marks_an_unpaid_booking_paid_and_cancels_another_behind_confirm_steps", as
   expect(p1?.paid_offline).toBe(true);
   expect(p1?.notes).toBe("cash at the desk");
   expect(Math.abs(Date.now() - Date.parse(p1!.paid_at!))).toBeLessThan(120_000);
-  await expect(row1.getByRole("button")).toHaveCount(0);
+  await expect(row1.getByRole("button", { name: /Mark paid|Cancel booking/ })).toHaveCount(0);
 
   await row2.getByRole("button", { name: "Cancel booking" }).click();
   await dialog(page).getByRole("button", { name: "Cancel", exact: true }).click();
@@ -548,4 +554,102 @@ test("admin_nav_has_bookings_and_finance", async ({ page }) => {
   await expect(nav.getByRole("link", { name: "Bookings & payments" })).toBeVisible();
   await nav.getByRole("link", { name: "Finance" }).click();
   await expect(page).toHaveURL(/\/admin\/finance$/);
+});
+
+test("admin_changes_a_booking_sitting_and_the_change_is_audited", async ({ page }) => {
+  // An exam offering both, at two centres of one seat each.
+  const starts = inDays(30);
+  const ex = await svc()
+    .from("exams")
+    .insert({
+      subject_id: subjectId,
+      title: `${tag} Both`,
+      paper: "Paper 1",
+      format: "both",
+      starts_at: starts,
+      duration_minutes: 60,
+      price_pence: 2000,
+      price_confirmed: true,
+      booking_deadline: new Date(Date.parse(starts) - 3 * 86400_000).toISOString(),
+      status: "published",
+      created_by: adminId,
+    })
+    .select("id")
+    .single();
+  if (ex.error || !ex.data) throw new Error(`exam insert failed: ${ex.error?.message}`);
+  const exam = ex.data.id;
+  examIds.push(exam);
+  const va = await svc().from("venues").insert({ name: `E2E Venue A ${tag}` }).select("id").single();
+  const vb = await svc().from("venues").insert({ name: `E2E Venue B ${tag}` }).select("id").single();
+  if (va.error || vb.error || !va.data || !vb.data) throw new Error("venue insert failed");
+  venueIds.push(va.data.id, vb.data.id);
+  const ca = await svc().from("exam_centres").insert({ exam_id: exam, venue_id: va.data.id, room: "Room 1", seat_limit: 1 }).select("id").single();
+  const cb = await svc().from("exam_centres").insert({ exam_id: exam, venue_id: vb.data.id, room: "Room 2", seat_limit: 1 }).select("id").single();
+  if (ca.error || cb.error || !ca.data || !cb.data) throw new Error("centre insert failed");
+
+  const s1 = await student("Sia");
+  const s2 = await student("Tom");
+  const s3 = await student("Uma");
+  const seed = async (who: TestAccount, at: "a" | "home") => {
+    const { error } = await svc().from("bookings").insert({
+      exam_id: exam,
+      student_id: who.id,
+      booked_by: who.id,
+      status: "paid",
+      amount_pence: 2000,
+      sitting: at === "home" ? "home" : "centre",
+      centre_id: at === "home" ? null : ca.data!.id,
+    });
+    if (error) throw new Error(`booking insert failed: ${error.message}`);
+  };
+  await seed(s1, "a");
+  await seed(s2, "home");
+  await seed(s3, "home");
+  const where = async (who: TestAccount) => {
+    const { data } = await svc().from("bookings").select("id, sitting, centre_id, notes").eq("exam_id", exam).eq("student_id", who.id).single();
+    return data!;
+  };
+
+  await signInAdmin(page);
+  await page.goto(`/admin/bookings?exam=${exam}`);
+  const row = (who: { name: string }) => bookingRows(page).filter({ hasText: who.name });
+  // Staff see the sitting, and the venue and room of a centre.
+  await expect(row(s1)).toContainText(`At the centre: E2E Venue A ${tag}, Room 1`);
+  await expect(row(s2)).toContainText("At home");
+
+  // A reason is required; the centre must be chosen when there are several.
+  await row(s2).getByRole("button", { name: "Change sitting" }).click();
+  await expect(dialog(page).getByRole("combobox", { name: "Sitting", exact: true })).toHaveValue("centre");
+  await dialog(page).getByRole("button", { name: "Change sitting" }).click();
+  await expect(dialog(page).getByRole("alert")).toHaveText("Choose which centre the student sits at.");
+  await dialog(page).getByRole("combobox", { name: "Centre", exact: true }).selectOption({ label: `E2E Venue B ${tag}, Room 2` });
+  await dialog(page).getByRole("button", { name: "Change sitting" }).click();
+  await expect(dialog(page).getByRole("alert")).toHaveText("Give a reason for the change.");
+  await dialog(page).getByRole("textbox", { name: /^Reason/ }).fill("Family asked to sit in person");
+  await dialog(page).getByRole("button", { name: "Change sitting" }).click();
+  await expect(page.getByRole("status")).toContainText("The booking now sits at the centre.");
+  await expect.poll(async () => (await where(s2)).centre_id).toBe(cb.data.id);
+  const moved = await where(s2);
+  expect(moved.sitting).toBe("centre");
+  expect(moved.notes).toContain("sitting changed — Family asked to sit in person");
+  const { count } = await svc().from("audit_log").select("*", { count: "exact", head: true }).eq("target_id", moved.id).eq("action", "booking_sitting_changed");
+  expect(count).toBe(1);
+  await expect(row(s2)).toContainText(`At the centre: E2E Venue B ${tag}, Room 2`);
+
+  // A full centre is refused with a message, and nothing changes.
+  await row(s3).getByRole("button", { name: "Change sitting" }).click();
+  await dialog(page).getByRole("combobox", { name: "Centre", exact: true }).selectOption({ label: `E2E Venue B ${tag}, Room 2` });
+  await dialog(page).getByRole("textbox", { name: /^Reason/ }).fill("Trying a full centre");
+  await dialog(page).getByRole("button", { name: "Change sitting" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "That centre is full." })).toBeVisible();
+  expect((await where(s3)).sitting).toBe("home");
+
+  // The centre sitting can go back to home, which needs no centre.
+  await row(s1).getByRole("button", { name: "Change sitting" }).click();
+  await expect(dialog(page).getByRole("combobox", { name: "Sitting", exact: true })).toHaveValue("home");
+  await dialog(page).getByRole("textbox", { name: /^Reason/ }).fill("Moved house");
+  await dialog(page).getByRole("button", { name: "Change sitting" }).click();
+  await expect(page.getByRole("status")).toContainText("The booking now sits at home.");
+  await expect.poll(async () => (await where(s1)).sitting).toBe("home");
+  expect((await where(s1)).centre_id).toBeNull();
 });

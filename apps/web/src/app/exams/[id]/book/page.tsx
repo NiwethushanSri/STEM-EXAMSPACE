@@ -6,6 +6,7 @@ import { BookForm, type Child } from "@/components/bookings/BookForm";
 import { Frame } from "@/components/bookings/Frame";
 import { PAY_NOTE } from "@/components/bookings/status";
 import { isClosed } from "@/lib/exam-state";
+import { placeText, type PublicCentre } from "@/lib/home-exams";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
@@ -23,7 +24,7 @@ async function Content({ params }: { params: Promise<{ id: string }> }) {
   const supabase = await createClient();
   const { data: exam } = await supabase
     .from("exams_public")
-    .select("id, subject, format, venue, starts_at, duration_minutes, price_pence, booking_deadline, seats_left")
+    .select("id, subject, format, starts_at, duration_minutes, price_pence, booking_deadline, seats_left, centres")
     .eq("id", id)
     .maybeSingle();
   if (!exam || !exam.starts_at || !exam.booking_deadline) notFound();
@@ -40,7 +41,9 @@ async function Content({ params }: { params: Promise<{ id: string }> }) {
 
   const now = new Date();
   const closed = isClosed({ booking_deadline: exam.booking_deadline, starts_at: exam.starts_at }, now);
-  const full = (exam.seats_left ?? 0) <= 0;
+  const centres = (exam.centres ?? []) as unknown as PublicCentre[];
+  // Fully booked only when the exam is sat at the centre alone and every centre is full. Home sittings have no limit.
+  const full = exam.format === "in_person" && (exam.seats_left ?? 0) <= 0;
   const price = exam.price_pence ?? 0;
 
   return (
@@ -49,7 +52,7 @@ async function Content({ params }: { params: Promise<{ id: string }> }) {
       <h1 className="mt-3 text-2xl font-semibold">Book {exam.subject}</h1>
       <dl className="mt-4 grid gap-2 rounded-lg border border-slate-200 bg-white p-4 text-sm sm:grid-cols-2">
         <div><dt className="text-slate-500">When</dt><dd className="font-medium">{formatLondon(exam.starts_at)} ({exam.duration_minutes} min)</dd></div>
-        <div><dt className="text-slate-500">Where</dt><dd className="font-medium">{exam.format === "online" ? "Online" : (exam.venue ?? "Venue to be confirmed")}</dd></div>
+        <div><dt className="text-slate-500">Where</dt><dd className="font-medium">{placeText({ format: exam.format, centres })}</dd></div>
         <div><dt className="text-slate-500">Price</dt><dd className="font-medium">{formatPence(price)}</dd></div>
         <div><dt className="text-slate-500">Book by</dt><dd className="font-medium">{formatLondon(exam.booking_deadline)}</dd></div>
       </dl>
@@ -64,7 +67,7 @@ async function Content({ params }: { params: Promise<{ id: string }> }) {
           No active linked student found. A student must be approved and linked to your account before you can book.
         </p>
       ) : (
-        <BookForm examId={id} kids={children} />
+        <BookForm examId={id} kids={children} format={exam.format} centres={centres} />
       )}
     </Frame>
   );

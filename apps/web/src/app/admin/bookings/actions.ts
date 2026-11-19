@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { adminBookingMessageFor, messageFor, type AdminBookingContext } from "@stem/shared";
 import { searchStudents, type StudentOption } from "@/lib/bookings-admin";
+import { parseBookingChoice } from "@/lib/booking-choice";
 import { poundsToPence } from "@/lib/money";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
@@ -40,6 +41,17 @@ function cleanNote(note: unknown): string | null | undefined {
   return n.length > NOTE_MAX ? undefined : n;
 }
 
+/** The optional sitting and centre of a booking, or null when either is malformed. */
+function readChoice(sitting: unknown, centre: unknown) {
+  const f = new FormData();
+  if (typeof sitting === "string" && sitting) f.set("sitting", sitting);
+  else if (sitting != null && sitting !== "") return null;
+  if (typeof centre === "string" && centre) f.set("centre", centre);
+  else if (centre != null && centre !== "") return null;
+  const c = parseBookingChoice(f);
+  return c.ok ? c : null;
+}
+
 const badInput: BookingActionResult = { ok: false, message: messageFor("invalid_input") };
 
 /** Student search for the add-booking form (owner and admin). */
@@ -54,16 +66,27 @@ export async function searchStudentsAction(q: string): Promise<{ ok: true; stude
 }
 
 /** Adds an offline booking for a student (owner and admin). Paid ones may be added after the deadline. */
-export async function addBookingAction(examId: string, studentId: string, paid: boolean, note: string): Promise<BookingActionResult> {
+export async function addBookingAction(
+  examId: string,
+  studentId: string,
+  paid: boolean,
+  note: string,
+  sitting: string | null = null,
+  centreId: string | null = null,
+): Promise<BookingActionResult> {
   await requireStaff(["admin", "owner"]);
   const n = cleanNote(note);
   if (!isUuid(String(examId)) || !isUuid(String(studentId)) || typeof paid !== "boolean" || n === undefined) return badInput;
+  const choice = readChoice(sitting, centreId);
+  if (!choice) return badInput;
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("admin_add_booking", {
     p_exam: examId,
     p_student: studentId,
     p_paid: paid,
     p_note: n as string,
+    ...(choice.sitting ? { p_sitting: choice.sitting } : {}),
+    ...(choice.centre ? { p_centre: choice.centre } : {}),
   });
   const out = read(data, error, "add");
   refresh();
@@ -124,4 +147,22 @@ export async function decideCancellationAction(bookingId: string, approve: boole
     ok: true,
     message: pence > 0 ? "Cancellation approved and the refund recorded. Pay the family back yourself; nothing was sent." : "Cancellation approved with no refund.",
   };
+}
+
+/** Moves a live booking to the other sitting or another centre of the same exam (owner and admin). The reason is required and audited. */
+export async function changeSittingAction(bookingId: string, sitting: string, centreId: string | null, reason: string): Promise<BookingActionResult> {
+  await requireStaff(["admin", "owner"]);
+  const why = typeof reason === "string" ? reason.trim() : "";
+  const choice = readChoice(sitting, centreId);
+  if (!isUuid(String(bookingId)) || !choice || !choice.sitting || why.length < 1 || why.length > 300) return badInput;
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("change_booking_sitting", {
+    p_booking: bookingId,
+    p_sitting: choice.sitting,
+    p_centre: choice.centre as unknown as string,
+    p_reason: why,
+  });
+  const out = read(data, error, "change_sitting");
+  refresh();
+  return out.ok ? { ok: true, message: choice.sitting === "home" ? "The booking now sits at home." : "The booking now sits at the centre." } : out;
 }

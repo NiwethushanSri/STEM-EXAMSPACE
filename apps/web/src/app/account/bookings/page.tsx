@@ -6,6 +6,7 @@ import { CancelButton } from "@/components/bookings/CancelButton";
 import { Frame } from "@/components/bookings/Frame";
 import { STATUS_LABEL, STATUS_TONE, type BookingStatus } from "@/components/bookings/status";
 import { Badge } from "@/components/AppShell";
+import { SITTING_MODE_LABEL } from "@/lib/exam-form";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
 
@@ -15,15 +16,16 @@ type Row = {
   amount_pence: number;
   student_id: string;
   created_at: string;
+  sitting: "centre" | "home";
+  /** The centre of a centre booking (it may have been removed from the exam since, and still shows). */
+  centre: { venue: { name: string } | { name: string }[] | null } | { venue: { name: string } | { name: string }[] | null }[] | null;
   exam:
     | {
         id: string;
         status: string;
         starts_at: string;
         duration_minutes: number;
-        format: "in_person" | "online";
         subject: { name: string } | { name: string }[] | null;
-        venue: { name: string } | { name: string }[] | null;
       }
     | null;
 };
@@ -42,7 +44,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
   const { data, error } = await supabase
     .from("bookings")
     .select(
-      "id, status, amount_pence, student_id, created_at, exam:exams(id, status, starts_at, duration_minutes, format, subject:subjects(name), venue:venues(name))",
+      "id, status, amount_pence, student_id, created_at, sitting, centre:exam_centres(venue:venues(name)), exam:exams(id, status, starts_at, duration_minutes, subject:subjects(name))",
     )
     .order("created_at", { ascending: false });
   const rows = (data ?? []) as unknown as Row[];
@@ -64,7 +66,8 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
   const renderRow = (r: Row) => {
     const subject = one(r.exam?.subject)?.name ?? "Exam";
     const examCancelled = r.exam?.status === "cancelled";
-    const venue = one(r.exam?.venue)?.name;
+    const venue = one(one(r.centre)?.venue)?.name;
+    const where = r.sitting === "home" ? SITTING_MODE_LABEL.home : venue ? `${SITTING_MODE_LABEL.centre}: ${venue}` : SITTING_MODE_LABEL.centre;
     const future = !!r.exam && new Date(r.exam.starts_at) > now && r.exam.status !== "cancelled";
     return (
       <li key={r.id} data-testid="booking-row" className="space-y-2 p-4 text-sm">
@@ -78,7 +81,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
         {r.exam ? (
           <div className="text-slate-600">
             {examCancelled && <span className="mr-2 font-medium text-red-700">Exam cancelled</span>}
-            {formatLondon(r.exam.starts_at)} · {r.exam.duration_minutes} min · {r.exam.format === "online" ? "Online" : (venue ?? "Venue to be confirmed")}
+            {formatLondon(r.exam.starts_at)} · {r.exam.duration_minutes} min · {where}
           </div>
         ) : (
           <div className="text-slate-600">This exam is no longer on the timetable.</div>

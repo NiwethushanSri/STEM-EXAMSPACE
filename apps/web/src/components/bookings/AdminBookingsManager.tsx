@@ -7,12 +7,14 @@ import { STATUS_LABEL, STATUS_TONE } from "@/components/bookings/status";
 import {
   addBookingAction,
   cancelBookingAction,
+  changeSittingAction,
   decideCancellationAction,
   markPaidAction,
   searchStudentsAction,
   type BookingActionResult,
 } from "@/app/admin/bookings/actions";
-import type { AdminBookingRow, ExamOption, StudentOption } from "@/lib/bookings-admin";
+import type { AdminBookingRow, ExamCentre, ExamOption, StudentOption } from "@/lib/bookings-admin";
+import { SITTING_MODE_LABEL } from "@/lib/exam-form";
 import { formatLondon, formatMoney, penceToInput, poundsToPence } from "@/lib/money";
 
 const NOTE_HELP = "Visible to the family, their tutor and the subject's teachers. Don't include personal details.";
@@ -21,7 +23,8 @@ const DELETED_ACCOUNT_WARNING = "This account was deleted — the family is owed
 
 type Notice = { ok: boolean; message: string } | null;
 type Confirm =
-  | { kind: "add"; exam: ExamOption; student: StudentOption; paid: boolean; note: string }
+  | { kind: "add"; exam: ExamOption; student: StudentOption; paid: boolean; note: string; sitting: string | null; centre: string | null }
+  | { kind: "change_sitting"; row: AdminBookingRow }
   | { kind: "mark_paid" | "cancel"; row: AdminBookingRow }
   | { kind: "approve"; row: AdminBookingRow; pence: number; refund: string; note: string }
   | { kind: "decline"; row: AdminBookingRow; note: string }
@@ -35,6 +38,26 @@ function canDecline(r: AdminBookingRow): boolean {
 /** The exam was cancelled, so the family is owed the money back. */
 function owedFull(r: AdminBookingRow): boolean {
   return r.refundDue || r.examStatus === "cancelled";
+}
+
+type Sitting = "centre" | "home";
+
+/** The sittings an exam of this format offers. */
+function sittingsOf(format: ExamOption["format"]): Sitting[] {
+  return format === "both" ? ["centre", "home"] : format === "online" ? ["home"] : ["centre"];
+}
+
+const centreLabel = (c: ExamCentre) => `${c.venue}, ${c.room}`;
+
+/** Where a booking sits, for staff: the sitting, then the venue and room of its centre. */
+function sittingText(r: AdminBookingRow): string {
+  if (r.sitting === "home") return SITTING_MODE_LABEL.home;
+  return r.venue ? `${SITTING_MODE_LABEL.centre}: ${r.venue}${r.room ? `, ${r.room}` : ""}` : SITTING_MODE_LABEL.centre;
+}
+
+/** A live booking on a published exam can be moved. */
+function canChangeSitting(r: AdminBookingRow): boolean {
+  return (r.status === "awaiting_payment" || r.status === "paid" || r.status === "cancel_requested") && r.examStatus === "published";
 }
 
 function StudentCell({ r }: { r: AdminBookingRow }) {
@@ -55,6 +78,7 @@ function ExamCell({ r }: { r: AdminBookingRow }) {
         {r.startsAt ? ` · ${formatLondon(r.startsAt)}` : ""}
         {r.examStatus === "cancelled" ? " · exam cancelled" : ""}
       </div>
+      <div data-testid="booking-sitting" className="text-xs text-slate-500">{sittingText(r)}</div>
     </>
   );
 }
@@ -141,10 +165,11 @@ function DecisionRow({ row, busy, onApprove, onDecline }: {
 }
 
 /** The add-offline-booking form. */
-function AddForm({ exams, busy, onSubmit }: {
+function AddForm({ exams, centres, busy, onSubmit }: {
   exams: ExamOption[];
+  centres: Record<string, ExamCentre[]>;
   busy: boolean;
-  onSubmit: (exam: ExamOption, student: StudentOption, paid: boolean, note: string) => void;
+  onSubmit: (exam: ExamOption, student: StudentOption, paid: boolean, note: string, sitting: string | null, centre: string | null) => void;
 }) {
   const bookable = exams.filter((e) => e.bookable);
   const [examId, setExamId] = useState("");
@@ -154,7 +179,16 @@ function AddForm({ exams, busy, onSubmit }: {
   const [searching, setSearching] = useState(false);
   const [paid, setPaid] = useState("unpaid");
   const [note, setNote] = useState("");
+  const [sitting, setSitting] = useState("");
+  const [centre, setCentre] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const chosen = bookable.find((x) => x.id === examId);
+  const examCentres = chosen ? (centres[chosen.id] ?? []) : [];
+  // Asked only when there is a real choice: an exam offering both, and several centres.
+  const askSitting = chosen?.format === "both";
+  const effective = !chosen ? null : chosen.format === "both" ? (sitting as Sitting | "") || null : sittingsOf(chosen.format)[0];
+  const askCentre = effective === "centre" && examCentres.length > 1;
 
   async function search() {
     setError(null);
@@ -180,8 +214,10 @@ function AddForm({ exams, busy, onSubmit }: {
     const student = students?.find((s) => s.id === studentId);
     if (!exam) return setError("Choose an exam.");
     if (!student) return setError("Search for the student and choose one.");
+    if (askSitting && !sitting) return setError("Choose whether the student sits at the centre or at home.");
+    if (askCentre && !centre) return setError("Choose which centre the student sits at.");
     setError(null);
-    onSubmit(exam, student, paid === "paid", note);
+    onSubmit(exam, student, paid === "paid", note, askSitting ? sitting : null, askCentre ? centre : null);
   }
 
   return (
@@ -189,7 +225,7 @@ function AddForm({ exams, busy, onSubmit }: {
       <div className="grid gap-3 md:grid-cols-2">
         <label className="flex flex-col gap-1">
           Exam
-          <select aria-label="Exam" value={examId} onChange={(e) => setExamId(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5">
+          <select aria-label="Exam" value={examId} onChange={(e) => { setExamId(e.target.value); setSitting(""); setCentre(""); }} className="rounded border border-slate-300 bg-white px-2 py-1.5">
             <option value="">Choose an exam</option>
             {bookable.map((e) => (
               <option key={e.id} value={e.id}>{e.label} — {formatLondon(e.startsAt)}</option>
@@ -225,6 +261,28 @@ function AddForm({ exams, busy, onSubmit }: {
             ))}
           </select>
         </label>
+        {askSitting && (
+          <label className="flex flex-col gap-1">
+            Where they sit
+            <select aria-label="Where they sit" value={sitting} onChange={(e) => { setSitting(e.target.value); setCentre(""); }} className="rounded border border-slate-300 bg-white px-2 py-1.5">
+              <option value="">Choose a sitting</option>
+              {sittingsOf("both").map((m) => (
+                <option key={m} value={m}>{SITTING_MODE_LABEL[m]}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {askCentre && (
+          <label className="flex flex-col gap-1">
+            Centre
+            <select aria-label="Centre" value={centre} onChange={(e) => setCentre(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5">
+              <option value="">Choose a centre</option>
+              {examCentres.map((c) => (
+                <option key={c.id} value={c.id}>{centreLabel(c)}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="flex flex-col gap-1">
           Payment
           <select value={paid} onChange={(e) => setPaid(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5">
@@ -247,10 +305,11 @@ function AddForm({ exams, busy, onSubmit }: {
 }
 
 /** The admin bookings screen: refund decisions, add an offline booking, and the filtered list with mark paid and cancel. */
-export function AdminBookingsManager({ rows, decidable, exams, capped, truncated, cap }: {
+export function AdminBookingsManager({ rows, decidable, exams, centres, capped, truncated, cap }: {
   rows: AdminBookingRow[];
   decidable: AdminBookingRow[];
   exams: ExamOption[];
+  centres: Record<string, ExamCentre[]>;
   capped: boolean;
   truncated: boolean;
   cap: number;
@@ -258,6 +317,9 @@ export function AdminBookingsManager({ rows, decidable, exams, capped, truncated
   const [notice, setNotice] = useState<Notice>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [dialogNote, setDialogNote] = useState("");
+  const [moveSitting, setMoveSitting] = useState<Sitting>("centre");
+  const [moveCentre, setMoveCentre] = useState("");
+  const [dialogError, setDialogError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [formKey, setFormKey] = useState(0);
   const [, startTransition] = useTransition();
@@ -281,16 +343,41 @@ export function AdminBookingsManager({ rows, decidable, exams, capped, truncated
   function open(c: NonNullable<Confirm>) {
     setNotice(null);
     setDialogNote("");
+    setDialogError(null);
+    if (c.kind === "change_sitting") {
+      // Start on the other sitting of an exam that offers both; otherwise on another centre of the same sitting.
+      const options = sittingsOf(c.row.examFormat);
+      const target = options.find((m) => m !== c.row.sitting) ?? options[0];
+      setMoveSitting(target);
+      setMoveCentre(pickCentre(c.row, target));
+    }
     setConfirm(c);
+  }
+
+  /** The centre to preselect: the exam's only other centre, else none (the admin chooses). */
+  function pickCentre(row: AdminBookingRow, target: Sitting): string {
+    if (target !== "centre") return "";
+    const others = (centres[row.examId] ?? []).filter((c) => c.id !== row.centreId);
+    return others.length === 1 ? others[0].id : "";
   }
 
   async function doConfirm() {
     if (!confirm) return;
     const c = confirm;
+    if (c.kind === "change_sitting") {
+      const list = centres[c.row.examId] ?? [];
+      if (moveSitting === "centre" && list.length > 1 && !moveCentre) return setDialogError("Choose which centre the student sits at.");
+      if (!dialogNote.trim()) return setDialogError("Give a reason for the change.");
+    }
     const res = await run(() => {
       switch (c.kind) {
         case "add":
-          return addBookingAction(c.exam.id, c.student.id, c.paid, c.note);
+          return addBookingAction(c.exam.id, c.student.id, c.paid, c.note, c.sitting, c.centre);
+        case "change_sitting": {
+          const list = centres[c.row.examId] ?? [];
+          const centre = moveSitting === "home" ? null : moveCentre || (list.length === 1 ? list[0].id : null);
+          return changeSittingAction(c.row.id, moveSitting, centre, dialogNote);
+        }
         case "mark_paid":
           return markPaidAction(c.row.id, dialogNote);
         case "cancel":
@@ -320,6 +407,56 @@ export function AdminBookingsManager({ rows, decidable, exams, capped, truncated
             </p>
           ),
         };
+      case "change_sitting": {
+        const row = confirm.row;
+        const options = sittingsOf(row.examFormat);
+        const list = centres[row.examId] ?? [];
+        return {
+          title: "Change sitting",
+          label: "Change sitting",
+          tone: "primary" as const,
+          body: (
+            <div className="space-y-3">
+              <p>{row.student}, {row.examTitle}. Now: {sittingText(row)}.</p>
+              {options.length > 1 && (
+                <label className="flex flex-col gap-1">
+                  Sitting
+                  <select
+                    value={moveSitting}
+                    onChange={(e) => {
+                      const m = e.target.value as Sitting;
+                      setMoveSitting(m);
+                      setMoveCentre(pickCentre(row, m));
+                    }}
+                    className="rounded border border-slate-300 bg-white px-2 py-1.5"
+                  >
+                    {options.map((m) => (
+                      <option key={m} value={m}>{SITTING_MODE_LABEL[m]}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {moveSitting === "centre" && list.length > 1 && (
+                <label className="flex flex-col gap-1">
+                  Centre
+                  <select value={moveCentre} onChange={(e) => setMoveCentre(e.target.value)} className="rounded border border-slate-300 bg-white px-2 py-1.5">
+                    <option value="">Choose a centre</option>
+                    {list.map((c) => (
+                      <option key={c.id} value={c.id}>{centreLabel(c)}{c.id === row.centreId ? " (now)" : ""}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <label className="flex flex-col gap-1">
+                Reason
+                <input value={dialogNote} maxLength={300} onChange={(e) => setDialogNote(e.target.value)} className="rounded border border-slate-300 px-2 py-1.5" />
+                <span className="text-xs text-slate-500">Saved with the booking and the audit log. Up to 300 characters.</span>
+              </label>
+              {dialogError && <p role="alert" className="text-red-700">{dialogError}</p>}
+            </div>
+          ),
+        };
+      }
       case "mark_paid":
       case "cancel": {
         const paying = confirm.kind === "mark_paid";
@@ -401,7 +538,8 @@ export function AdminBookingsManager({ rows, decidable, exams, capped, truncated
           key={formKey}
           exams={exams}
           busy={busy}
-          onSubmit={(exam, student, paid, note) => open({ kind: "add", exam, student, paid, note })}
+          centres={centres}
+          onSubmit={(exam, student, paid, note, sitting, centre) => open({ kind: "add", exam, student, paid, note, sitting, centre })}
         />
       </Card>
 
@@ -438,6 +576,11 @@ export function AdminBookingsManager({ rows, decidable, exams, capped, truncated
                     </td>
                     <td className="max-w-56 whitespace-pre-line py-2.5 pr-4 text-xs text-slate-600">{r.notes}</td>
                     <td className="py-2.5">
+                      {canChangeSitting(r) && (
+                        <button type="button" disabled={busy} onClick={() => open({ kind: "change_sitting", row: r })} className="mb-1 rounded border border-slate-300 px-2.5 py-1 text-xs hover:bg-slate-50 disabled:opacity-60">
+                          Change sitting
+                        </button>
+                      )}
                       {r.status === "awaiting_payment" && (
                         <div className="flex gap-2">
                           <button type="button" disabled={busy} onClick={() => open({ kind: "mark_paid", row: r })} className="rounded bg-blue-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-60">
