@@ -1,13 +1,13 @@
 // Admin: checks an uploaded PDF and registers it as the exam's paper (or an insert).
 // The browser uploads to the private exam-papers bucket first; this function reads the object with the service
-// role, refuses anything unreadable, encrypted or over 40 MB, and deletes the object on every refusal so no
+// role, refuses anything unreadable, encrypted or over 20 MB, and deletes the object on every refusal so no
 // orphan files are left. The database function does the permission, version and audit work as the caller.
 import { callerClient, requireCaller, serviceClient } from "../_shared/auth.ts";
 import { type ErrorCode, HttpError, handle, jsonResponse } from "../_shared/errors.ts";
 import { inspectPaper, PaperError } from "../_shared/paper/stamp.ts";
 
 const BUCKET = "exam-papers";
-const MAX_BYTES = 40 * 1024 * 1024;
+const MAX_BYTES = 20 * 1024 * 1024;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const bad = (m: string) => new HttpError("invalid_input", 400, m);
 
@@ -65,11 +65,19 @@ Deno.serve(handle(async (req) => {
     if (error) console.error("paper-register: could not delete the refused object");
   };
 
+  // Cheap checks before the object is downloaded; the database function checks them again.
+  const t = title?.trim() ?? "";
+  const r = reason?.trim() ?? "";
+  if (t.length > 120 || (r !== "" && (r.length < 3 || r.length > 300))) {
+    await discard();
+    throw refusal("invalid_input");
+  }
+
   const dl = await svc.storage.from(BUCKET).download(storagePath);
   if (dl.error || !dl.data) throw bad("The uploaded file was not found. Upload it again.");
   if (dl.data.size > MAX_BYTES) {
     await discard();
-    throw new HttpError("paper_too_large", 413, "This PDF is larger than 40 MB. Make it smaller and upload it again.");
+    throw new HttpError("paper_too_large", 413, "This PDF is larger than 20 MB. Make it smaller and upload it again.");
   }
   const bytes = new Uint8Array(await dl.data.arrayBuffer());
 

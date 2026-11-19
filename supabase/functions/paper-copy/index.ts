@@ -55,7 +55,7 @@ function formatExamDate(iso: string): string {
 }
 
 function pdfResponse(bytes: Uint8Array, fileName: string, differs: boolean): Response {
-  return new Response(new Uint8Array(bytes), {
+  return new Response(bytes as unknown as BodyInit, {
     status: 200,
     headers: {
       ...corsHeaders,

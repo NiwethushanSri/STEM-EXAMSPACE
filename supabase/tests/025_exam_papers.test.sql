@@ -149,7 +149,7 @@ select is((select count(*)::int from unnest(array['exam_papers', 'paper_copies',
 select is((select count(*)::int from unnest(array['exam_papers', 'paper_copies', 'paper_downloads']) t
   where has_table_privilege('anon', 'public.' || t, 'select')), 0, 'anon cannot read the paper tables');
 select results_eq($q$select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'exam-papers'$q$,
-  $q$values (false, 41943040::bigint, array['application/pdf'])$q$, 'exam-papers is a private 40 MB PDF bucket');
+  $q$values (false, 20971520::bigint, array['application/pdf'])$q$, 'exam-papers is a private 20 MB PDF bucket');
 select is((select release_minutes_before || '/' || spare_pages || '/' || release_held || '/'
   || coalesce(released_early_at::text, 'none') || '/' || coalesce(release_notified_at::text, 'none') from public.exams where id = pg_temp.eid('live')),
   '10/2/false/none/none', 'new exams release 10 minutes early, with 2 spare pages, not held');
@@ -209,10 +209,10 @@ select is(public.register_exam_paper(pg_temp.eid('live'), 'paper', null, pg_temp
 select is(public.register_exam_paper(pg_temp.eid('live'), 'paper', null, pg_temp.eid('live')::text || '/' || gen_random_uuid()::text || '.pdf', 3, 1000, null) ->> 'code',
   'invalid_input', 'a path with no stored file is refused');
 select ok(public.register_exam_paper(pg_temp.eid('live'), 'paper', null, pg_temp.path('lv_v2'), 0, 1000, 'Some reason') ->> 'code' = 'invalid_input'
-  and public.register_exam_paper(pg_temp.eid('live'), 'paper', null, pg_temp.path('lv_v2'), 3, 41943041, 'Some reason') ->> 'code' = 'invalid_input'
+  and public.register_exam_paper(pg_temp.eid('live'), 'paper', null, pg_temp.path('lv_v2'), 3, 20971521, 'Some reason') ->> 'code' = 'invalid_input'
   and public.register_exam_paper(pg_temp.eid('live'), 'paper', null, pg_temp.eid('live')::text || '/paper.txt', 3, 1000, 'Some reason') ->> 'code' = 'invalid_input'
   and public.register_exam_paper(pg_temp.eid('live'), 'paper', repeat('t', 121), pg_temp.path('lv_v2'), 3, 1000, 'Some reason') ->> 'code' = 'invalid_input',
-  'no pages, over 40 MB, a non-PDF path or an over-long title is refused');
+  'no pages, over 20 MB, a non-PDF path or an over-long title is refused');
 select is(public.register_exam_paper(pg_temp.eid('live'), 'paper', null, pg_temp.path('lv_v1'), 3, 1000, 'Again') ->> 'code', 'conflict', 'a stored file is registered once');
 select is(pg_temp.reg('lv_ins', 'live', 'insert', ' ', 1) ->> 'code', 'invalid_input', 'an insert needs a title');
 select is(pg_temp.reg('lv_ins', 'live', 'insert', 'Formula sheet', 1) ->> 'ok', 'true', 'an insert is registered');

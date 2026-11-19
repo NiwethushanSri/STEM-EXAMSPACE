@@ -23,7 +23,7 @@ const messages: Record<ErrorCode, string> = {
   wrong_sitting: "Your booking is for the centre; your paper is handed out in the exam room",
   paper_unreadable: "The paper could not be prepared. Please try again.",
   paper_encrypted: "This PDF is password protected. Remove the password and upload it again.",
-  paper_too_large: "This PDF is larger than 40 MB. Make it smaller and upload it again.",
+  paper_too_large: "This PDF is larger than 20 MB. Make it smaller and upload it again.",
 };
 
 /** Fallback copy; a server-provided message takes precedence when present. */

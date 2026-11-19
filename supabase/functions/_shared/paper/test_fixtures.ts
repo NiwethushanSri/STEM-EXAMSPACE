@@ -44,6 +44,9 @@ export interface Fixture {
   stranger: TestUser;
   examId: string;
   bookingId: string;
+  /** Unique per run. */
+  examCode: string;
+  indexNumber: string;
   /** Uploads bytes at <exam>/<uuid>.pdf and returns the path. */
   upload(bytes: Uint8Array): Promise<string>;
   /** Uploads and records a paper or insert row directly (as register_exam_paper would). */
@@ -64,6 +67,9 @@ export async function setup(startsInMinutes: number): Promise<Fixture> {
   let subjectId: number | null = null;
   let examId: string | null = null;
   const fx = {} as Fixture;
+  const tag = crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
+  fx.examCode = `ZZ${tag}`;
+  fx.indexNumber = `ZZ-${tag}`;
   try {
     fx.admin = await createTestUser(svc, { role: "admin", status: "active" });
     users.push(fx.admin);
@@ -71,6 +77,9 @@ export async function setup(startsInMinutes: number): Promise<Fixture> {
     users.push(fx.student);
     fx.stranger = await createTestUser(svc, { role: "parent", status: "active" });
     users.push(fx.stranger);
+
+    const idx = await svc.from("student_details").update({ index_number: fx.indexNumber }).eq("profile_id", fx.student.id);
+    if (idx.error) throw new Error(`index number: ${idx.error.message}`);
 
     const subj = await svc.from("subjects").insert({ name: `ZZ Fn ${crypto.randomUUID()}`, kind: "school" })
       .select("id").single();
@@ -88,7 +97,7 @@ export async function setup(startsInMinutes: number): Promise<Fixture> {
       price_confirmed: true,
       booking_deadline: starts,
       status: "published",
-      exam_code: "ZZFN",
+      exam_code: fx.examCode,
     }).select("id").single();
     if (ex.error) throw new Error(`exam: ${ex.error.message}`);
     examId = ex.data.id as string;
@@ -127,20 +136,25 @@ export async function setup(startsInMinutes: number): Promise<Fixture> {
       return { id: row.data.id as string, path };
     };
     fx.cleanup = async () => {
+      const failures: string[] = [];
+      const check = (step: string, r: { error: { message: string } | null }) => {
+        if (r.error) failures.push(`${step}: ${r.error.message}`);
+      };
       try {
         const copies = await svc.from("paper_copies").select("id").eq("booking_id", fx.bookingId);
         const ids = (copies.data ?? []).map((c) => c.id as string);
-        if (ids.length) await svc.from("paper_downloads").delete().in("copy_id", ids);
-        await svc.from("paper_copies").delete().eq("booking_id", fx.bookingId);
+        if (ids.length) check("downloads", await svc.from("paper_downloads").delete().in("copy_id", ids));
+        check("copies", await svc.from("paper_copies").delete().eq("booking_id", fx.bookingId));
         const papers = await svc.from("exam_papers").select("id, storage_path").eq("exam_id", examId!);
         for (const p of papers.data ?? []) paths.push(p.storage_path as string);
-        await svc.from("exam_papers").delete().eq("exam_id", examId!);
-        await svc.from("bookings").delete().eq("exam_id", examId!);
-        await svc.from("exams").delete().eq("id", examId!);
-        if (subjectId !== null) await svc.from("subjects").delete().eq("id", subjectId);
-        if (paths.length) await svc.storage.from(BUCKET).remove(paths);
+        check("papers", await svc.from("exam_papers").delete().eq("exam_id", examId!));
+        check("bookings", await svc.from("bookings").delete().eq("exam_id", examId!));
+        check("exam", await svc.from("exams").delete().eq("id", examId!));
+        if (subjectId !== null) check("subject", await svc.from("subjects").delete().eq("id", subjectId));
+        if (paths.length) check("objects", await svc.storage.from(BUCKET).remove(paths));
       } finally {
         await deleteUsers(svc, users);
+        if (failures.length) throw new Error(`fixture cleanup failed: ${failures.join("; ")}`);
       }
     };
     return fx;

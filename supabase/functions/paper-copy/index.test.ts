@@ -30,12 +30,18 @@ Deno.test("copy_after_release_is_pdf_and_logged", async () => {
     assertEquals(res.status, 200);
     assertEquals(res.headers.get("content-type"), "application/pdf");
     const disp = res.headers.get("content-disposition") ?? "";
-    assert(/^attachment; filename="ZZFN-[^"]+\.pdf"$/.test(disp), disp);
+    assertEquals(disp, `attachment; filename="${fx.examCode}-${fx.indexNumber}.pdf"`);
     assertEquals(res.headers.get("x-paper-differs"), "0");
-    assert((res.headers.get("access-control-expose-headers") ?? "").toLowerCase().includes("content-disposition"));
+    const expose = (res.headers.get("access-control-expose-headers") ?? "").toLowerCase();
+    assert(expose.includes("content-disposition") && expose.includes("x-paper-differs"), expose);
     const bytes = new Uint8Array(await res.arrayBuffer());
     assertEquals(new TextDecoder().decode(bytes.slice(0, 4)), "%PDF");
-    assertEquals(await downloads(fx), 1);
+    const log = await fx.svc.from("paper_downloads").select("kind, downloaded_by, paper_copies!inner(booking_id)")
+      .eq("paper_copies.booking_id", fx.bookingId);
+    assertEquals(log.error, null);
+    assertEquals(log.data?.length, 1);
+    assertEquals(log.data![0].kind, "home");
+    assertEquals(log.data![0].downloaded_by, fx.student.id);
   } finally {
     await fx.cleanup();
   }

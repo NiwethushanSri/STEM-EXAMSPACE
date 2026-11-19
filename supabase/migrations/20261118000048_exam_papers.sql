@@ -165,7 +165,7 @@ create table public.exam_papers (
   version int not null check (version > 0),
   storage_path text not null unique,
   page_count int not null check (page_count > 0),
-  byte_size bigint not null check (byte_size between 1 and 41943040),
+  byte_size bigint not null check (byte_size between 1 and 20971520),
   uploaded_by uuid references public.profiles (id) on delete set null,
   uploaded_at timestamptz not null default now(),
   replace_reason text check (replace_reason is null or char_length(replace_reason) between 3 and 300),
@@ -222,7 +222,7 @@ using ((select public.is_staff_admin()));
 -- service role. There is no update policy, so a stored file is never overwritten.
 -- ---------------------------------------------------------------------------------------------
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('exam-papers', 'exam-papers', false, 41943040, array['application/pdf'])
+values ('exam-papers', 'exam-papers', false, 20971520, array['application/pdf'])
 on conflict (id) do update set
   public = false,
   file_size_limit = excluded.file_size_limit,
@@ -521,7 +521,7 @@ begin
   if p_exam is null or p_kind is null or v_title is null or char_length(v_title) > 120
      or p_storage_path is null or p_storage_path !~ ('^' || p_exam::text || '/' || v_uuid || '\.pdf$')
      or p_page_count is null or p_page_count not between 1 and 500
-     or p_byte_size is null or p_byte_size not between 1 and 41943040
+     or p_byte_size is null or p_byte_size not between 1 and 20971520
      or (v_reason is not null and char_length(v_reason) not between 3 and 300) then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
