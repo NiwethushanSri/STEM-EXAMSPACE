@@ -121,14 +121,14 @@ isOneToOne: false
                   ]
                 },"exam_centres": {
                   Row: {
-                    "created_at": string,"exam_id": string,"id": string,"register_closed_at": string | null,"room": string,"seat_limit": number,"venue_id": string
+                    "created_at": string,"exam_id": string,"id": string,"register_closed_at": string | null,"removed_at": string | null,"room": string,"seat_limit": number,"venue_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"exam_id": string,"id"?: string,"register_closed_at"?: string | null,"room": string,"seat_limit": number,"venue_id": string
+                    "created_at"?: string,"exam_id": string,"id"?: string,"register_closed_at"?: string | null,"removed_at"?: string | null,"room": string,"seat_limit": number,"venue_id": string
                   }
                   Update: {
-                    "created_at"?: string,"exam_id"?: string,"id"?: string,"register_closed_at"?: string | null,"room"?: string,"seat_limit"?: number,"venue_id"?: string
+                    "created_at"?: string,"exam_id"?: string,"id"?: string,"register_closed_at"?: string | null,"removed_at"?: string | null,"room"?: string,"seat_limit"?: number,"venue_id"?: string
                   }
                   Relationships: [
                     {
@@ -506,6 +506,9 @@ isOneToOne: false
                            },
 "close_register_as":
 { Args: { "p_actor": string,"p_centre": string,"p_now": string }; Returns: Json
+                           },
+"complete_finished_exams":
+{ Args: { "p_now"?: string }; Returns: number
                            },
 "complete_profile":
 { Args: { "p_gender": string,"p_parent_phone": string,"p_photo_path"?: string,"p_subject_ids": (number)[],"p_year_group": string }; Returns: undefined

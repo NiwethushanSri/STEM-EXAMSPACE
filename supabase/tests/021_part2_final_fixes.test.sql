@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(14);
+select plan(16);
 select tests.assert_no_owner();
 
 create temp table c (name text primary key, id uuid not null);
@@ -59,11 +59,14 @@ select pg_temp.mk_booking('live', 's4', 'awaiting_payment');
 delete from auth.users where id = (select id from c where name = 's2');
 select is((select count(*)::int from public.bookings where exam_id = (select id from ex where name = 'live') and student_id is null), 1, 'deleted student leaves a null-student booking');
 select is(public.close_register_as((select id from c where name = 'teacher'), pg_temp.centre('live'), now()), '{"ok":true,"absent":1}'::jsonb, 'close_register succeeds despite a null-student booking');
-select is((select status::text from public.exams where id = (select id from ex where name = 'live')), 'completed', 'exam completed');
+select is((select status::text from public.exams where id = (select id from ex where name = 'live')), 'published', 'closing the register leaves the exam published');
 select is((select count(*)::int from public.attendance where exam_id = (select id from ex where name = 'live') and student_id is null), 0, 'no attendance row with a null student');
 select is((select count(*)::int from public.attendance where exam_id = (select id from ex where name = 'live')), 1, 'only the live student is absent');
-select is((select count(*)::int from public.audit_log where action = 'booking_expired' and actor_id = (select id from c where name = 'teacher')
-  and target_id in (select id from public.bookings where exam_id = (select id from ex where name = 'live') and status = 'expired')), 2, 'expired-at-close bookings are audited with the actor');
+-- The completion job (scheduled end plus 2 hours) completes it and expires the unpaid leftovers.
+select cmp_ok(public.complete_finished_exams(now() + interval '2 hours'), '>=', 1, 'the completion job completes the finished exam');
+select is((select status::text from public.exams where id = (select id from ex where name = 'live')), 'completed', 'exam completed by the job');
+select is((select count(*)::int from public.audit_log where action = 'booking_expired' and actor_id is null
+  and target_id in (select id from public.bookings where exam_id = (select id from ex where name = 'live') and status = 'expired')), 2, 'bookings expired at completion are audited by the job');
 
 -- save_exam date rules.
 select pg_temp.mk_exam('future', now() + interval '10 days', now() + interval '5 days');

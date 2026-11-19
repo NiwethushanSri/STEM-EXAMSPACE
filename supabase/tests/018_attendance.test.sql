@@ -130,11 +130,11 @@ select is(public.attendance_lookup_as((select id from c where name = 'tutor'), (
 -- Close register.
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'future'), now()) ->> 'code', 'conflict', 'close_before_start_refused');
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'other'), '2026-07-01 10:00 Europe/London') ->> 'code', 'forbidden', 'teacher of another subject cannot close');
-select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'summer'), '2026-07-01 10:00 Europe/London'), '{"ok":true,"absent":1}'::jsonb, 'close_marks_absent_and_completes: one absent');
+select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'summer'), '2026-07-01 10:00 Europe/London'), '{"ok":true,"absent":1}'::jsonb, 'close_marks_absent: one absent');
 select is((select status::text from public.attendance where exam_id = (select id from ex where name = 'summer') and student_id = (select id from c where name = 's5')), 'absent', 'unmarked paid student is absent');
-select is((select status::text from public.bookings where exam_id = (select id from ex where name = 'summer') and student_id = (select id from c where name = 's6')), 'expired', 'close expires awaiting_payment bookings');
-select is((select status::text from public.exams where id = (select id from ex where name = 'summer')), 'completed', 'exam completed');
-select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ctr where name = 'summer'), (select id from c where name = 's5'), '2026-07-01 10:05 Europe/London') ->> 'code', 'conflict', 'marking on a completed exam is a conflict');
+select is((select status::text from public.bookings where exam_id = (select id from ex where name = 'summer') and student_id = (select id from c where name = 's6')), 'awaiting_payment', 'closing a register leaves unpaid bookings to the completion job');
+select is((select status::text from public.exams where id = (select id from ex where name = 'summer')), 'published', 'closing the only register does not complete the exam');
+select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ctr where name = 'summer'), (select id from c where name = 's5'), '2026-07-01 10:05 Europe/London') ->> 'code', 'conflict', 'marking on a closed register is a conflict');
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'summer'), '2026-07-01 10:10 Europe/London') ->> 'code', 'conflict', 'closing twice is a conflict');
 select is((select count(*)::int from public.audit_log where action = 'register_closed' and target_type = 'exam_centre' and target_id = (select id from ctr where name = 'summer')), 1, 'close writes an audit row on the centre');
 

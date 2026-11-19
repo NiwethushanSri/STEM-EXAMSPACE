@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(70);
+select plan(85);
 select tests.assert_no_owner();
 
 -- Fixtures.
@@ -193,18 +193,18 @@ select is(public.mark_attendance_as((select id from c where name = 'teacher'), (
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'day_A'), now()), '{"ok":true,"absent":1}'::jsonb, 'close_register_marks_only_that_centre_absent');
 select is((select string_agg(c.name || ':' || a.status::text, ',' order by c.name) from public.attendance a join c on c.id = a.student_id
   where a.exam_id = (select id from ex where name = 'day')), 's1:late,s3:absent', 'nobody at centre B is marked');
-select is((select status::text from public.bookings where id = (select id from st where name = 'd_s5')), 'expired', 'centre A''s unpaid booking expired');
+select is((select status::text from public.bookings where id = (select id from st where name = 'd_s5')), 'awaiting_payment', 'closing centre A leaves its unpaid booking to the completion job');
 select is((select string_agg((register_closed_at is not null)::text, '/' order by room) from public.exam_centres where exam_id = (select id from ex where name = 'day')), 'true/false', 'only centre A''s register is closed');
 select is((select status::text from public.exams where id = (select id from ex where name = 'day')), 'published', 'the exam stays open while centre B''s register is open');
 select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ctr where name = 'day_A'), (select id from c where name = 's3'), now()) ->> 'code', 'conflict', 'a closed register takes no more marks');
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'day_A'), now()) ->> 'code', 'conflict', 'a register closes once');
 select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ctr where name = 'day_B'), (select id from c where name = 's2'), now()) ->> 'status', 'late', 'centre B''s register still takes marks');
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'day_B'), now()), '{"ok":true,"absent":1}'::jsonb, 'closing centre B marks its unscanned candidate absent');
-select is((select status::text from public.exams where id = (select id from ex where name = 'day')), 'completed', 'the exam completes when its last register closes');
+select is((select status::text from public.exams where id = (select id from ex where name = 'day')), 'published', 'closing the last register does not complete the exam');
 select is((select string_agg(action || '/' || target_type, ',' order by id) from public.audit_log
   where actor_id = (select id from c where name = 'teacher') and action in ('register_closed', 'exam_completed')
     and target_id in ((select id from ctr where name = 'day_A'), (select id from ctr where name = 'day_B'), (select id from ex where name = 'day'))),
-  'register_closed/exam_centre,register_closed/exam_centre,exam_completed/exam', 'each register close is audited on its centre, then the exam''s completion');
+  'register_closed/exam_centre,register_closed/exam_centre', 'each register close is audited on its centre; no completion is recorded');
 
 -- home_candidate_not_on_any_register (s1 at home, s2 at the centre, s6 unpaid at home)
 select pg_temp.book('db_s1', 'dayboth', 's1', 'paid', null);
@@ -214,7 +214,52 @@ select is(public.attendance_lookup_as((select id from c where name = 'teacher'),
 select is(public.mark_attendance_as((select id from c where name = 'teacher'), (select id from ctr where name = 'dayboth_A'), (select id from c where name = 's1'), now()) ->> 'code', 'not_booked', 'a home candidate cannot be marked');
 select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ctr where name = 'dayboth_A'), now()), '{"ok":true,"absent":1}'::jsonb, 'closing marks only the centre candidate absent');
 select is((select count(*)::int from public.attendance where exam_id = (select id from ex where name = 'dayboth') and student_id = (select id from c where name = 's1')), 0, 'the home candidate is not marked absent');
-select is((select status::text from public.bookings where id = (select id from st where name = 'db_s6')), 'expired', 'unpaid home bookings expire when the exam completes');
+select is((select status::text from public.exams where id = (select id from ex where name = 'dayboth')), 'published', 'a both exam stays published after its last centre register closes');
+
+-- complete_finished_exams: any published exam completes at its scheduled end plus 2 hours, whatever its sittings.
+-- day, dayboth, dayopen and homeonly started an hour ago and last 60 minutes, so they end now.
+select pg_temp.mk_exam('homeonly', 'online', now() - interval '1 hour');
+select pg_temp.mk_exam('dayopen', 'in_person', now() - interval '1 hour');
+select pg_temp.mk_centre('dayopen_A', 'dayopen', 'ZZ Sit Hall', 'R1', 10);
+select pg_temp.mk_exam('oldcomp', 'online', now() - interval '3 days');
+select pg_temp.mk_exam('oldcanc', 'online', now() - interval '3 days');
+update public.exams set status = 'completed' where id = (select id from ex where name = 'oldcomp');
+update public.exams set status = 'cancelled' where id = (select id from ex where name = 'oldcanc');
+select pg_temp.book('h_s1', 'homeonly', 's1', 'paid', null);
+select pg_temp.book('h_s2', 'homeonly', 's2', 'awaiting_payment', null);
+select pg_temp.book('o_s3', 'dayopen', 's3', 'paid', 'dayopen_A');
+select pg_temp.book('oc_s3', 'oldcomp', 's3', 'awaiting_payment', null);
+select pg_temp.book('ox_s4', 'oldcanc', 's4', 'awaiting_payment', null);
+select ok(not has_function_privilege('authenticated', 'public.complete_finished_exams(timestamptz)', 'execute')
+  and not has_function_privilege('anon', 'public.complete_finished_exams(timestamptz)', 'execute')
+  and has_function_privilege('service_role', 'public.complete_finished_exams(timestamptz)', 'execute'), 'complete_finished_exams: service_role only');
+select is((select schedule || ' ' || command from cron.job where jobname = 'complete-finished-exams'), '*/5 * * * * select public.complete_finished_exams()', 'the completion job runs every 5 minutes');
+
+select public.complete_finished_exams(now() + interval '2 hours' - interval '1 second');
+select is((select string_agg(x.name || ':' || e.status::text, ',' order by x.name) from ex x join public.exams e on e.id = x.id
+  where x.name in ('day', 'dayboth', 'dayopen', 'homeonly')), 'day:published,dayboth:published,dayopen:published,homeonly:published', 'nothing completes before the scheduled end plus 2 hours');
+select is((select status::text from public.bookings where id = (select id from st where name = 'db_s6')), 'awaiting_payment', 'and nothing expires');
+
+select cmp_ok(public.complete_finished_exams(now() + interval '2 hours'), '>=', 4, 'at the scheduled end plus 2 hours the job completes the finished exams');
+select is((select string_agg(x.name || ':' || e.status::text, ',' order by x.name) from ex x join public.exams e on e.id = x.id
+  where x.name in ('day', 'dayboth', 'dayopen', 'homeonly')), 'day:completed,dayboth:completed,dayopen:completed,homeonly:completed', 'a home-only exam completes, and so does a both exam');
+select is((select string_agg(st.name || ':' || b.status::text, ',' order by st.name) from public.bookings b join st on st.id = b.id
+  where st.name in ('d_s5', 'db_s6', 'h_s2', 'h_s1', 'o_s3')), 'd_s5:expired,db_s6:expired,h_s1:paid,h_s2:expired,o_s3:paid', 'unpaid bookings expire at completion; paid ones stay');
+select is((select count(*)::int from public.audit_log where action = 'booking_expired' and actor_id is null
+  and target_id in (select id from st where name in ('d_s5', 'db_s6', 'h_s2'))), 3, 'each expiry is audited by the job');
+select is((select a.status::text || '/' || coalesce(a.marked_by::text, 'job') from public.attendance a
+  where a.exam_id = (select id from ex where name = 'dayopen') and a.student_id = (select id from c where name = 's3')), 'absent/job', 'a register still open is closed: its unscanned candidate is absent');
+select is((select (register_closed_at = now() + interval '2 hours')::text from public.exam_centres where id = (select id from ctr where name = 'dayopen_A')), 'true', 'and that register is closed at the job''s time');
+select is((select count(*)::int from public.attendance where exam_id = (select id from ex where name = 'homeonly')), 0, 'home candidates are never marked');
+select is((select count(*)::int from public.audit_log where action = 'exam_completed' and target_type = 'exam' and actor_id is null
+  and target_id in (select id from ex where name in ('day', 'dayboth', 'dayopen', 'homeonly'))), 4, 'each completion is audited');
+select is((select string_agg(x.name || ':' || e.status::text, ',' order by x.name) from ex x join public.exams e on e.id = x.id
+  where x.name in ('oldcanc', 'oldcomp')), 'oldcanc:cancelled,oldcomp:completed', 'an already completed or cancelled exam is untouched');
+select is((select string_agg(st.name || ':' || b.status::text, ',' order by st.name) from public.bookings b join st on st.id = b.id
+  where st.name in ('oc_s3', 'ox_s4')), 'oc_s3:awaiting_payment,ox_s4:awaiting_payment', 'and so are its bookings');
+select public.complete_finished_exams(now() + interval '3 hours');
+select is((select count(*)::int from public.audit_log where action = 'exam_completed'
+  and target_id in (select id from ex where name in ('day', 'dayboth', 'dayopen', 'homeonly', 'oldcanc', 'oldcomp'))), 4, 'a later run completes nothing twice');
 
 select * from finish();
 rollback;

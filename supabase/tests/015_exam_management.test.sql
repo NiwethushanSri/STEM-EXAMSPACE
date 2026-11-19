@@ -30,7 +30,7 @@ grant all on st to public;
 create function pg_temp.one_centre(p_exam uuid, p_venue uuid, p_room text, p_seats int) returns jsonb
 language sql stable as $$
   select jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
-    'id', (select ec.id from public.exam_centres ec where ec.exam_id = p_exam),
+    'id', (select ec.id from public.exam_centres ec where ec.exam_id = p_exam and ec.removed_at is null),
     'venue_id', p_venue, 'room', p_room, 'seat_limit', p_seats)))
 $$;
 grant execute on function pg_temp.one_centre(uuid, uuid, text, int) to public;
@@ -287,7 +287,7 @@ select is(public.save_venue((select id from st where name = 'venue2'), 'ZZ Venue
 select is(public.save_venue((select id from st where name = 'venue2'), 'ZZ Venue 2 renamed', array['R1', 'R2', 'R3'], true) ->> 'ok', 'true', 'adding a room and renaming the venue is fine');
 -- Format switch.
 select is(public.save_exam((select id from st where name = 'y1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Y1', 'P1', 'online', '[]', now() + interval '30 days', 60, 100, now() + interval '20 days') ->> 'ok', 'true', 'published exam switches in_person to online');
-select is((select count(*)::int from public.exam_centres where exam_id = (select id from st where name = 'y1')), 0, 'the online exam has no centre');
+select is((select count(*)::int from public.exam_centres where exam_id = (select id from st where name = 'y1') and removed_at is null), 0, 'the online exam has no current centre');
 select is(public.save_exam((select id from st where name = 'y1'), (select id from subj where name = 'ZZ Maths'), 'ZZ Y1', 'P1', 'in_person', pg_temp.one_centre((select id from st where name = 'y1'), (select id from st where name = 'venue2'), 'R1', 5), now() + interval '30 days', 60, 100, now() + interval '20 days') ->> 'ok', 'true', 'and back to in_person');
 select tests.as_postgres();
 update public.venues set active = false where id = (select id from st where name = 'venue2');

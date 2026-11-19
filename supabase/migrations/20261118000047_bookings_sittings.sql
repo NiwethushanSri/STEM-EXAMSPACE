@@ -104,15 +104,16 @@ begin
   else
     -- Centre: the exam's only centre when none is given; with several, the family chooses.
     if p_centre is null then
-      if (select count(*) from public.exam_centres ec where ec.exam_id = p_exam) > 1 then
+      if (select count(*) from public.exam_centres ec where ec.exam_id = p_exam and ec.removed_at is null) > 1 then
         return jsonb_build_object('ok', false, 'code', 'choose_centre');
       end if;
-      select * into v_centre from public.exam_centres ec where ec.exam_id = p_exam for update;
+      select * into v_centre from public.exam_centres ec where ec.exam_id = p_exam and ec.removed_at is null for update;
       if not found then
         return jsonb_build_object('ok', false, 'code', 'not_bookable');
       end if;
     else
-      select * into v_centre from public.exam_centres ec where ec.id = p_centre and ec.exam_id = p_exam for update;
+      select * into v_centre from public.exam_centres ec
+        where ec.id = p_centre and ec.exam_id = p_exam and ec.removed_at is null for update;
       if not found then
         return jsonb_build_object('ok', false, 'code', 'invalid_input');
       end if;
@@ -280,12 +281,13 @@ begin
     end if;
   else
     if p_centre is null then
-      if (select count(*) from public.exam_centres ec where ec.exam_id = v_exam.id) > 1 then
+      if (select count(*) from public.exam_centres ec where ec.exam_id = v_exam.id and ec.removed_at is null) > 1 then
         return jsonb_build_object('ok', false, 'code', 'choose_centre');
       end if;
-      select * into v_centre from public.exam_centres ec where ec.exam_id = v_exam.id for update;
+      select * into v_centre from public.exam_centres ec where ec.exam_id = v_exam.id and ec.removed_at is null for update;
     else
-      select * into v_centre from public.exam_centres ec where ec.id = p_centre and ec.exam_id = v_exam.id for update;
+      select * into v_centre from public.exam_centres ec
+        where ec.id = p_centre and ec.exam_id = v_exam.id and ec.removed_at is null for update;
     end if;
     if not found then
       return jsonb_build_object('ok', false, 'code', 'invalid_input');
@@ -316,7 +318,8 @@ grant execute on function public.change_booking_sitting(uuid, public.sitting_mod
 
 -- ---------------------------------------------------------------------------------------------
 -- Registers per centre (replaces 20261110000037, 0039 and 0043). Only centre bookings at that centre are on
--- its register; home candidates are on none. Attendance stays one row per exam and student.
+-- its register; home candidates are on none; a removed centre has no register. Attendance stays one row per
+-- exam and student. Closing a register no longer completes the exam: complete_finished_exams (below) does.
 -- ---------------------------------------------------------------------------------------------
 drop function public.attendance_lookup(uuid, text);
 drop function public.attendance_lookup_as(uuid, uuid, text);
@@ -344,7 +347,7 @@ begin
   end if;
   select e.* into v_exam
   from public.exam_centres ec join public.exams e on e.id = ec.exam_id
-  where ec.id = p_centre;
+  where ec.id = p_centre and ec.removed_at is null;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -404,7 +407,7 @@ begin
   end if;
   select ec.exam_id, e.subject_id into v_exam_id, v_subject
   from public.exam_centres ec join public.exams e on e.id = ec.exam_id
-  where ec.id = p_centre;
+  where ec.id = p_centre and ec.removed_at is null;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -414,7 +417,7 @@ begin
 
   -- Same lock order as close_register: the exam, then the centre.
   select * into v_exam from public.exams e where e.id = v_exam_id for share;
-  select * into v_centre from public.exam_centres ec where ec.id = p_centre for share;
+  select * into v_centre from public.exam_centres ec where ec.id = p_centre and ec.removed_at is null for share;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -455,8 +458,8 @@ as $$
   select public.mark_attendance_as(auth.uid(), p_centre, p_student, now())
 $$;
 
--- Closing a centre's register marks its unscanned candidates absent and expires its unpaid bookings.
--- When the last open register of the exam closes, the exam is completed and its other unpaid bookings expire.
+-- Closing a centre's register only closes that centre: its unscanned candidates are marked absent. The exam
+-- stays published (home candidates may still be writing) until complete_finished_exams completes it.
 create function public.close_register_as(p_actor uuid, p_centre uuid, p_now timestamptz)
 returns jsonb
 language plpgsql
@@ -475,7 +478,7 @@ begin
   end if;
   select ec.exam_id, e.subject_id into v_exam_id, v_subject
   from public.exam_centres ec join public.exams e on e.id = ec.exam_id
-  where ec.id = p_centre;
+  where ec.id = p_centre and ec.removed_at is null;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -483,8 +486,9 @@ begin
     return jsonb_build_object('ok', false, 'code', 'forbidden');
   end if;
 
-  select * into v_exam from public.exams e where e.id = v_exam_id for update;
-  select * into v_centre from public.exam_centres ec where ec.id = p_centre for update;
+  -- The exam (shared: other centres may close at the same time), then the centre.
+  select * into v_exam from public.exams e where e.id = v_exam_id for share;
+  select * into v_centre from public.exam_centres ec where ec.id = p_centre and ec.removed_at is null for update;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -502,28 +506,9 @@ begin
     returning 1)
   select count(*) into v_absent from ins;
 
-  with expired as (
-    update public.bookings set status = 'expired'
-    where centre_id = p_centre and status = 'awaiting_payment'
-    returning id)
-  insert into public.audit_log (actor_id, action, target_type, target_id)
-  select p_actor, 'booking_expired', 'booking', id from expired;
   update public.exam_centres set register_closed_at = p_now where id = p_centre;
   insert into public.audit_log (actor_id, action, target_type, target_id)
   values (p_actor, 'register_closed', 'exam_centre', p_centre);
-
-  if not exists (
-    select 1 from public.exam_centres ec where ec.exam_id = v_exam.id and ec.register_closed_at is null) then
-    with expired as (
-      update public.bookings set status = 'expired'
-      where exam_id = v_exam.id and status = 'awaiting_payment'
-      returning id)
-    insert into public.audit_log (actor_id, action, target_type, target_id)
-    select p_actor, 'booking_expired', 'booking', id from expired;
-    update public.exams set status = 'completed' where id = v_exam.id;
-    insert into public.audit_log (actor_id, action, target_type, target_id)
-    values (p_actor, 'exam_completed', 'exam', v_exam.id);
-  end if;
   return jsonb_build_object('ok', true, 'absent', v_absent);
 end;
 $$;
@@ -544,3 +529,71 @@ revoke execute on function public.close_register(uuid) from public, anon;
 grant execute on function public.attendance_lookup(uuid, text) to authenticated;
 grant execute on function public.mark_attendance(uuid, uuid) to authenticated;
 grant execute on function public.close_register(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------------------------
+-- Exam completion on schedule: at the scheduled end plus 2 hours (when home copies stop being downloadable),
+-- any published exam is completed, whatever its sittings. The side effects are those close_register had when it
+-- completed the exam: a centre register still open is closed (its unscanned candidates are marked absent), unpaid
+-- bookings expire, and the exam becomes completed. Each step is audited with no actor (the job). Cron only.
+-- ---------------------------------------------------------------------------------------------
+create function public.complete_finished_exams(p_now timestamptz default now())
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_exam public.exams%rowtype;
+  v_open uuid[];
+  v_count int := 0;
+begin
+  if p_now is null then
+    return 0;
+  end if;
+  -- An exam busy with a booking, a mark or a close is skipped and picked up by the next run.
+  for v_exam in
+    select e.* from public.exams e
+    where e.status = 'published'
+      and e.starts_at + e.duration_minutes * interval '1 minute' + interval '2 hours' <= p_now
+    order by e.starts_at, e.id
+    for update skip locked
+  loop
+    select coalesce(array_agg(ec.id order by ec.id), '{}') into v_open
+    from public.exam_centres ec
+    where ec.exam_id = v_exam.id and ec.removed_at is null and ec.register_closed_at is null;
+    insert into public.attendance (exam_id, student_id, status, marked_by, marked_at)
+    select distinct b.exam_id, b.student_id, 'absent'::public.attendance_status, null::uuid, p_now
+    from public.bookings b
+    where b.centre_id = any (v_open) and b.sitting = 'centre'
+      and b.status in ('paid', 'cancel_requested') and b.student_id is not null
+    on conflict (exam_id, student_id) do nothing;
+    update public.exam_centres set register_closed_at = p_now where id = any (v_open);
+    insert into public.audit_log (actor_id, action, target_type, target_id)
+    select null, 'register_closed', 'exam_centre', c from unnest(v_open) c;
+
+    with expired as (
+      update public.bookings set status = 'expired'
+      where exam_id = v_exam.id and status = 'awaiting_payment'
+      returning id)
+    insert into public.audit_log (actor_id, action, target_type, target_id)
+    select null, 'booking_expired', 'booking', id from expired;
+
+    update public.exams set status = 'completed' where id = v_exam.id;
+    insert into public.audit_log (actor_id, action, target_type, target_id)
+    values (null, 'exam_completed', 'exam', v_exam.id);
+    v_count := v_count + 1;
+  end loop;
+  return v_count;
+end;
+$$;
+revoke execute on function public.complete_finished_exams(timestamptz) from public, anon, authenticated;
+grant execute on function public.complete_finished_exams(timestamptz) to service_role;
+
+do $$
+begin
+  if exists (select 1 from cron.job where jobname = 'complete-finished-exams') then
+    perform cron.unschedule('complete-finished-exams');
+  end if;
+  perform cron.schedule('complete-finished-exams', '*/5 * * * *', $job$select public.complete_finished_exams()$job$);
+end;
+$$;

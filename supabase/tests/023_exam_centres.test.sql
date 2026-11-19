@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(64);
+select plan(81);
 select tests.assert_no_owner();
 
 -- Fixtures.
@@ -28,11 +28,13 @@ insert into public.teacher_subjects values
 create temp table st (name text primary key, id uuid);
 grant all on st to public;
 insert into public.venues (name, rooms) values
-  ('ZZ Alpha Hall', array['A1', 'A2']), ('ZZ Beta Hall', array['B1', 'B2']), ('ZZ Gamma Hall', array['G1']);
+  ('ZZ Alpha Hall', array['A1', 'A2']), ('ZZ Beta Hall', array['B1', 'B2']), ('ZZ Gamma Hall', array['G1']),
+  ('ZZ Delta Hall', array['D1']);
 insert into public.venues (name, rooms) select 'ZZ Big Hall', array_agg('R' || i order by i) from generate_series(1, 21) i;
 insert into st select 'alpha', id from public.venues where name = 'ZZ Alpha Hall';
 insert into st select 'beta', id from public.venues where name = 'ZZ Beta Hall';
 insert into st select 'gamma', id from public.venues where name = 'ZZ Gamma Hall';
+insert into st select 'delta', id from public.venues where name = 'ZZ Delta Hall';
 insert into st select 'big', id from public.venues where name = 'ZZ Big Hall';
 
 -- One centre in save_exam's shape (venue by stash name).
@@ -42,11 +44,11 @@ language sql stable as $$
     'room', p_room, 'seat_limit', p_seats))
 $$;
 grant execute on function pg_temp.ctr(text, text, int, uuid) to public;
--- An exam's centre by venue and room.
+-- An exam's current (not removed) centre by venue and room.
 create function pg_temp.cid(p_exam text, p_venue text, p_room text) returns uuid
 language sql stable as $$
   select ec.id from public.exam_centres ec
-  where ec.exam_id = (select id from st where name = p_exam)
+  where ec.exam_id = (select id from st where name = p_exam) and ec.removed_at is null
     and ec.venue_id = (select id from st where name = p_venue) and ec.room = p_room
 $$;
 grant execute on function pg_temp.cid(text, text, text) to public;
@@ -133,14 +135,65 @@ select is(pg_temp.save((select id from st where name = 'two'), 'in_person', json
 select is(pg_temp.save((select id from st where name = 'two'), 'in_person', jsonb_build_array(
   pg_temp.ctr('alpha', 'A1', 2, (select id from st where name = 'two_a')), pg_temp.ctr('beta', 'B2', 5)), 'ZZ Two centres') ->> 'ok', 'true', 'a centre can be added to a published exam');
 select tests.as_postgres();
-select is((select string_agg(room, ',' order by room) from public.exam_centres where exam_id = (select id from st where name = 'two')), 'A1,B2', 'B1 removed, B2 added, A1 kept');
+select is((select string_agg(room, ',' order by room) from public.exam_centres where exam_id = (select id from st where name = 'two') and removed_at is null), 'A1,B2', 'B1 removed, B2 added, A1 kept');
 insert into st select 'two_b2', pg_temp.cid('two', 'beta', 'B2');
 select pg_temp.book('two', 's3', 'cancelled', (select id from st where name = 'two_b2'));
+
+-- Removed centres are archived: only live bookings hold a centre; a removed one is skipped everywhere.
 select tests.as_user((select id from c where name = 'admin'));
 select is(pg_temp.save((select id from st where name = 'two'), 'in_person', jsonb_build_array(
-  pg_temp.ctr('alpha', 'A1', 2, (select id from st where name = 'two_a'))), 'ZZ Two centres') ->> 'code', 'conflict', 'a centre with past bookings stays on record');
+  pg_temp.ctr('alpha', 'A1', 2, (select id from st where name = 'two_a'))), 'ZZ Two centres') ->> 'ok', 'true', 'a centre whose only booking is cancelled can be removed');
 select tests.as_postgres();
-select is((select count(*)::int from public.audit_log where action = 'exam_updated' and target_id = (select id from st where name = 'two')), 3, 'each successful published edit is audited');
+select is((select (removed_at is not null)::text from public.exam_centres where id = (select id from st where name = 'two_b2')) || '/'
+  || (select (centre_id = (select id from st where name = 'two_b2'))::text from public.bookings where exam_id = (select id from st where name = 'two') and student_id = (select id from c where name = 's3')),
+  'true/true', 'the centre is archived, and its cancelled booking keeps it on record');
+set local role anon;
+select is((select jsonb_agg(e ->> 'venue') from public.exams_public, jsonb_array_elements(centres) e where id = (select id from st where name = 'two')), '["ZZ Alpha Hall"]'::jsonb, 'the removed centre disappears from exams_public');
+select is((select seats_left from public.exams_public where id = (select id from st where name = 'two')), 0, 'and from seats_left (A1 is full; B2''s five seats are gone)');
+select tests.as_postgres();
+select is(public.booking_create_as((select id from c where name = 's4'), (select id from st where name = 'two'), (select id from c where name = 's4'), now(), null, (select id from st where name = 'two_b2')) ->> 'code', 'invalid_input', 'a removed centre cannot be booked');
+select is(public.mark_attendance_as((select id from c where name = 'admin'), (select id from st where name = 'two_b2'), (select id from c where name = 's3'), now()) ->> 'code', 'not_found', 'a removed centre has no register');
+select tests.as_user((select id from c where name = 'admin'));
+select is(public.change_booking_sitting((select id from public.bookings where exam_id = (select id from st where name = 'two') and student_id = (select id from c where name = 's2')),
+  'centre', (select id from st where name = 'two_b'), 'Move') ->> 'code', 'invalid_input', 'a removed centre is not a move target');
+select tests.as_postgres();
+select is((select count(*)::int from public.audit_log where action = 'exam_updated' and target_id = (select id from st where name = 'two')), 4, 'each successful published edit is audited');
+
+-- Re-adding a removed venue and room, then switching to online, once only past bookings remain.
+select tests.as_user((select id from c where name = 'admin'));
+insert into st select 'arch', (pg_temp.save(null, 'in_person', jsonb_build_array(pg_temp.ctr('alpha', 'A1', 5), pg_temp.ctr('beta', 'B1', 5)), 'ZZ Arch') ->> 'id')::uuid;
+select is(public.set_exam_status((select id from st where name = 'arch'), 'published') ->> 'ok', 'true', 'arch published');
+select tests.as_postgres();
+insert into st select 'arch_a', pg_temp.cid('arch', 'alpha', 'A1');
+insert into st select 'arch_b', pg_temp.cid('arch', 'beta', 'B1');
+select pg_temp.book('arch', 's1', 'cancelled', (select id from st where name = 'arch_b'));
+select pg_temp.book('arch', 's2', 'expired', (select id from st where name = 'arch_a'));
+select tests.as_user((select id from c where name = 'admin'));
+select is(pg_temp.save((select id from st where name = 'arch'), 'in_person', jsonb_build_array(
+  pg_temp.ctr('alpha', 'A1', 5, (select id from st where name = 'arch_a'))), 'ZZ Arch') ->> 'ok', 'true', 'B1 (a cancelled booking only) is removed');
+select is(pg_temp.save((select id from st where name = 'arch'), 'in_person', jsonb_build_array(
+  pg_temp.ctr('alpha', 'A1', 5, (select id from st where name = 'arch_a')), pg_temp.ctr('beta', 'B1', 5, (select id from st where name = 'arch_b'))), 'ZZ Arch') ->> 'code',
+  'invalid_input', 'a removed centre''s id cannot be saved again');
+select is(pg_temp.save((select id from st where name = 'arch'), 'in_person', jsonb_build_array(
+  pg_temp.ctr('alpha', 'A1', 5, (select id from st where name = 'arch_a')), pg_temp.ctr('beta', 'B1', 6)), 'ZZ Arch') ->> 'ok', 'true', 'the same venue and room can be added again after removal');
+select tests.as_postgres();
+select is((select string_agg((removed_at is null)::text || ':' || seat_limit::text, ',' order by removed_at nulls last) from public.exam_centres
+  where exam_id = (select id from st where name = 'arch') and room = 'B1'), 'false:5,true:6', 'as a new centre beside the archived one');
+select tests.as_user((select id from c where name = 'admin'));
+select is(pg_temp.save((select id from st where name = 'arch'), 'online', '[]', 'ZZ Arch') ->> 'ok', 'true', 'the exam switches to online: its only bookings at a centre are past ones');
+select tests.as_postgres();
+select is((select count(*) filter (where removed_at is null) || '/' || count(*) from public.exam_centres where exam_id = (select id from st where name = 'arch')), '0/3', 'every centre is archived, none deleted');
+set local role anon;
+select is((select centres::text || '/' || coalesce(seats_left::text, 'null') from public.exams_public where id = (select id from st where name = 'arch')), '[]/null', 'the home-only exam lists no centres');
+select tests.as_postgres();
+
+-- A removed centre no longer holds its venue, and publishing skips it.
+select tests.as_user((select id from c where name = 'admin'));
+insert into st select 'del', (pg_temp.save(null, 'in_person', jsonb_build_array(pg_temp.ctr('alpha', 'A2', 5), pg_temp.ctr('delta', 'D1', 5)), 'ZZ Del') ->> 'id')::uuid;
+select is(pg_temp.save((select id from st where name = 'del'), 'in_person', jsonb_build_array(pg_temp.ctr('alpha', 'A2', 5, pg_temp.cid('del', 'alpha', 'A2'))), 'ZZ Del') ->> 'ok', 'true', 'a draft drops its Delta centre');
+select is(public.save_venue((select id from st where name = 'delta'), 'ZZ Delta Hall', array['D1'], false) ->> 'ok', 'true', 'a venue used only by a removed centre can be deactivated');
+select is(public.set_exam_status((select id from st where name = 'del'), 'published') ->> 'ok', 'true', 'publishing skips the removed centre at the now inactive venue');
+select tests.as_postgres();
 
 -- Two centres can swap rooms in one save (the venue and room key is checked after all are written).
 select tests.as_user((select id from c where name = 'admin'));
@@ -169,7 +222,7 @@ select is(pg_temp.save((select id from st where name = 'both2'), 'in_person', js
 select is(pg_temp.save((select id from st where name = 'both1'), 'in_person', jsonb_build_array(pg_temp.ctr('alpha', 'A1', 5, pg_temp.cid('both1', 'alpha', 'A1'))), 'ZZ Both 1') ->> 'ok', 'true', 'both to in_person when every live booking is at the centre');
 select is(pg_temp.save((select id from st where name = 'both2'), 'online', '[]', 'ZZ Both 2') ->> 'ok', 'true', 'both to online when every live booking is at home');
 select tests.as_postgres();
-select is((select count(*)::int from public.exam_centres where exam_id = (select id from st where name = 'both2')), 0, 'the now home-only exam has no centre');
+select is((select count(*)::int from public.exam_centres where exam_id = (select id from st where name = 'both2') and removed_at is null), 0, 'the now home-only exam has no current centre');
 
 -- publish_checks_every_centre
 select tests.as_user((select id from c where name = 'admin'));

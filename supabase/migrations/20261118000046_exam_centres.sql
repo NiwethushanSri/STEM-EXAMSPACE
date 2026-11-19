@@ -2,6 +2,8 @@
 -- Replaces exams.venue_id, exams.room and exams.seat_limit. Seats are counted per centre; home sittings
 -- (next migration) have no limit. bookings.centre_id is added here because seat counts, the public view and
 -- save_exam's centre rules count bookings per centre; 20261118000047 adds bookings.sitting and its check.
+-- A centre is never deleted: removing it sets removed_at, so past bookings keep their centre. A removed centre
+-- is skipped everywhere (timetable, booking, moves, registers, publishing, venue checks, save_exam).
 
 -- ---------------------------------------------------------------------------------------------
 -- Centres.
@@ -13,9 +15,13 @@ create table public.exam_centres (
   room text not null,
   seat_limit int not null check (seat_limit between 1 and 1000),
   register_closed_at timestamptz,
+  removed_at timestamptz,
   created_at timestamptz not null default now(),
-  -- Deferrable so save_exam can swap the rooms of two centres; it checks the key before returning.
-  constraint exam_centres_exam_venue_room_key unique (exam_id, venue_id, room) deferrable initially immediate,
+  -- One centre per exam, venue and room among those not removed. An exclusion constraint because it is both
+  -- partial and deferrable (save_exam swaps rooms between centres and checks the key before returning).
+  constraint exam_centres_exam_venue_room_excl
+    exclude using btree (exam_id with =, venue_id with =, room with =) where (removed_at is null)
+    deferrable initially immediate,
   -- Target of the bookings (centre_id, exam_id) foreign key: a booking's centre belongs to its exam.
   constraint exam_centres_id_exam_key unique (id, exam_id)
 );
@@ -103,7 +109,8 @@ grant execute on function public.centre_seats_taken(uuid) to service_role;
 -- ---------------------------------------------------------------------------------------------
 -- save_exam with centres. p_centres is a JSON array of {"id"?, "venue_id", "room", "seat_limit"}: empty
 -- (or null) for a home-only exam, at least one centre otherwise. A centre with an id is updated in place;
--- one without is added; an existing centre left out is removed. Other rules as in 20261110000043.
+-- one without is added; a current centre left out is removed (archived), unless live bookings sit there.
+-- Other rules as in 20261110000043.
 -- ---------------------------------------------------------------------------------------------
 create function public.save_exam(
   p_id uuid,
@@ -224,14 +231,16 @@ begin
   into v_ids, v_venues, v_rooms, v_limits
   from jsonb_array_elements(v_centres) with ordinality as t(c, o);
   v_keep := array_remove(v_ids, null);
-  -- Seat limits in range; one centre per venue and room; each id once and one of this exam's centres.
+  -- Seat limits in range; one centre per venue and room; each id once and one of this exam's current centres.
   if exists (select 1 from unnest(v_limits) l where l not between 1 and 1000)
      or (select count(distinct t.v::text || '/' || lower(t.r)) from unnest(v_venues, v_rooms) as t(v, r)) <> v_n
      or (select count(distinct i) from unnest(v_keep) i) <> cardinality(v_keep)
      or exists (
        select 1 from unnest(v_keep) i
        where p_id is null
-          or not exists (select 1 from public.exam_centres ec where ec.id = i and ec.exam_id = p_id)) then
+          or not exists (
+            select 1 from public.exam_centres ec
+            where ec.id = i and ec.exam_id = p_id and ec.removed_at is null)) then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
   for i in 1 .. v_n loop
@@ -277,17 +286,19 @@ begin
   end if;
 
   -- Centres are locked before their seats are compared (bookings lock the exam, then the centre).
-  perform 1 from public.exam_centres ec where ec.exam_id = v_exam.id order by ec.id for update;
+  perform 1 from public.exam_centres ec
+  where ec.exam_id = v_exam.id and ec.removed_at is null order by ec.id for update;
   if exists (
     select 1 from unnest(v_ids, v_limits) as t(i, l)
     where t.i is not null and t.l < public.centre_seats_taken(t.i)) then
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end if;
-  -- A centre with bookings stays: live ones are seated there, and past ones keep it on record.
+  -- A centre with live bookings stays; past bookings do not hold it (they keep their centre_id on record).
   if exists (
     select 1 from public.exam_centres ec
     join public.bookings b on b.centre_id = ec.id
-    where ec.exam_id = v_exam.id and ec.id <> all (v_keep)) then
+    where ec.exam_id = v_exam.id and ec.removed_at is null and ec.id <> all (v_keep)
+      and b.status in ('awaiting_payment', 'paid', 'cancel_requested')) then
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end if;
   -- The new format must still offer each live booking its sitting (a home booking has no centre).
@@ -319,9 +330,10 @@ begin
     booking_deadline = p_booking_deadline
   where id = v_exam.id;
 
-  -- Remove, update in place, then add. The (exam, venue, room) key is checked once all are written.
-  set constraints public.exam_centres_exam_venue_room_key deferred;
-  delete from public.exam_centres ec where ec.exam_id = v_exam.id and ec.id <> all (v_keep);
+  -- Remove (archive), update in place, then add. The (exam, venue, room) key is checked once all are written.
+  set constraints public.exam_centres_exam_venue_room_excl deferred;
+  update public.exam_centres ec set removed_at = now()
+  where ec.exam_id = v_exam.id and ec.removed_at is null and ec.id <> all (v_keep);
   update public.exam_centres ec
   set venue_id = t.v, room = t.r, seat_limit = t.l
   from unnest(v_ids, v_venues, v_rooms, v_limits) as t(i, v, r, l)
@@ -330,7 +342,7 @@ begin
   select v_exam.id, t.v, t.r, t.l
   from unnest(v_ids, v_venues, v_rooms, v_limits) as t(i, v, r, l)
   where t.i is null;
-  set constraints public.exam_centres_exam_venue_room_key immediate;
+  set constraints public.exam_centres_exam_venue_room_excl immediate;
 
   if v_exam.status = 'published' then
     insert into public.audit_log (actor_id, action, target_type, target_id)
@@ -380,12 +392,12 @@ begin
     if v_exam.starts_at <= now() or v_exam.booking_deadline <= now() then
       return jsonb_build_object('ok', false, 'code', 'invalid_input');
     end if;
-    -- An exam offering the centre needs at least one centre, each at an active venue with its room.
+    -- An exam offering the centre needs at least one current centre, each at an active venue with its room.
     if v_exam.format <> 'online' and (
-      not exists (select 1 from public.exam_centres ec where ec.exam_id = v_exam.id)
+      not exists (select 1 from public.exam_centres ec where ec.exam_id = v_exam.id and ec.removed_at is null)
       or exists (
         select 1 from public.exam_centres ec
-        where ec.exam_id = v_exam.id
+        where ec.exam_id = v_exam.id and ec.removed_at is null
           and not exists (
             select 1 from public.venues v
             where v.id = ec.venue_id and v.active and ec.room = any (v.rooms)))) then
@@ -477,7 +489,7 @@ begin
       if exists (
         select 1 from public.exam_centres ec
         join public.exams e on e.id = ec.exam_id
-        where ec.venue_id = p_id and e.status <> 'cancelled' and e.starts_at > now()
+        where ec.venue_id = p_id and ec.removed_at is null and e.status <> 'cancelled' and e.starts_at > now()
           and (not p_active or not (ec.room = any (v_rooms)))
       ) then
         return jsonb_build_object('ok', false, 'code', 'conflict');
@@ -494,7 +506,7 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- Public timetable: each centre with its seats left (by venue name, rooms not shown). Owned by postgres
+-- Public timetable: each current centre with its seats left (by venue name, rooms not shown). Owned by postgres
 -- (bypasses RLS by design), published exams only, no personal data. Seats are counted inline because the
 -- calling role (anon) cannot execute centre_seats_taken.
 -- ---------------------------------------------------------------------------------------------
@@ -525,7 +537,7 @@ left join lateral (
         where b.centre_id = ec.id and b.status in ('awaiting_payment', 'paid', 'cancel_requested')), 0) as seats_left
     from public.exam_centres ec
     join public.venues v on v.id = ec.venue_id
-    where ec.exam_id = e.id
+    where ec.exam_id = e.id and ec.removed_at is null
   ) x
 ) c on true
 where e.status = 'published';
