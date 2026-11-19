@@ -15,6 +15,14 @@ export function serviceClient(): SupabaseClient {
   return createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), clientOptions);
 }
 
+/** A client that acts as the caller (anon key plus their Authorization header), so `auth.uid()` is the caller. */
+export function callerClient(req: Request): SupabaseClient {
+  return createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
+    ...clientOptions,
+    global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },
+  });
+}
+
 /**
  * Verifies the caller's JWT, then reads role and status from `profiles`
  * (never from JWT claims or the request body). Non-active accounts are refused unless

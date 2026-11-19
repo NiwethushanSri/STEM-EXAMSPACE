@@ -11,7 +11,9 @@ export type FunctionName =
   | "account-admin"
   | "delete-my-account"
   | "parent-child"
-  | "register-student";
+  | "register-student"
+  | "paper-register"
+  | "paper-copy";
 
 export type FunctionError = { code: ErrorCode; message: string };
 export type FunctionResult<T> = { data: T } | { error: FunctionError };
@@ -19,6 +21,8 @@ export type FunctionResult<T> = { data: T } | { error: FunctionError };
 const CODES = [
   "unauthenticated", "forbidden", "not_found", "conflict", "invalid_input",
   "parent_email_is_staff", "email_in_use", "rate_limited", "invalid_credentials", "internal",
+  "paper_missing", "paper_held", "paper_not_released", "paper_closed", "wrong_sitting",
+  "paper_unreadable", "paper_encrypted", "paper_too_large",
 ] as const satisfies readonly ErrorCode[];
 
 // Compile-time check: every ErrorCode must appear in CODES (resolves to never otherwise).
@@ -185,3 +189,70 @@ export const parentChild = <A extends ParentChildAction>(client: StemClient, act
 /** Public student sign-up. Needs no session and takes no password: the emailed link confirms the address and lets the student choose one. Always answers { ok: true }. */
 export const registerStudent = (client: StemClient, input: RegisterStudentInput) =>
   callFunction<RegisterStudentResult>(client, "register-student", input);
+
+export type RegisterExamPaperInput = {
+  examId: string;
+  kind: "paper" | "insert";
+  title?: string;
+  storagePath: string;
+  reason?: string;
+};
+export type RegisterExamPaperResult = { paperId: string; version: number; pageCount: number };
+
+/** Owner/admin: checks the uploaded PDF and registers it as the exam's paper (or an insert). */
+export const registerExamPaper = (client: StemClient, input: RegisterExamPaperInput) =>
+  callFunction<RegisterExamPaperResult>(client, "paper-register", input);
+
+export type PaperCopyInput =
+  | { bookingId: string; kind: "home" | "print_pack" | "reprint" | "admin_preview" }
+  | { bookingId: string; insertId: string };
+
+function parseFunctionError(parsed: unknown): FunctionError | null {
+  const e = (parsed as { error?: { code?: unknown; message?: unknown } } | null)?.error;
+  const code = e?.code;
+  if (typeof code !== "string" || !(CODES as readonly string[]).includes(code)) return null;
+  return {
+    code: code as ErrorCode,
+    message: typeof e?.message === "string" && e.message ? e.message : messageFor(code as ErrorCode),
+  };
+}
+
+/**
+ * Downloads a candidate's personalised paper (or an insert unchanged). Uses fetch with the session token because
+ * `functions.invoke` parses JSON. Never throws.
+ */
+export async function downloadPaperCopy(
+  client: StemClient,
+  input: PaperCopyInput,
+): Promise<{ data: { blob: Blob; fileName: string; differs: boolean } } | { error: FunctionError }> {
+  try {
+    const { data: sess } = await client.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) return fromStatus(401);
+    const { supabaseUrl, supabaseKey } = client as unknown as { supabaseUrl: string; supabaseKey: string };
+    const res = await fetch(`${supabaseUrl}/functions/v1/paper-copy`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, apikey: supabaseKey, "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) {
+      let parsed: FunctionError | null = null;
+      try {
+        parsed = parseFunctionError(await res.json());
+      } catch {
+        // body unreadable: fall back to the status below
+      }
+      return parsed ? { error: parsed } : fromStatus(res.status);
+    }
+    const named = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") ?? "");
+    return {
+      data: {
+        blob: await res.blob(),
+        fileName: named?.[1] ?? "paper.pdf",
+        differs: res.headers.get("X-Paper-Differs") === "1",
+      },
+    };
+  } catch {
+    return internal();
+  }
+}

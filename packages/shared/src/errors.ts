@@ -16,6 +16,14 @@ const messages: Record<ErrorCode, string> = {
   unauthenticated: "Please sign in again.",
   invalid_input: "Please check the details you entered.",
   internal: "Something went wrong. Please try again.",
+  paper_missing: "Your paper is not ready yet. The institution has been told.",
+  paper_held: "The paper is paused by the institution. Please wait.",
+  paper_not_released: "Your paper is not ready to download yet.",
+  paper_closed: "Downloads for this paper have closed.",
+  wrong_sitting: "Your booking is for the centre; your paper is handed out in the exam room",
+  paper_unreadable: "The paper could not be prepared. Please try again.",
+  paper_encrypted: "This PDF is password protected. Remove the password and upload it again.",
+  paper_too_large: "This PDF is larger than 40 MB. Make it smaller and upload it again.",
 };
 
 /** Fallback copy; a server-provided message takes precedence when present. */

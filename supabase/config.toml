@@ -425,3 +425,10 @@ enabled = true
 # Public sign-up endpoint: the caller has no session yet (it rate-limits by IP itself).
 [functions.register-student]
 verify_jwt = false
+
+# Admin-only upload check and the candidate's personalised paper: both need the caller's own JWT.
+[functions.paper-register]
+verify_jwt = true
+
+[functions.paper-copy]
+verify_jwt = true
