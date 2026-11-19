@@ -35,8 +35,8 @@ export const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-/** A PDF response must let the browser read these two headers (fetch hides them otherwise). */
-export const pdfExposeHeaders = "Content-Disposition, X-Paper-Differs";
+/** A PDF response must let the browser read these headers (fetch hides them otherwise). */
+export const pdfExposeHeaders = "Content-Disposition, X-Paper-Differs, X-Paper-Version";
 
 export function errorResponse(code: ErrorCode, message: string, status: number): Response {
   return new Response(JSON.stringify({ error: { code, message } }), {

@@ -32,8 +32,12 @@ Deno.test("copy_after_release_is_pdf_and_logged", async () => {
     const disp = res.headers.get("content-disposition") ?? "";
     assertEquals(disp, `attachment; filename="${fx.examCode}-${fx.indexNumber}.pdf"`);
     assertEquals(res.headers.get("x-paper-differs"), "0");
+    assertEquals(res.headers.get("x-paper-version"), "1"); // the version this copy was made from
     const expose = (res.headers.get("access-control-expose-headers") ?? "").toLowerCase();
-    assert(expose.includes("content-disposition") && expose.includes("x-paper-differs"), expose);
+    assert(
+      expose.includes("content-disposition") && expose.includes("x-paper-differs") && expose.includes("x-paper-version"),
+      expose,
+    );
     const bytes = new Uint8Array(await res.arrayBuffer());
     assertEquals(new TextDecoder().decode(bytes.slice(0, 4)), "%PDF");
     const log = await fx.svc.from("paper_downloads").select("kind, downloaded_by, paper_copies!inner(booking_id)")
@@ -80,6 +84,7 @@ Deno.test("insert_download_after_release", async () => {
     const ins = await fx.addPaper(insertBytes, "insert", 1, "Formula sheet");
     const res = await call("paper-copy", fx.student.token, { bookingId: fx.bookingId, insertId: ins.id });
     assertEquals(res.status, 200);
+    assertEquals(res.headers.get("x-paper-version"), null); // an insert is not a versioned copy
     assertEquals(new Uint8Array(await res.arrayBuffer()), insertBytes);
     const stranger = await call("paper-copy", fx.stranger.token, { bookingId: fx.bookingId, insertId: ins.id });
     assertEquals(stranger.status, 403);

@@ -54,7 +54,8 @@ function formatExamDate(iso: string): string {
   return `${get("weekday")} ${get("day")} ${get("month")} ${get("year")}`;
 }
 
-function pdfResponse(bytes: Uint8Array, fileName: string, differs: boolean): Response {
+/** `version`: the paper version a personalised copy was made from (none for an insert). */
+function pdfResponse(bytes: Uint8Array, fileName: string, differs: boolean, version?: number): Response {
   return new Response(bytes as unknown as BodyInit, {
     status: 200,
     headers: {
@@ -63,6 +64,7 @@ function pdfResponse(bytes: Uint8Array, fileName: string, differs: boolean): Res
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${fileName}"`,
       "X-Paper-Differs": differs ? "1" : "0",
+      ...(version === undefined ? {} : { "X-Paper-Version": String(version) }),
       "Cache-Control": "no-store",
     },
   });
@@ -128,6 +130,7 @@ Deno.serve(handle(async (req) => {
     index_number: string;
     exam_code: string;
     starts_at: string;
+    paper_version: number;
     differs_from_previous: boolean;
   };
   if (!issued.ok) throw refusal(issued.code);
@@ -161,5 +164,5 @@ Deno.serve(handle(async (req) => {
   if (!log.ok) throw refusal(log.code);
 
   const fileName = `${safeName(issued.exam_code, "paper")}-${safeName(issued.index_number, "candidate")}.pdf`;
-  return pdfResponse(copy, fileName, issued.differs_from_previous === true);
+  return pdfResponse(copy, fileName, issued.differs_from_previous === true, issued.paper_version);
 }));

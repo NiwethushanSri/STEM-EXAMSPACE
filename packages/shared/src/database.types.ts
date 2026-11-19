@@ -289,6 +289,58 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"paper_notices": {
+                  Row: {
+                    "created_at": string,"done_at": string | null,"exam_id": string,"failed_rounds": number,"id": number,"kind": string,"lease_until": string | null,"paper_ids": (string)[],"release_at": string | null,"retry_at": string | null,"window_until": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"done_at"?: string | null,"exam_id": string,"failed_rounds"?: number,"id"?: never,"kind": string,"lease_until"?: string | null,"paper_ids"?: (string)[],"release_at"?: string | null,"retry_at"?: string | null,"window_until": string
+                  }
+                  Update: {
+                    "created_at"?: string,"done_at"?: string | null,"exam_id"?: string,"failed_rounds"?: number,"id"?: never,"kind"?: string,"lease_until"?: string | null,"paper_ids"?: (string)[],"release_at"?: string | null,"retry_at"?: string | null,"window_until"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "paper_notices_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "paper_notices_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"paper_notices_sent": {
+                  Row: {
+                    "notice_id": number,"profile_id": string,"sent_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "notice_id": number,"profile_id": string,"sent_at"?: string
+                  }
+                  Update: {
+                    "notice_id"?: number,"profile_id"?: string,"sent_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "paper_notices_sent_notice_id_fkey"
+      columns: ["notice_id"]
+isOneToOne: false
+      referencedRelation: "paper_notices"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "paper_notices_sent_profile_id_fkey"
+      columns: ["profile_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"parent_children": {
                   Row: {
                     "parent_id": string,"student_id": string
@@ -693,6 +745,16 @@ isOneToOne: false
 "paper_copy_issue":
 { Args: { "p_booking": string,"p_kind": Database["public"]['Enums']["paper_download_kind"],"p_now"?: string }; Returns: Json
                            },
+"paper_corrected_due":
+{ Args: { "p_now"?: string }; Returns: {
+              "exam_id": string,"paper": string,"paper_ids": (string)[],"title": string
+            }[]
+                           },
+"paper_corrected_recipients":
+{ Args: { "p_paper_ids": (string)[] }; Returns: {
+              "email": string,"first_name": string,"profile_id": string
+            }[]
+                           },
 "paper_download_log":
 { Args: { "p_copy": string,"p_kind": Database["public"]['Enums']["paper_download_kind"] }; Returns: Json
                            },
@@ -711,11 +773,46 @@ isOneToOne: false
 "paper_lookup_codes":
 { Args: { "p_items": Json }; Returns: Json
                            },
+"paper_notice_finish":
+{ Args: { "p_failed": number,"p_notice": number,"p_now"?: string,"p_sent": number }; Returns: string
+                           },
+"paper_notice_mark":
+{ Args: { "p_notice": number,"p_now"?: string,"p_profile": string }; Returns: string
+                           },
+"paper_notice_next":
+{ Args: { "p_exclude"?: (number)[],"p_now"?: string }; Returns: {
+              "exam_id": string,"kind": string,"notice_id": number,"paper": string,"title": string
+            }[]
+                           },
+"paper_notice_open":
+{ Args: { "p_now"?: string }; Returns: number
+                           },
+"paper_notice_recipients":
+{ Args: { "p_notice": number }; Returns: {
+              "email": string,"first_name": string,"profile_id": string
+            }[]
+                           },
+"paper_notice_unmark":
+{ Args: { "p_notice": number,"p_profile": string }; Returns: undefined
+                           },
 "paper_release_at":
 { Args: { "p_exam": string }; Returns: string
                            },
+"paper_release_due":
+{ Args: { "p_now"?: string }; Returns: {
+              "exam_id": string,"paper": string,"title": string
+            }[]
+                           },
+"paper_release_notify_tick":
+{ Args: Record<PropertyKey, never>; Returns: undefined
+                           },
 "paper_release_now":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"paper_release_recipients":
+{ Args: { "p_exam": string }; Returns: {
+              "email": string,"first_name": string,"profile_id": string
+            }[]
                            },
 "paper_resume":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
@@ -763,7 +860,7 @@ isOneToOne: false
 { Args: { "p_action": string,"p_actor": string,"p_target": string }; Returns: string
                            },
 "set_exam_paper_settings":
-{ Args: { "p_exam": string,"p_exam_code": string,"p_release_minutes_before": number,"p_spare_pages": number }; Returns: Json
+{ Args: { "p_exam": string,"p_exam_code": string,"p_reason"?: string,"p_release_minutes_before": number,"p_spare_pages": number }; Returns: Json
                            },
 "set_exam_status":
 { Args: { "p_id": string,"p_status": Database["public"]['Enums']["exam_status"] }; Returns: Json

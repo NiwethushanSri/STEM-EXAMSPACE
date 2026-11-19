@@ -18,8 +18,9 @@
 -- ---------------------------------------------------------------------------------------------
 -- Staff actions on papers are audited with the admin's reason.
 -- ---------------------------------------------------------------------------------------------
+-- An admin's own reason is 3 to 300 characters; a settings change also records the old and new values with it.
 alter table public.audit_log add column reason text;
-alter table public.audit_log add constraint audit_log_reason_length check (reason is null or char_length(reason) <= 300);
+alter table public.audit_log add constraint audit_log_reason_length check (reason is null or char_length(reason) <= 600);
 
 -- ---------------------------------------------------------------------------------------------
 -- Exam paper settings.
@@ -430,12 +431,15 @@ revoke execute on function public.paper_exam_title(text, text) from public, anon
 -- ---------------------------------------------------------------------------------------------
 
 -- Exam code (locked once any copy of the exam exists), release minutes and spare pages. A copy keeps the spare
--- pages it was made with.
+-- pages it was made with. Changing the release minutes of a published exam needs a reason of 3 to 300 characters
+-- (moving the release earlier is in effect an early release). The audit row records the old and new values and
+-- the reason. A release moved to a time still to come is announced again at that time.
 create function public.set_exam_paper_settings(
   p_exam uuid,
   p_exam_code text,
   p_release_minutes_before int,
-  p_spare_pages int
+  p_spare_pages int,
+  p_reason text default null
 )
 returns jsonb
 language plpgsql
@@ -445,7 +449,10 @@ as $$
 declare
   v_actor uuid := auth.uid();
   v_code text := upper(btrim(coalesce(p_exam_code, '')));
+  v_reason text := nullif(btrim(coalesce(p_reason, '')), '');
   v_exam public.exams%rowtype;
+  v_minutes_changed boolean;
+  v_new_release timestamptz;
 begin
   if not exists (
     select 1 from public.profiles a
@@ -454,7 +461,8 @@ begin
   end if;
   if p_exam is null or v_code !~ '^[A-Z0-9-]{3,40}$'
      or p_release_minutes_before is null or p_release_minutes_before not between 0 and 120
-     or p_spare_pages is null or p_spare_pages not between 0 and 6 then
+     or p_spare_pages is null or p_spare_pages not between 0 and 6
+     or (v_reason is not null and char_length(v_reason) not between 3 and 300) then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
   select * into v_exam from public.exams e where e.id = p_exam for update;
@@ -464,21 +472,32 @@ begin
   if v_exam.status in ('cancelled', 'completed') then
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end if;
+  v_minutes_changed := p_release_minutes_before <> v_exam.release_minutes_before;
+  if v_minutes_changed and v_exam.status = 'published' and v_reason is null then
+    return jsonb_build_object('ok', false, 'code', 'reason_required');
+  end if;
   if v_code <> v_exam.exam_code and exists (
     select 1 from public.paper_copies c
     join public.exam_papers p on p.id = c.paper_id
     where p.exam_id = v_exam.id) then
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end if;
+  v_new_release := coalesce(v_exam.released_early_at, v_exam.starts_at - p_release_minutes_before * interval '1 minute');
   begin
     update public.exams
-    set exam_code = v_code, release_minutes_before = p_release_minutes_before, spare_pages = p_spare_pages
+    set exam_code = v_code, release_minutes_before = p_release_minutes_before, spare_pages = p_spare_pages,
+        release_notified_at = case when v_minutes_changed and v_new_release > now() then null
+                                   else release_notified_at end
     where id = v_exam.id;
   exception when unique_violation then
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end;
-  insert into public.audit_log (actor_id, action, target_type, target_id)
-  values (v_actor, 'exam_paper_settings_changed', 'exam', v_exam.id);
+  insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+  values (v_actor, 'exam_paper_settings_changed', 'exam', v_exam.id,
+    'exam code ' || v_exam.exam_code || ' -> ' || v_code
+    || '; release ' || v_exam.release_minutes_before || ' -> ' || p_release_minutes_before || ' minutes before the start'
+    || '; spare pages ' || v_exam.spare_pages || ' -> ' || p_spare_pages
+    || coalesce('; reason: ' || v_reason, ''));
   return jsonb_build_object('ok', true, 'id', v_exam.id, 'exam_code', v_code);
 end;
 $$;
@@ -970,6 +989,8 @@ begin
     'sitting', v_b.sitting,
     'status', v_status,
     'release_at', public.paper_release_at(v_e.id),
+    -- the database clock that decided the status, so a page can wait for the release without trusting the device
+    'server_now', v_now,
     'last_download', case when v_last.at is null then null
                           else jsonb_build_object('at', v_last.at, 'by_name', v_last.by_name) end,
     'corrected', v_b.sitting = 'home' and v_current is not null and v_last.paper_id is not null
@@ -1034,7 +1055,7 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- Grants: signed-in callers (every check is inside); service_role for the Edge Function tests.
 -- ---------------------------------------------------------------------------------------------
-revoke execute on function public.set_exam_paper_settings(uuid, text, int, int) from public, anon;
+revoke execute on function public.set_exam_paper_settings(uuid, text, int, int, text) from public, anon;
 revoke execute on function public.register_exam_paper(uuid, public.paper_kind, text, text, int, bigint, text) from public, anon;
 revoke execute on function public.remove_exam_insert(uuid, text) from public, anon;
 revoke execute on function public.paper_release_now(uuid, text) from public, anon;
@@ -1046,7 +1067,7 @@ revoke execute on function public.paper_insert_issue(uuid, uuid, timestamptz) fr
 revoke execute on function public.booking_paper_state(uuid, timestamptz) from public, anon;
 revoke execute on function public.paper_lookup_codes(jsonb) from public, anon;
 
-grant execute on function public.set_exam_paper_settings(uuid, text, int, int) to authenticated;
+grant execute on function public.set_exam_paper_settings(uuid, text, int, int, text) to authenticated;
 grant execute on function public.register_exam_paper(uuid, public.paper_kind, text, text, int, bigint, text) to authenticated;
 grant execute on function public.remove_exam_insert(uuid, text) to authenticated;
 grant execute on function public.paper_release_now(uuid, text) to authenticated;

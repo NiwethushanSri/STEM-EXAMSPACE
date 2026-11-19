@@ -8,6 +8,8 @@ import { inspectPaper, PaperError } from "../_shared/paper/stamp.ts";
 
 const BUCKET = "exam-papers";
 const MAX_BYTES = 20 * 1024 * 1024;
+/** register_exam_paper takes 1 to 500 pages. */
+const MAX_PAGES = 500;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const bad = (m: string) => new HttpError("invalid_input", 400, m);
 
@@ -94,6 +96,14 @@ Deno.serve(handle(async (req) => {
       );
     }
     throw new HttpError("paper_unreadable", 422, "This file could not be read as a PDF. Check it and upload it again.");
+  }
+  if (pageCount > MAX_PAGES) {
+    await discard();
+    throw new HttpError(
+      "invalid_input",
+      422,
+      `This PDF has more than ${MAX_PAGES} pages. Upload a PDF of at most ${MAX_PAGES} pages.`,
+    );
   }
 
   const { data, error } = await callerClient(req).rpc("register_exam_paper", {

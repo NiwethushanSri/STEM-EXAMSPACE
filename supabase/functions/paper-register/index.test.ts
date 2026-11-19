@@ -51,3 +51,20 @@ Deno.test("register_non_admin_forbidden", async () => {
     await fx.cleanup();
   }
 });
+
+Deno.test("register_refuses_over_500_pages_with_its_own_message", async () => {
+  const fx = await setup(24 * 60);
+  try {
+    const path = await fx.upload(await makePdf(501));
+    const res = await call("paper-register", fx.admin.token, { examId: fx.examId, kind: "paper", storagePath: path });
+    assertEquals(res.status, 422);
+    const body = await res.json();
+    assertEquals(body.error.code, "invalid_input");
+    assertEquals(body.error.message, "This PDF has more than 500 pages. Upload a PDF of at most 500 pages.");
+    assert(!(await exists(fx, path)), "the refused object is deleted");
+    const rows = await fx.svc.from("exam_papers").select("id").eq("exam_id", fx.examId);
+    assertEquals(rows.data?.length, 0);
+  } finally {
+    await fx.cleanup();
+  }
+});

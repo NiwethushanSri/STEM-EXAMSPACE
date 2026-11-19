@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(200);
+select plan(212);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -163,7 +163,7 @@ select ok((select bool_and(has_function_privilege('authenticated', f, 'execute')
     'public.booking_paper_state(uuid,timestamptz)',
     'public.paper_lookup_codes(jsonb)',
     'public.register_exam_paper(uuid,public.paper_kind,text,text,int,bigint,text)',
-    'public.set_exam_paper_settings(uuid,text,int,int)',
+    'public.set_exam_paper_settings(uuid,text,int,int,text)',
     'public.remove_exam_insert(uuid,text)',
     'public.paper_release_now(uuid,text)',
     'public.paper_hold(uuid,text)',
@@ -404,6 +404,11 @@ select is(pg_temp.res('st1') ->> 'corrected', 'false', 'not corrected before any
 select is(pg_temp.res('st1') -> 'last_download' ->> 'by_name', 'Nimal Perera', 'the last download names the parent');
 select is((pg_temp.res('st1') -> 'last_download' ->> 'at')::timestamptz, now(), 'and its time');
 select is(pg_temp.res('st1') -> 'inserts', jsonb_build_array(jsonb_build_object('id', pg_temp.pid('lv_ins'), 'title', 'Formula sheet')), 'the released insert is listed');
+select is((pg_temp.res('st1') ->> 'server_now')::timestamptz, now(), 'the paper state gives the database clock that decided it');
+select tests.as_user(pg_temp.uid('s7'));
+select is((pg_temp.state('fx', '2031-06-07 09:49:59 Europe/London') ->> 'server_now')::timestamptz, '2031-06-07 09:49:59 Europe/London'::timestamptz,
+  'server_now is the clock the status was decided with');
+select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
 -- centre_booking_gets_wrong_sitting_for_home (mixed exam: s4 at the centre, s9 at home).
@@ -529,7 +534,7 @@ select is(pg_temp.state('lv1') -> 'last_download' ->> 'by_name', 'Amara Perera',
 -- exam_code_locked_after_first_copy, and the other paper settings.
 -- ---------------------------------------------------------------------------------------------
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
-select is(public.set_exam_paper_settings(pg_temp.eid('nopaper'), ' zz-new-code ', 15, 3) ->> 'ok', 'true', 'settings save before any copy');
+select is(public.set_exam_paper_settings(pg_temp.eid('nopaper'), ' zz-new-code ', 15, 3, 'Room booked later') ->> 'ok', 'true', 'settings save before any copy');
 select is((select exam_code || '/' || release_minutes_before || '/' || spare_pages from public.exams where id = pg_temp.eid('nopaper')),
   'ZZ-NEW-CODE/15/3', 'the code is upper-cased; minutes and spare pages are saved');
 select ok((select bool_and(public.set_exam_paper_settings(pg_temp.eid('nopaper'), t.code, t.mins, t.spare) ->> 'code' = 'invalid_input')
@@ -538,8 +543,15 @@ select ok((select bool_and(public.set_exam_paper_settings(pg_temp.eid('nopaper')
 select is(public.set_exam_paper_settings(gen_random_uuid(), 'ZZ-OK', 10, 2) ->> 'code', 'not_found', 'an unknown exam');
 select is(public.set_exam_paper_settings(pg_temp.eid('nopaper'), 'ZZPAPERS-P1H-2031-06', 15, 3) ->> 'code', 'conflict', 'a code another exam uses');
 select is(public.set_exam_paper_settings(pg_temp.eid('live'), 'ZZ-OTHER', 10, 2) ->> 'code', 'conflict', 'exam_code_locked_after_first_copy');
-select is(public.set_exam_paper_settings(pg_temp.eid('live'), (select exam_code from public.exams where id = pg_temp.eid('live')), 20, 4) ->> 'ok', 'true',
-  'release minutes and spare pages still change after the first copy');
+select is(public.set_exam_paper_settings(pg_temp.eid('live'), (select exam_code from public.exams where id = pg_temp.eid('live')), 20, 4) ->> 'code', 'reason_required',
+  'changing the release minutes of a published exam needs a reason');
+select is(public.set_exam_paper_settings(pg_temp.eid('live'), (select exam_code from public.exams where id = pg_temp.eid('live')), 20, 4, ' x ') ->> 'code', 'invalid_input',
+  'a reason under 3 characters is refused');
+select is(public.set_exam_paper_settings(pg_temp.eid('live'), (select exam_code from public.exams where id = pg_temp.eid('live')), 20, 4, repeat('r', 301)) ->> 'code', 'invalid_input',
+  'a reason over 300 characters is refused');
+select is((select release_minutes_before || '/' || spare_pages from public.exams where id = pg_temp.eid('live')), '10/2', 'nothing changes when refused');
+select is(public.set_exam_paper_settings(pg_temp.eid('live'), (select exam_code from public.exams where id = pg_temp.eid('live')), 20, 4, ' Start moved for the room ') ->> 'ok', 'true',
+  'release minutes and spare pages still change after the first copy, with a reason');
 select is(public.paper_release_at(pg_temp.eid('live')), (select starts_at - interval '20 minutes' from public.exams where id = pg_temp.eid('live')), 'the release follows the new minutes');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('s1'));
 select is(public.set_exam_paper_settings(pg_temp.eid('live'), 'ZZ-OTHER', 10, 2) ->> 'code', 'forbidden', 'a family cannot change settings');
@@ -549,6 +561,30 @@ select is((pg_temp.issue('lv6', 'home') ->> 'page_count') || '/' || (pg_temp.iss
 select tests.as_postgres();
 select is((select count(*)::int from public.audit_log where action = 'exam_paper_settings_changed' and actor_id = pg_temp.uid('admin')
   and target_id in (pg_temp.eid('nopaper'), pg_temp.eid('live'))), 2, 'each settings change is audited');
+select is((select reason from public.audit_log where action = 'exam_paper_settings_changed' and target_id = pg_temp.eid('nopaper')),
+  'exam code ZZPAPERS-2031-06 -> ZZ-NEW-CODE; release 10 -> 15 minutes before the start; spare pages 2 -> 3; reason: Room booked later',
+  'the audit row records the old and new code, minutes and spare pages');
+select is((select reason from public.audit_log where action = 'exam_paper_settings_changed' and target_id = pg_temp.eid('live')),
+  'exam code ' || (select exam_code from public.exams where id = pg_temp.eid('live')) || ' -> ' || (select exam_code from public.exams where id = pg_temp.eid('live'))
+  || '; release 10 -> 20 minutes before the start; spare pages 2 -> 4; reason: Start moved for the room',
+  'with the reason when the release minutes changed');
+-- A draft exam needs no reason; a published exam needs none when the minutes stay the same.
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.set_exam_paper_settings(pg_temp.eid('live'), (select exam_code from public.exams where id = pg_temp.eid('live')), 20, 3) ->> 'ok', 'true',
+  'spare pages alone change without a reason');
+select tests.as_postgres();
+update public.exams set status = 'draft' where id = pg_temp.eid('nopaper');
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.set_exam_paper_settings(pg_temp.eid('nopaper'), 'ZZ-NEW-CODE', 30, 3) ->> 'ok', 'true', 'a draft exam changes its minutes without a reason');
+select tests.as_postgres();
+update public.exams set status = 'published' where id = pg_temp.eid('nopaper');
+-- Moving a release that was already announced to a time still to come announces it again then.
+update public.exams set release_notified_at = now() - interval '1 minute' where id = pg_temp.eid('fixed2');
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.set_exam_paper_settings(pg_temp.eid('fixed2'), (select exam_code from public.exams where id = pg_temp.eid('fixed2')), 0, 2, 'Release at the start') ->> 'ok', 'true',
+  'an admin moves a release');
+select tests.as_postgres();
+select is((select release_notified_at from public.exams where id = pg_temp.eid('fixed2')), null, 'a release moved to a time to come is announced again');
 
 -- ---------------------------------------------------------------------------------------------
 -- Inserts: released with the paper, not personalised.
