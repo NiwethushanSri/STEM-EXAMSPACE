@@ -18,34 +18,47 @@ insert into public.teacher_subjects values
 
 create temp table ex (name text primary key, id uuid not null);
 grant select on ex to public;
-create function pg_temp.mk_exam(p_name text, p_starts timestamptz, p_deadline timestamptz) returns void
+insert into public.venues (name, rooms) values ('ZZ Fix Hall', array['R1']);
+-- In-person exams get one centre with 10 seats; online exams have none.
+create function pg_temp.mk_exam(p_name text, p_starts timestamptz, p_deadline timestamptz,
+  p_format public.exam_format default 'online') returns void
 language plpgsql as $$
 begin
   with x as (
-    insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, seat_limit, price_pence,
+    insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence,
       price_confirmed, booking_deadline, status)
-    values ((select id from public.subjects where name = 'ZZ Fix A'), 'ZZ ' || p_name, 'P1', 'online', p_starts, 60,
-      10, 1000, true, p_deadline, 'published')
+    values ((select id from public.subjects where name = 'ZZ Fix A'), 'ZZ ' || p_name, 'P1', p_format, p_starts, 60,
+      1000, true, p_deadline, 'published')
     returning id)
   insert into ex select p_name, x.id from x;
+  if p_format = 'in_person' then
+    insert into public.exam_centres (exam_id, venue_id, room, seat_limit)
+    values ((select id from ex where name = p_name), (select id from public.venues where name = 'ZZ Fix Hall'), 'R1', 10);
+  end if;
 end; $$;
+create function pg_temp.centre(p_exam text) returns uuid
+language sql as $$
+  select ec.id from public.exam_centres ec where ec.exam_id = (select id from ex where name = p_exam)
+$$;
 create function pg_temp.mk_booking(p_exam text, p_student text, p_status public.booking_status) returns void
 language plpgsql as $$
 begin
-  insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence)
+  insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
   values ((select id from ex where name = p_exam), (select id from c where name = p_student),
-    (select id from c where name = p_student), p_status, 1000);
+    (select id from c where name = p_student), p_status, 1000,
+    case when pg_temp.centre(p_exam) is null then 'home'::public.sitting_mode else 'centre'::public.sitting_mode end,
+    pg_temp.centre(p_exam));
 end; $$;
 
--- close_register with a deleted student and expired leftovers.
-select pg_temp.mk_exam('live', now() - interval '1 hour', now() - interval '1 day');
+-- close_register with a deleted student and expired leftovers (the exam's register is its single centre's).
+select pg_temp.mk_exam('live', now() - interval '1 hour', now() - interval '1 day', 'in_person');
 select pg_temp.mk_booking('live', 's1', 'paid');
 select pg_temp.mk_booking('live', 's2', 'paid');
 select pg_temp.mk_booking('live', 's3', 'awaiting_payment');
 select pg_temp.mk_booking('live', 's4', 'awaiting_payment');
 delete from auth.users where id = (select id from c where name = 's2');
 select is((select count(*)::int from public.bookings where exam_id = (select id from ex where name = 'live') and student_id is null), 1, 'deleted student leaves a null-student booking');
-select is(public.close_register_as((select id from c where name = 'teacher'), (select id from ex where name = 'live'), now()), '{"ok":true,"absent":1}'::jsonb, 'close_register succeeds despite a null-student booking');
+select is(public.close_register_as((select id from c where name = 'teacher'), pg_temp.centre('live'), now()), '{"ok":true,"absent":1}'::jsonb, 'close_register succeeds despite a null-student booking');
 select is((select status::text from public.exams where id = (select id from ex where name = 'live')), 'completed', 'exam completed');
 select is((select count(*)::int from public.attendance where exam_id = (select id from ex where name = 'live') and student_id is null), 0, 'no attendance row with a null student');
 select is((select count(*)::int from public.attendance where exam_id = (select id from ex where name = 'live')), 1, 'only the live student is absent');
@@ -61,20 +74,20 @@ grant select on cur to public;
 insert into cur select e.title, e.subject_id, e.starts_at, e.booking_deadline from public.exams e where e.id in (select id from ex);
 
 select tests.as_user((select id from c where name = 'admin'));
-select is(public.save_exam((select id from ex where name = 'future'), (select subject from cur where name = 'ZZ future'), 'ZZ future', 'P1', 'online', null, null,
-  (select starts from cur where name = 'ZZ future'), 60, 10, 1000, now() - interval '1 hour') ->> 'code', 'conflict', 'deadline moved into the past is a conflict');
-select is(public.save_exam((select id from ex where name = 'future'), (select subject from cur where name = 'ZZ future'), 'ZZ future', 'P1', 'online', null, null,
-  (select starts from cur where name = 'ZZ future'), 60, 10, 1000, now() + interval '6 days') ->> 'ok', 'true', 'deadline moved to the future saves');
-select is(public.save_exam((select id from ex where name = 'pastdl'), (select subject from cur where name = 'ZZ pastdl'), 'ZZ pastdl renamed', 'P1', 'online', null, null,
-  (select starts from cur where name = 'ZZ pastdl'), 60, 10, 1000, (select dl from cur where name = 'ZZ pastdl')) ->> 'ok', 'true', 'unchanged past deadline still saves with other edits');
-select is(public.save_exam((select id from ex where name = 'pastdl'), (select subject from cur where name = 'ZZ pastdl'), 'ZZ pastdl renamed', 'P1', 'online', null, null,
-  (select starts from cur where name = 'ZZ pastdl'), 60, 10, 1000, now() - interval '2 hours') ->> 'code', 'conflict', 'changing a past deadline to another past time is a conflict');
-select is(public.save_exam((select id from ex where name = 'started'), (select subject from cur where name = 'ZZ started'), 'ZZ started', 'P1', 'online', null, null,
-  (select starts from cur where name = 'ZZ started') + interval '1 day', 60, 10, 1000, (select dl from cur where name = 'ZZ started')) ->> 'code', 'conflict', 'started exam: start change is a conflict');
-select is(public.save_exam((select id from ex where name = 'started'), (select subject from cur where name = 'ZZ started'), 'ZZ started', 'P1', 'online', null, null,
-  (select starts from cur where name = 'ZZ started'), 60, 10, 1000, now() - interval '3 hours') ->> 'code', 'conflict', 'started exam: deadline change is a conflict');
-select is(public.save_exam((select id from ex where name = 'started'), (select subject from cur where name = 'ZZ started'), 'ZZ started edited', 'P1', 'online', null, null,
-  (select starts from cur where name = 'ZZ started'), 60, 10, 1000, (select dl from cur where name = 'ZZ started')) ->> 'ok', 'true', 'started exam: unchanged dates still save');
+select is(public.save_exam((select id from ex where name = 'future'), (select subject from cur where name = 'ZZ future'), 'ZZ future', 'P1', 'online', '[]',
+  (select starts from cur where name = 'ZZ future'), 60, 1000, now() - interval '1 hour') ->> 'code', 'conflict', 'deadline moved into the past is a conflict');
+select is(public.save_exam((select id from ex where name = 'future'), (select subject from cur where name = 'ZZ future'), 'ZZ future', 'P1', 'online', '[]',
+  (select starts from cur where name = 'ZZ future'), 60, 1000, now() + interval '6 days') ->> 'ok', 'true', 'deadline moved to the future saves');
+select is(public.save_exam((select id from ex where name = 'pastdl'), (select subject from cur where name = 'ZZ pastdl'), 'ZZ pastdl renamed', 'P1', 'online', '[]',
+  (select starts from cur where name = 'ZZ pastdl'), 60, 1000, (select dl from cur where name = 'ZZ pastdl')) ->> 'ok', 'true', 'unchanged past deadline still saves with other edits');
+select is(public.save_exam((select id from ex where name = 'pastdl'), (select subject from cur where name = 'ZZ pastdl'), 'ZZ pastdl renamed', 'P1', 'online', '[]',
+  (select starts from cur where name = 'ZZ pastdl'), 60, 1000, now() - interval '2 hours') ->> 'code', 'conflict', 'changing a past deadline to another past time is a conflict');
+select is(public.save_exam((select id from ex where name = 'started'), (select subject from cur where name = 'ZZ started'), 'ZZ started', 'P1', 'online', '[]',
+  (select starts from cur where name = 'ZZ started') + interval '1 day', 60, 1000, (select dl from cur where name = 'ZZ started')) ->> 'code', 'conflict', 'started exam: start change is a conflict');
+select is(public.save_exam((select id from ex where name = 'started'), (select subject from cur where name = 'ZZ started'), 'ZZ started', 'P1', 'online', '[]',
+  (select starts from cur where name = 'ZZ started'), 60, 1000, now() - interval '3 hours') ->> 'code', 'conflict', 'started exam: deadline change is a conflict');
+select is(public.save_exam((select id from ex where name = 'started'), (select subject from cur where name = 'ZZ started'), 'ZZ started edited', 'P1', 'online', '[]',
+  (select starts from cur where name = 'ZZ started'), 60, 1000, (select dl from cur where name = 'ZZ started')) ->> 'ok', 'true', 'started exam: unchanged dates still save');
 select tests.as_postgres();
 select is((select count(*)::int from public.audit_log where action = 'exam_updated' and target_id = (select id from ex where name = 'future')), 1, 'successful published edit is audited');
 

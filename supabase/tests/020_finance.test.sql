@@ -25,10 +25,10 @@ create function pg_temp.mk_exam(p_name text, p_price int, p_starts timestamptz, 
 language plpgsql as $$
 begin
   with x as (
-    insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, seat_limit, price_pence,
+    insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence,
       price_confirmed, booking_deadline, status)
     values ((select id from public.subjects where name = 'ZZ Finance'), 'ZZ Fin ' || p_name, 'P1', 'online', p_starts, 60,
-      20, p_price, true, p_deadline, 'published')
+      p_price, true, p_deadline, 'published')
     returning id)
   insert into ex select p_name, x.id from x;
 end; $$;
@@ -37,9 +37,9 @@ create function pg_temp.mk_booking(p_key text, p_exam text, p_student text, p_st
 language plpgsql as $$
 begin
   with x as (
-    insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, refunded_pence, paid_at, refund_due)
+    insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, refunded_pence, paid_at, refund_due, sitting)
     values ((select id from ex where name = p_exam), (select id from c where name = p_student),
-      (select id from c where name = p_student), p_status, p_amount, p_refunded, p_paid_at, p_due)
+      (select id from c where name = p_student), p_status, p_amount, p_refunded, p_paid_at, p_due, 'home')
     returning id)
   insert into bk select p_key, x.id from x;
 end; $$;
@@ -108,9 +108,9 @@ select ok(not has_function_privilege('anon', 'public.money_totals(date,date)', '
 select ok(has_function_privilege('authenticated', 'public.money_totals(date,date)', 'execute'), 'authenticated can execute money_totals');
 
 -- 4. paid_at trigger: set on insert as paid, on admin_add_booking(paid) and on mark_booking_paid; never cleared.
-insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence)
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting)
   values ((select id from ex where name = 'A'), (select id from c where name = 's4'),
-          (select id from c where name = 's4'), 'paid', 2000);
+          (select id from c where name = 's4'), 'paid', 2000, 'home');
 select is((select paid_at from public.bookings where exam_id = (select id from ex where name = 'A') and student_id = (select id from c where name = 's4')), now(), 'a booking inserted as paid gets paid_at');
 select pg_temp.mk_exam('F', 1000, now() + interval '20 days', now() + interval '10 days');
 select pg_temp.mk_exam('G', 1000, now() + interval '20 days', now() + interval '10 days');

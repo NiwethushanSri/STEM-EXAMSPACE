@@ -23,30 +23,42 @@ grant all on st to public;
 create temp table ex (name text primary key, id uuid not null);
 grant select on ex to public;
 
+insert into public.venues (name, rooms) values ('ZZ BookingsFix Hall', array['R1']);
+-- In-person exams get one centre with 10 seats; online exams have none.
 create function pg_temp.mk_exam(p_name text, p_price int, p_deadline timestamptz, p_starts timestamptz,
-  p_status public.exam_status default 'published') returns void
+  p_status public.exam_status default 'published', p_format public.exam_format default 'online') returns void
 language plpgsql as $$
 begin
   with x as (
-    insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, seat_limit, price_pence,
+    insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence,
       price_confirmed, booking_deadline, status)
-    values ((select id from public.subjects where name = 'ZZ BookingsFix'), 'ZZ ' || p_name, 'P1', 'online', p_starts, 60,
-      10, p_price, true, p_deadline, p_status)
+    values ((select id from public.subjects where name = 'ZZ BookingsFix'), 'ZZ ' || p_name, 'P1', p_format, p_starts, 60,
+      p_price, true, p_deadline, p_status)
     returning id)
   insert into ex select p_name, x.id from x;
+  if p_format = 'in_person' then
+    insert into public.exam_centres (exam_id, venue_id, room, seat_limit)
+    values ((select id from ex where name = p_name), (select id from public.venues where name = 'ZZ BookingsFix Hall'), 'R1', 10);
+  end if;
 end; $$;
+create function pg_temp.centre(p_exam text) returns uuid
+language sql as $$
+  select ec.id from public.exam_centres ec where ec.exam_id = (select id from ex where name = p_exam)
+$$;
 create function pg_temp.mk_booking(p_key text, p_exam text, p_student text, p_status public.booking_status, p_amount int, p_refunded int default 0) returns void
 language plpgsql as $$
 begin
   with x as (
-    insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, refunded_pence)
+    insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, refunded_pence, sitting, centre_id)
     values ((select id from ex where name = p_exam), (select id from c where name = p_student),
-      (select id from c where name = p_student), p_status, p_amount, p_refunded)
+      (select id from c where name = p_student), p_status, p_amount, p_refunded,
+      case when pg_temp.centre(p_exam) is null then 'home'::public.sitting_mode else 'centre'::public.sitting_mode end,
+      pg_temp.centre(p_exam))
     returning id)
   insert into st select p_key, x.id from x;
 end; $$;
 
-select pg_temp.mk_exam('m1', 1000, now() + interval '10 days', now() + interval '20 days');
+select pg_temp.mk_exam('m1', 1000, now() + interval '10 days', now() + interval '20 days', 'published', 'in_person');
 select pg_temp.mk_exam('m2', 1000, now() + interval '10 days', now() + interval '20 days');
 select pg_temp.mk_exam('m3', 1000, now() + interval '10 days', now() + interval '20 days');
 select pg_temp.mk_exam('m4', 1000, now() + interval '10 days', now() + interval '20 days');
@@ -81,7 +93,7 @@ select is(public.create_booking((select id from ex where name = 'm4'), (select i
 select is(public.request_cancellation((select id from st where name = 'u1')) ->> 'ok', 'true', 'own unpaid booking cancelled at once');
 select tests.as_postgres();
 select is((select status::text from public.bookings where id = (select id from st where name = 'u1')), 'cancelled', 'unpaid booking is cancelled, not cancel_requested');
-select is(public.seats_taken((select id from ex where name = 'm1')), 0, 'seat released immediately');
+select is(public.centre_seats_taken(pg_temp.centre('m1')), 0, 'seat released immediately');
 select is((select count(*)::int from public.audit_log where action = 'booking_cancelled_by_owner' and target_id = (select id from st where name = 'u1')), 1, 'immediate cancel audited');
 select tests.as_user((select id from c where name = 's1'));
 insert into st select 'u4', (public.create_booking((select id from ex where name = 'm4'), (select id from c where name = 's1')) ->> 'id')::uuid;
