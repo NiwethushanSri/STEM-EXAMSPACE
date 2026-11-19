@@ -1,18 +1,19 @@
 // Emails the families of home bookings when their exam's paper is released, and once when a paper they downloaded
-// is replaced. The database chooses what is due and who gets it (paper_release_due and friends, all bounded by a
-// 6-hour window).
+// is replaced. The database decides everything (migration 049): which notices are due, who each one is for, who
+// has already been emailed, and when a notice is retried or given up. This function only sends.
 //
 // Rules:
 // - Without EMAIL_PROVIDER nothing is sent and nothing is marked, so turning email on later cannot announce old
 //   releases.
-// - An exam (or paper version) is claimed, by setting its notified column, before sending so overlapping runs
-//   cannot send twice. Sending is at most MAX_PARALLEL at a time, paced to stay under the provider's rate limit.
-// - If nothing was sent (every attempt failed, for example a missing key, or the time ran out first) the claim is
-//   rolled back so the next tick retries, but only while the row still holds this run's own claim value (a
-//   reschedule or a newer run may have replaced it). A partial send is not retried: at-most-once per family.
-// - No new send starts after BUDGET_MS; the unsent rest is left unsent (at-most-once) rather than overrunning the
-//   function's time limit.
-// Logs hold counts and error codes only, never an address or a name.
+// - paper_notice_open opens a notice for each release or replacement that is due. paper_notice_next hands out one
+//   notice at a time, leased to this run, so overlapping runs never work the same notice.
+// - Each recipient is marked (paper_notice_mark) before the email is sent, and unmarked again if the send fails:
+//   at most one email per person and notice, and a failed one can be tried again by a later run.
+// - No new send starts after BUDGET_MS. Whoever is left is emailed by the next run (every minute), so a large exam
+//   takes several runs instead of losing its remainder.
+// - paper_notice_finish ends the run's work on a notice: done when nobody is left; when every send of the run
+//   failed (for example a missing key or the provider down) it waits 15 minutes, and gives up after 3 such runs.
+// Logs hold counts, states and error codes only, never an address or a name.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { errorResponse, jsonResponse } from "../_shared/errors.ts";
 
@@ -23,20 +24,24 @@ export const PACE_MS = 1000;
 export const BUDGET_MS = 100_000;
 
 export interface Recipient {
+  profile_id: string;
   email: string;
   first_name: string | null;
 }
+/** What paper_notice_finish decided. */
+export type NoticeState = "done" | "continue" | "retry" | "gave_up" | "unknown";
 export interface Outcome {
   exam_id: string;
   attempted: number;
   sent: number;
   failed: number;
-  /** Distinct addresses to email. */
+  /** People this notice still had to reach when this run took it. */
   total: number;
-  /** Left unsent because the time budget ran out. */
+  /** Left for a later run (time ran out, a mark failed, or the notice was stopped). */
   unsent: number;
-  /** True when every attempt failed and the claim was rolled back for a retry. */
+  /** True when every attempt failed: the notice waits before it is tried again. */
   retry: boolean;
+  state: NoticeState;
 }
 
 export interface Deps {
@@ -45,6 +50,14 @@ export interface Deps {
   send: (to: string, template: "paper_released" | "paper_corrected", data: Record<string, string>) => Promise<boolean>;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+}
+
+interface Notice {
+  notice_id: number;
+  kind: "released" | "corrected";
+  exam_id: string;
+  title: string;
+  paper: string | null;
 }
 
 /** Compares without leaking where the first difference is. */
@@ -63,6 +76,8 @@ export function label(title: string, paper: string | null): string {
   const p = (paper ?? "").trim();
   return p && !title.toLowerCase().includes(p.toLowerCase()) ? `${title} ${p}` : title;
 }
+
+const STATES: readonly NoticeState[] = ["done", "continue", "retry", "gave_up"];
 
 export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
   return async (req) => {
@@ -84,12 +99,10 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     const svc = deps.svc();
     let failures = 0;
 
-    /** Sends to each distinct address, MAX_PARALLEL at a time, paced; stops starting sends when out of time. */
-    async function sendAll(
-      recipients: Recipient[],
-      template: "paper_released" | "paper_corrected",
-      exam: string,
-    ): Promise<Omit<Outcome, "exam_id" | "retry">> {
+    /** Marks, sends and (on failure) unmarks each distinct address, MAX_PARALLEL at a time, paced. */
+    async function sendAll(n: Notice, recipients: Recipient[]): Promise<Omit<Outcome, "exam_id" | "retry" | "state">> {
+      const template = n.kind === "released" ? "paper_released" : "paper_corrected";
+      const exam = label(n.title, n.paper);
       const seen = new Set<string>();
       const queue = recipients.filter((r) => {
         const k = r.email.toLowerCase();
@@ -97,10 +110,21 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
         seen.add(k);
         return true;
       });
-      let next = 0, attempted = 0, sent = 0, failed = 0;
+      let next = 0, attempted = 0, sent = 0, failed = 0, stopped = false;
       const worker = async () => {
-        while (next < queue.length && !outOfTime()) {
+        while (next < queue.length && !stopped && !outOfTime()) {
           const r = queue[next++];
+          const mark = await svc.rpc("paper_notice_mark", { p_notice: n.notice_id, p_profile: r.profile_id });
+          if (mark.error) {
+            console.error(`[paper-release-notify] mark failed code=${mark.error.code ?? "unknown"}`);
+            failures++;
+            continue; // never send without a mark; a later run tries again
+          }
+          if (mark.data === "stopped") {
+            stopped = true;
+            break;
+          }
+          if (mark.data !== "ok") continue; // already emailed
           attempted++;
           let ok = false;
           try {
@@ -109,7 +133,11 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
             ok = false;
           }
           if (ok) sent++;
-          else failed++;
+          else {
+            failed++;
+            const un = await svc.rpc("paper_notice_unmark", { p_notice: n.notice_id, p_profile: r.profile_id });
+            if (un.error) failures++;
+          }
           if (next < queue.length) await deps.sleep(PACE_MS);
         }
       };
@@ -117,84 +145,50 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
       return { total: queue.length, attempted, sent, failed, unsent: queue.length - attempted };
     }
 
-    const logOutcome = (kind: string, o: Outcome) =>
+    const opened = await svc.rpc("paper_notice_open");
+    if (opened.error) {
+      console.error(`[paper-release-notify] open failed code=${opened.error.code ?? "unknown"}`);
+      failures++;
+    }
+
+    const worked: number[] = [];
+    while (!outOfTime()) {
+      const next = await svc.rpc("paper_notice_next", { p_exclude: worked });
+      if (next.error) {
+        console.error(`[paper-release-notify] next failed code=${next.error.code ?? "unknown"}`);
+        failures++;
+        break;
+      }
+      const n = ((next.data ?? []) as Notice[])[0];
+      if (!n) break;
+      worked.push(n.notice_id);
+
+      const who = await svc.rpc("paper_notice_recipients", { p_notice: n.notice_id });
+      let r: Omit<Outcome, "exam_id" | "retry" | "state">;
+      if (who.error) {
+        // Nothing was tried: the lease is released and the next run tries again (no failure is counted).
+        console.error(`[paper-release-notify] recipients failed code=${who.error.code ?? "unknown"}`);
+        failures++;
+        r = { total: 0, attempted: 0, sent: 0, failed: 0, unsent: 0 };
+      } else {
+        r = await sendAll(n, (who.data ?? []) as Recipient[]);
+      }
+
+      const fin = await svc.rpc("paper_notice_finish", { p_notice: n.notice_id, p_sent: r.sent, p_failed: r.failed });
+      if (fin.error) {
+        console.error(`[paper-release-notify] finish failed code=${fin.error.code ?? "unknown"}`);
+        failures++;
+      }
+      const state: NoticeState = STATES.includes(fin.data as NoticeState) ? fin.data as NoticeState : "unknown";
+      const o: Outcome = { exam_id: n.exam_id, ...r, retry: state === "retry", state };
+      (n.kind === "released" ? released : corrected).push(o);
       console.log(
-        `[paper-release-notify] ${kind} attempted=${o.attempted} sent=${o.sent} failed=${o.failed} unsent=${o.unsent} retry=${o.retry}`,
+        `[paper-release-notify] ${n.kind} attempted=${o.attempted} sent=${o.sent} failed=${o.failed} unsent=${o.unsent} state=${o.state}`,
       );
-
-    const due = await svc.rpc("paper_release_due");
-    if (due.error) {
-      console.error(`[paper-release-notify] due lookup failed code=${due.error.code ?? "unknown"}`);
-      failures++;
-    }
-    for (const e of (due.data ?? []) as { exam_id: string; title: string; paper: string | null }[]) {
-      if (outOfTime()) break;
-      const claimedAt = new Date(deps.now()).toISOString();
-      const claim = await svc.from("exams").update({ release_notified_at: claimedAt })
-        .eq("id", e.exam_id).is("release_notified_at", null).eq("release_held", false).select("id");
-      if (claim.error || !claim.data?.length) {
-        if (claim.error) failures++;
-        continue;
-      }
-      const who = await svc.rpc("paper_release_recipients", { p_exam: e.exam_id });
-      let r: Omit<Outcome, "exam_id" | "retry">;
-      if (who.error) {
-        console.error(`[paper-release-notify] recipients failed code=${who.error.code ?? "unknown"}`);
-        failures++;
-        r = { total: 1, attempted: 1, sent: 0, failed: 1, unsent: 0 }; // roll back and retry
-      } else {
-        r = await sendAll((who.data ?? []) as Recipient[], "paper_released", label(e.title, e.paper));
-      }
-      const retry = r.sent === 0 && r.total > 0;
-      if (retry) {
-        const back = await svc.from("exams").update({ release_notified_at: null }).eq("id", e.exam_id)
-          .eq("release_notified_at", claimedAt);
-        if (back.error) failures++;
-      }
-      const o = { exam_id: e.exam_id, ...r, retry };
-      released.push(o);
-      logOutcome("released", o);
-    }
-
-    const fixed = await svc.rpc("paper_corrected_due");
-    if (fixed.error) {
-      console.error(`[paper-release-notify] corrected lookup failed code=${fixed.error.code ?? "unknown"}`);
-      failures++;
-    }
-    for (
-      const e of (fixed.data ?? []) as { exam_id: string; title: string; paper: string | null; paper_ids: string[] }[]
-    ) {
-      if (outOfTime()) break;
-      const claimedAt = new Date(deps.now()).toISOString();
-      const claim = await svc.from("exam_papers").update({ corrected_notified_at: claimedAt })
-        .in("id", e.paper_ids).is("corrected_notified_at", null).select("id");
-      if (claim.error || !claim.data?.length) {
-        if (claim.error) failures++;
-        continue;
-      }
-      const ids = claim.data.map((p) => p.id as string);
-      const who = await svc.rpc("paper_corrected_recipients", { p_paper_ids: ids });
-      let r: Omit<Outcome, "exam_id" | "retry">;
-      if (who.error) {
-        console.error(`[paper-release-notify] recipients failed code=${who.error.code ?? "unknown"}`);
-        failures++;
-        r = { total: 1, attempted: 1, sent: 0, failed: 1, unsent: 0 };
-      } else {
-        r = await sendAll((who.data ?? []) as Recipient[], "paper_corrected", label(e.title, e.paper));
-      }
-      const retry = r.sent === 0 && r.total > 0;
-      if (retry) {
-        const back = await svc.from("exam_papers").update({ corrected_notified_at: null }).in("id", ids)
-          .eq("corrected_notified_at", claimedAt);
-        if (back.error) failures++;
-      }
-      const o = { exam_id: e.exam_id, ...r, retry };
-      corrected.push(o);
-      logOutcome("corrected", o);
     }
 
     console.log(
-      `[paper-release-notify] released_exams=${released.length} corrected_exams=${corrected.length} failures=${failures}`,
+      `[paper-release-notify] opened=${opened.data ?? 0} released_notices=${released.length} corrected_notices=${corrected.length} failures=${failures}`,
     );
     return jsonResponse({ released, corrected });
   };
