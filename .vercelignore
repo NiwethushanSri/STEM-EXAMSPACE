@@ -9,6 +9,7 @@ supabase/.temp/
 supabase/.branches/
 **/node_modules/
 **/.next/
+**/.next-e2e/
 apps/web/e2e/
 apps/web/test-results/
 apps/web/playwright-report/

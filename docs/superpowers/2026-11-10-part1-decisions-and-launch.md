@@ -109,7 +109,7 @@ Decisions taken on the owner's behalf (cost if wrong):
 - Booking notes are visible to the family (the note box says so).
 
 Launch checklist additions:
-L10. Confirm both scheduled jobs exist on the live project after the clean rebuild: `expire-unpaid-bookings` (every 5 minutes) and the nightly unconfirmed sign-up clean-up.
+L10. Confirm all four scheduled jobs exist on the live project after the clean rebuild and after the Phase 1A deploy: `expire-unconfirmed-signups` (the nightly unconfirmed sign-up clean-up), `expire-unpaid-bookings` (every 5 minutes), `complete-finished-exams` (every 5 minutes) and `paper-release-notify` (every minute).
 L11. Stripe (Part 2 stage 6) is not built yet: the owner creates a Stripe account (test mode first) and sets `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` as function secrets; webhook endpoint `<SUPABASE_URL>/functions/v1/stripe-webhook`. Live mode only after this checklist.
 L12. The dev `paid_at` backfill is an estimate; the clean rebuild (L2) removes it.
 L13. Release emails (paper ready, corrected paper) need three settings on the live project before they can be relied on: the function secret `CRON_SECRET` (a long random value, for example 32 random bytes), and the Vault secrets `paper_notify_url` (the address of the `paper-release-notify` function) and `cron_secret` (the same value as `CRON_SECRET`). Email must also be on (`EMAIL_PROVIDER`, with `RESEND_API_KEY` and `EMAIL_FROM` for Resend). With any of these missing the `paper-release-notify` job does nothing, and with email off the function sends and marks nothing; it only looks back 6 hours, so turning email on later never announces old releases.
