@@ -63,14 +63,14 @@ isOneToOne: false
                   ]
                 },"audit_log": {
                   Row: {
-                    "action": string,"actor_id": string | null,"created_at": string,"id": number,"target_id": string | null,"target_type": string | null
+                    "action": string,"actor_id": string | null,"created_at": string,"id": number,"reason": string | null,"target_id": string | null,"target_type": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "action": string,"actor_id"?: string | null,"created_at"?: string,"id"?: never,"target_id"?: string | null,"target_type"?: string | null
+                    "action": string,"actor_id"?: string | null,"created_at"?: string,"id"?: never,"reason"?: string | null,"target_id"?: string | null,"target_type"?: string | null
                   }
                   Update: {
-                    "action"?: string,"actor_id"?: string | null,"created_at"?: string,"id"?: never,"target_id"?: string | null,"target_type"?: string | null
+                    "action"?: string,"actor_id"?: string | null,"created_at"?: string,"id"?: never,"reason"?: string | null,"target_id"?: string | null,"target_type"?: string | null
                   }
                   Relationships: [
                     
@@ -151,16 +151,48 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
-                },"exams": {
+                },"exam_papers": {
                   Row: {
-                    "booking_deadline": string,"created_at": string,"created_by": string | null,"currency": string,"duration_minutes": number,"format": Database["public"]['Enums']["exam_format"],"id": string,"paper": string,"price_confirmed": boolean,"price_pence": number,"starts_at": string,"status": Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at": string
+                    "byte_size": number,"corrected_notified_at": string | null,"exam_id": string,"id": string,"kind": Database["public"]['Enums']["paper_kind"],"page_count": number,"replace_reason": string | null,"storage_path": string,"superseded_at": string | null,"title": string,"uploaded_at": string,"uploaded_by": string | null,"version": number
                   }
                   ComputedFields: never
                   Insert: {
-                    "booking_deadline": string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes": number,"format": Database["public"]['Enums']["exam_format"],"id"?: string,"paper": string,"price_confirmed"?: boolean,"price_pence": number,"starts_at": string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at"?: string
+                    "byte_size": number,"corrected_notified_at"?: string | null,"exam_id": string,"id"?: string,"kind": Database["public"]['Enums']["paper_kind"],"page_count": number,"replace_reason"?: string | null,"storage_path": string,"superseded_at"?: string | null,"title": string,"uploaded_at"?: string,"uploaded_by"?: string | null,"version": number
                   }
                   Update: {
-                    "booking_deadline"?: string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes"?: number,"format"?: Database["public"]['Enums']["exam_format"],"id"?: string,"paper"?: string,"price_confirmed"?: boolean,"price_pence"?: number,"starts_at"?: string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id"?: number,"title"?: string,"updated_at"?: string
+                    "byte_size"?: number,"corrected_notified_at"?: string | null,"exam_id"?: string,"id"?: string,"kind"?: Database["public"]['Enums']["paper_kind"],"page_count"?: number,"replace_reason"?: string | null,"storage_path"?: string,"superseded_at"?: string | null,"title"?: string,"uploaded_at"?: string,"uploaded_by"?: string | null,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "exam_papers_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_papers_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_papers_uploaded_by_fkey"
+      columns: ["uploaded_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"exams": {
+                  Row: {
+                    "booking_deadline": string,"created_at": string,"created_by": string | null,"currency": string,"duration_minutes": number,"exam_code": string,"format": Database["public"]['Enums']["exam_format"],"id": string,"paper": string,"price_confirmed": boolean,"price_pence": number,"release_held": boolean,"release_minutes_before": number,"release_notified_at": string | null,"released_early_at": string | null,"spare_pages": number,"starts_at": string,"status": Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "booking_deadline": string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes": number,"exam_code": string,"format": Database["public"]['Enums']["exam_format"],"id"?: string,"paper": string,"price_confirmed"?: boolean,"price_pence": number,"release_held"?: boolean,"release_minutes_before"?: number,"release_notified_at"?: string | null,"released_early_at"?: string | null,"spare_pages"?: number,"starts_at": string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at"?: string
+                  }
+                  Update: {
+                    "booking_deadline"?: string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes"?: number,"exam_code"?: string,"format"?: Database["public"]['Enums']["exam_format"],"id"?: string,"paper"?: string,"price_confirmed"?: boolean,"price_pence"?: number,"release_held"?: boolean,"release_minutes_before"?: number,"release_notified_at"?: string | null,"released_early_at"?: string | null,"spare_pages"?: number,"starts_at"?: string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id"?: number,"title"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -204,6 +236,58 @@ isOneToOne: false
                   }
                   Relationships: [
                     
+                  ]
+                },"paper_copies": {
+                  Row: {
+                    "booking_id": string,"code": string,"created_at": string,"id": string,"page_count": number,"paper_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "booking_id": string,"code": string,"created_at"?: string,"id"?: string,"page_count": number,"paper_id": string
+                  }
+                  Update: {
+                    "booking_id"?: string,"code"?: string,"created_at"?: string,"id"?: string,"page_count"?: number,"paper_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "paper_copies_booking_id_fkey"
+      columns: ["booking_id"]
+isOneToOne: false
+      referencedRelation: "bookings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "paper_copies_paper_id_fkey"
+      columns: ["paper_id"]
+isOneToOne: false
+      referencedRelation: "exam_papers"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"paper_downloads": {
+                  Row: {
+                    "at": string,"copy_id": string,"downloaded_by": string | null,"id": number,"kind": Database["public"]['Enums']["paper_download_kind"]
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "at"?: string,"copy_id": string,"downloaded_by"?: string | null,"id"?: never,"kind": Database["public"]['Enums']["paper_download_kind"]
+                  }
+                  Update: {
+                    "at"?: string,"copy_id"?: string,"downloaded_by"?: string | null,"id"?: never,"kind"?: Database["public"]['Enums']["paper_download_kind"]
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "paper_downloads_copy_id_fkey"
+      columns: ["copy_id"]
+isOneToOne: false
+      referencedRelation: "paper_copies"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "paper_downloads_downloaded_by_fkey"
+      columns: ["downloaded_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
                   ]
                 },"parent_children": {
                   Row: {
@@ -480,6 +564,9 @@ isOneToOne: false
 "booking_create_core":
 { Args: { "p_by": string,"p_centre": string,"p_enforce_deadline": boolean,"p_exam": string,"p_note": string,"p_now": string,"p_paid": boolean,"p_sitting": Database["public"]['Enums']["sitting_mode"],"p_student": string }; Returns: Json
                            },
+"booking_paper_state":
+{ Args: { "p_booking": string,"p_now"?: string }; Returns: Json
+                           },
 "can_manage_account":
 { Args: { "p_action": string,"p_actor": string,"p_target": string }; Returns: string
                            },
@@ -513,6 +600,12 @@ isOneToOne: false
 "complete_profile":
 { Args: { "p_gender": string,"p_parent_phone": string,"p_photo_path"?: string,"p_subject_ids": (number)[],"p_year_group": string }; Returns: undefined
                            },
+"copy_code_new":
+{ Args: Record<PropertyKey, never>; Returns: string
+                           },
+"copy_code_valid":
+{ Args: { "p_code": string }; Returns: boolean
+                           },
 "create_booking":
 { Args: { "p_centre"?: string,"p_exam": string,"p_sitting"?: Database["public"]['Enums']["sitting_mode"],"p_student": string }; Returns: Json
                            },
@@ -530,6 +623,12 @@ isOneToOne: false
                            },
 "edit_parent_email_tx":
 { Args: { "p_actor": string,"p_email": string,"p_target": string }; Returns: string
+                           },
+"exam_code_base":
+{ Args: { "p_paper": string,"p_starts_at": string,"p_subject": number }; Returns: string
+                           },
+"exam_code_generate":
+{ Args: { "p_paper": string,"p_self": string,"p_starts_at": string,"p_subject": number }; Returns: string
                            },
 "expire_unconfirmed":
 { Args: { "p_now"?: string }; Returns: number
@@ -585,14 +684,59 @@ isOneToOne: false
 "normalise_index":
 { Args: { "p_raw": string }; Returns: string
                            },
+"paper_access_code":
+{ Args: { "p_actor": string,"p_booking": Omit<Database["public"]['Tables']["bookings"]['Row'], Database["public"]['Tables']["bookings"]['ComputedFields']>,"p_exam": Omit<Database["public"]['Tables']["exams"]['Row'], Database["public"]['Tables']["exams"]['ComputedFields']>,"p_kind": Database["public"]['Enums']["paper_download_kind"],"p_now": string }; Returns: string
+                           },
+"paper_clock":
+{ Args: { "p_now": string }; Returns: string
+                           },
+"paper_copy_issue":
+{ Args: { "p_booking": string,"p_kind": Database["public"]['Enums']["paper_download_kind"],"p_now"?: string }; Returns: Json
+                           },
+"paper_download_log":
+{ Args: { "p_copy": string,"p_kind": Database["public"]['Enums']["paper_download_kind"] }; Returns: Json
+                           },
+"paper_exam_title":
+{ Args: { "p_paper": string,"p_title": string }; Returns: string
+                           },
+"paper_hold":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"paper_home_downloads_last_hour":
+{ Args: { "p_booking": string,"p_now": string }; Returns: number
+                           },
+"paper_insert_issue":
+{ Args: { "p_booking": string,"p_insert": string,"p_now"?: string }; Returns: Json
+                           },
+"paper_lookup_codes":
+{ Args: { "p_items": Json }; Returns: Json
+                           },
+"paper_release_at":
+{ Args: { "p_exam": string }; Returns: string
+                           },
+"paper_release_now":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"paper_resume":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"paper_window_code":
+{ Args: { "p_exam": Omit<Database["public"]['Tables']["exams"]['Row'], Database["public"]['Tables']["exams"]['ComputedFields']>,"p_now": string }; Returns: string
+                           },
 "purge_student_residue":
 { Args: { "p_user": string }; Returns: undefined
                            },
 "register_child_tx":
 { Args: { "p_child": string,"p_parent": string }; Returns: boolean
                            },
+"register_exam_paper":
+{ Args: { "p_byte_size": number,"p_exam": string,"p_kind": Database["public"]['Enums']["paper_kind"],"p_page_count": number,"p_reason": string,"p_storage_path": string,"p_title": string }; Returns: Json
+                           },
 "reject_student_tx":
 { Args: { "p_actor": string,"p_student": string }; Returns: string
+                           },
+"remove_exam_insert":
+{ Args: { "p_paper": string,"p_reason": string }; Returns: Json
                            },
 "remove_staff_tx":
 { Args: { "p_actor": string,"p_target": string }; Returns: string
@@ -618,12 +762,15 @@ isOneToOne: false
 "set_account_status_tx":
 { Args: { "p_action": string,"p_actor": string,"p_target": string }; Returns: string
                            },
+"set_exam_paper_settings":
+{ Args: { "p_exam": string,"p_exam_code": string,"p_release_minutes_before": number,"p_spare_pages": number }; Returns: Json
+                           },
 "set_exam_status":
 { Args: { "p_id": string,"p_status": Database["public"]['Enums']["exam_status"] }; Returns: Json
                            }
           }
           Enums: {
-            "account_status": "unconfirmed"|"pending"|"profile_incomplete"|"active"|"suspended","app_role": "owner"|"admin"|"teacher"|"tutor"|"corrector"|"student"|"parent","attendance_status": "present"|"late"|"absent","booking_status": "awaiting_payment"|"paid"|"cancel_requested"|"refunded"|"part_refunded"|"cancelled"|"expired","exam_format": "in_person"|"online"|"both","exam_status": "draft"|"published"|"cancelled"|"completed","sitting_mode": "centre"|"home","subject_kind": "school"|"entrance"
+            "account_status": "unconfirmed"|"pending"|"profile_incomplete"|"active"|"suspended","app_role": "owner"|"admin"|"teacher"|"tutor"|"corrector"|"student"|"parent","attendance_status": "present"|"late"|"absent","booking_status": "awaiting_payment"|"paid"|"cancel_requested"|"refunded"|"part_refunded"|"cancelled"|"expired","exam_format": "in_person"|"online"|"both","exam_status": "draft"|"published"|"cancelled"|"completed","paper_download_kind": "home"|"print_pack"|"reprint"|"admin_preview","paper_kind": "paper"|"insert","sitting_mode": "centre"|"home","subject_kind": "school"|"entrance"
           }
           CompositeTypes: {
             [_ in never]: never
@@ -743,7 +890,7 @@ export const Constants = {
           }
         },"public": {
           Enums: {
-            "account_status": ["unconfirmed", "pending", "profile_incomplete", "active", "suspended"],"app_role": ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"],"attendance_status": ["present", "late", "absent"],"booking_status": ["awaiting_payment", "paid", "cancel_requested", "refunded", "part_refunded", "cancelled", "expired"],"exam_format": ["in_person", "online", "both"],"exam_status": ["draft", "published", "cancelled", "completed"],"sitting_mode": ["centre", "home"],"subject_kind": ["school", "entrance"]
+            "account_status": ["unconfirmed", "pending", "profile_incomplete", "active", "suspended"],"app_role": ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"],"attendance_status": ["present", "late", "absent"],"booking_status": ["awaiting_payment", "paid", "cancel_requested", "refunded", "part_refunded", "cancelled", "expired"],"exam_format": ["in_person", "online", "both"],"exam_status": ["draft", "published", "cancelled", "completed"],"paper_download_kind": ["home", "print_pack", "reprint", "admin_preview"],"paper_kind": ["paper", "insert"],"sitting_mode": ["centre", "home"],"subject_kind": ["school", "entrance"]
           }
         }
 } as const
