@@ -85,7 +85,10 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
           <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{notice.message}</div>
         ))}
 
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <Link href="/admin/exams/scan-check" className="rounded border border-slate-300 px-4 py-2 text-sm font-medium hover:bg-slate-50">
+          Check a scan
+        </Link>
         <button
           type="button"
           disabled={noSubjects}

@@ -23,6 +23,9 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
         <Link href="/admin/exams" className="text-sm text-blue-700 underline">
           Back to exams
         </Link>
+        <Link href="/admin/exams/scan-check" className="ml-4 text-sm text-blue-700 underline">
+          Check a scan
+        </Link>
         <h2 className="mt-2 text-lg font-semibold text-slate-900">
           {v.exam.title}
           {v.exam.paper ? ` (${v.exam.paper})` : ""}
