@@ -40,6 +40,10 @@ export type ExamRow = {
   bookingClosed: boolean;
   /** Any booking at all, so the screen can say why a price is locked. */
   hasBookings: boolean;
+  /** Admin screens only: the exam has a current question paper. Teachers never see papers, so this is false for them. */
+  hasPaper: boolean;
+  /** When families can first download the paper (admin screens only; a teacher row repeats the start time). */
+  releaseAt: string;
 };
 
 type Embedded<T> = T | T[] | null;
@@ -57,6 +61,8 @@ type ExamQueryRow = {
   price_confirmed?: boolean;
   booking_deadline: string;
   status: ExamStatus;
+  release_minutes_before?: number;
+  released_early_at?: string | null;
   subject: Embedded<{ name: string }>;
   centres: Embedded<CentreQueryRow>[] | null;
 };
@@ -146,7 +152,7 @@ export function centresOf(e: { centres: Embedded<CentreQueryRow>[] | null }): Ce
     .sort((a, b) => (one(a.venue)?.name ?? "").localeCompare(one(b.venue)?.name ?? "") || a.room.localeCompare(b.room) || a.id.localeCompare(b.id));
 }
 
-function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[], names: Map<string, string> = new Map()): ExamRow[] {
+function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[], names: Map<string, string> = new Map(), withPaper: Set<string> = new Set()): ExamRow[] {
   const byExam = new Map<string, BookingQueryRow[]>();
   for (const b of bookings) byExam.set(b.exam_id, [...(byExam.get(b.exam_id) ?? []), b]);
   return exams.map((e) => {
@@ -189,6 +195,9 @@ function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[], names: Map<s
         : [],
       bookingClosed: e.status === "published" && isClosed({ booking_deadline: e.booking_deadline, starts_at: e.starts_at }, new Date()),
       hasBookings: bs.length > 0,
+      hasPaper: withPaper.has(e.id),
+      releaseAt:
+        e.released_early_at ?? new Date(Date.parse(e.starts_at) - (e.release_minutes_before ?? 0) * 60_000).toISOString(),
     };
   });
 }
@@ -206,9 +215,56 @@ export async function loadVenues(): Promise<VenueOption[]> {
 }
 
 const ADMIN_COLUMNS =
-  "id, title, paper, subject_id, format, starts_at, duration_minutes, price_pence, price_confirmed, booking_deadline, status, subject:subjects(name), centres:exam_centres(id, venue_id, room, seat_limit, removed_at, created_at, venue:venues(name))";
+  "id, title, paper, subject_id, format, starts_at, duration_minutes, price_pence, price_confirmed, booking_deadline, status, release_minutes_before, released_early_at, subject:subjects(name), centres:exam_centres(id, venue_id, room, seat_limit, removed_at, created_at, venue:venues(name))";
 const TEACHER_COLUMNS =
   "id, title, paper, subject_id, format, starts_at, duration_minutes, booking_deadline, status, subject:subjects(name), centres:exam_centres(id, venue_id, room, seat_limit, removed_at, created_at, venue:venues(name))";
+
+/** The ids (of these exams) that have a current question paper. */
+async function loadExamsWithPaper(examIds: string[]): Promise<Set<string>> {
+  const supabase = await createClient();
+  const out = new Set<string>();
+  for (const ids of chunk(examIds, ID_BATCH)) {
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("exam_papers")
+        .select("exam_id")
+        .in("exam_id", ids)
+        .eq("kind", "paper")
+        .is("superseded_at", null)
+        .order("id", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error("papers could not be loaded");
+      for (const r of data ?? []) out.add(r.exam_id);
+      if ((data ?? []).length < PAGE) break;
+    }
+  }
+  return out;
+}
+
+/** Published exams that are still to start and have no question paper yet (the admin home page decides which are close to release). */
+export async function loadExamsMissingPaper(): Promise<{ id: string; title: string; paper: string; startsAt: string; releaseAt: string }[]> {
+  await requireStaff(["admin", "owner"]);
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("exams")
+    .select("id, title, paper, starts_at, release_minutes_before, released_early_at")
+    .eq("status", "published")
+    .gt("starts_at", new Date().toISOString())
+    .order("starts_at", { ascending: true })
+    .limit(EXAM_CAP);
+  if (error) throw new Error("exams could not be loaded");
+  const rows = data ?? [];
+  const withPaper = await loadExamsWithPaper(rows.map((r) => r.id));
+  return rows
+    .filter((r) => !withPaper.has(r.id))
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      paper: r.paper,
+      startsAt: r.starts_at,
+      releaseAt: r.released_early_at ?? new Date(Date.parse(r.starts_at) - r.release_minutes_before * 60_000).toISOString(),
+    }));
+}
 
 /** The admin exams screen: every exam, its seats and money, plus the subjects and venues the form needs. */
 export async function loadAdminExams() {
@@ -222,13 +278,14 @@ export async function loadAdminExams() {
   if (error) throw new Error("exams could not be loaded");
   const exams = (data ?? []) as unknown as ExamQueryRow[];
   const cancelledIds = exams.filter((e) => e.status === "cancelled").map((e) => e.id);
-  const [bookings, names, subjects, venues] = await Promise.all([
+  const [bookings, names, subjects, venues, withPaper] = await Promise.all([
     loadBookings(exams.map((e) => e.id)),
     loadRefundNames(cancelledIds),
     loadSubjects(),
     loadVenues(),
+    loadExamsWithPaper(exams.map((e) => e.id)),
   ]);
-  return { exams: toRows(exams, bookings, names), subjects, venues, capped: exams.length >= EXAM_CAP };
+  return { exams: toRows(exams, bookings, names, withPaper), subjects, venues, capped: exams.length >= EXAM_CAP };
 }
 
 /**

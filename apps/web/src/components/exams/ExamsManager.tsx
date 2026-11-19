@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
 import { ExamForm } from "@/components/exams/ExamForm";
@@ -8,6 +9,7 @@ import { saveExamAction, setExamStatusAction, type ExamActionResult } from "@/ap
 import type { ExamRow, SubjectOption, VenueOption } from "@/lib/exams-staff";
 import { SITTING_LABEL } from "@/lib/exam-form";
 import { formatLondon, formatPence } from "@/lib/money";
+import { missingPaperWarning } from "@/lib/print-pack";
 
 const STATUS_TONE = { draft: "slate", published: "green", cancelled: "red", completed: "blue" } as const;
 const STATUS_LABEL = { draft: "Draft", published: "Published", cancelled: "Cancelled", completed: "Completed" } as const;
@@ -160,6 +162,7 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
                     key={e.id}
                     e={e}
                     busy={busy}
+                    nowMs={nowMs}
                     onEdit={() => {
                       setFormError(null);
                       setNotice(null);
@@ -206,12 +209,14 @@ export function ExamsManager({ exams, subjects, venues, capped }: { exams: ExamR
 function ExamTableRow({
   e,
   busy,
+  nowMs,
   onEdit,
   onPublish,
   onCancel,
 }: {
   e: ExamRow;
   busy: boolean;
+  nowMs: number;
   onEdit: () => void;
   onPublish: () => void;
   onCancel: () => void;
@@ -245,6 +250,7 @@ function ExamTableRow({
             <Badge tone={STATUS_TONE[e.status]}>{STATUS_LABEL[e.status]}</Badge>
             {e.bookingClosed && <Badge tone="amber">Booking closed</Badge>}
             {e.status === "draft" && !e.priceConfirmed && <Badge tone="amber">Price not confirmed</Badge>}
+            {missingPaperWarning(e, new Date(nowMs)) && <Badge tone="amber">No paper uploaded</Badge>}
           </div>
         </td>
         <td className="py-2.5 pr-4 whitespace-nowrap">{e.status === "cancelled" ? "Released" : e.homeBooked > 0 ? `${e.seatsSold} (${e.homeBooked} at home)` : e.seatsSold}</td>
@@ -252,6 +258,9 @@ function ExamTableRow({
         <td className="py-2.5 pr-4 whitespace-nowrap">{money(e.moneyPence)}</td>
         <td className="py-2.5">
           <div className="flex flex-wrap gap-2">
+            <Link href={`/admin/exams/${e.id}`} className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50">
+              Paper and print
+            </Link>
             {canEdit && (
               <button type="button" onClick={onEdit} disabled={busy} className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50 disabled:opacity-60">
                 Edit
