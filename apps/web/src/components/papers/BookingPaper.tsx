@@ -92,7 +92,7 @@ export function BookingPaper({ bookingId, label }: { bookingId: string; label: s
       {line && <p data-testid="paper-downloaded" aria-live="polite" className="text-slate-600">{line}</p>}
       {msg.action === "download" && (
         <div>
-          <button type="button" disabled={busy !== null} aria-label={`${state.corrected ? "Download corrected paper" : line ? "Download paper again" : "Download paper"} for ${label}`} onClick={() => download("home", { bookingId, kind: "home" })} className={BUTTON}>
+          <button type="button" disabled={busy !== null} aria-label={`${state.corrected ? "Download corrected paper" : line ? "Download again" : "Download paper"} for ${label}`} onClick={() => download("home", { bookingId, kind: "home" })} className={BUTTON}>
             {busy === "home" ? "Preparing your paper..." : state.corrected ? "Download corrected paper" : line ? "Download again" : "Download paper"}
           </button>
           {error?.key === "home" && <p role="alert" className="mt-1 text-sm text-red-700">{error.message}</p>}

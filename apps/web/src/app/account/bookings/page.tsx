@@ -24,6 +24,8 @@ type Row = {
     | {
         id: string;
         status: string;
+        title: string;
+        paper: string;
         starts_at: string;
         duration_minutes: number;
         subject: { name: string } | { name: string }[] | null;
@@ -45,7 +47,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
   const { data, error } = await supabase
     .from("bookings")
     .select(
-      "id, status, amount_pence, student_id, created_at, sitting, centre:exam_centres(venue:venues(name)), exam:exams(id, status, starts_at, duration_minutes, subject:subjects(name))",
+      "id, status, amount_pence, student_id, created_at, sitting, centre:exam_centres(venue:venues(name)), exam:exams(id, status, title, paper, starts_at, duration_minutes, subject:subjects(name))",
     )
     .order("created_at", { ascending: false });
   const rows = (data ?? []) as unknown as Row[];
@@ -88,7 +90,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
           <div className="text-slate-600">This exam is no longer on the timetable.</div>
         )}
         <div className="text-slate-600">{formatPence(r.amount_pence)}</div>
-        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && <BookingPaper bookingId={r.id} label={me.role === "parent" ? `${subject}, ${names.get(r.student_id) ?? "your child"}` : subject} />}
+        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && <BookingPaper bookingId={r.id} label={[r.exam.title || subject, r.exam.paper, me.role === "parent" ? (names.get(r.student_id) ?? "your child") : ""].filter(Boolean).join(", ")} />}
         {future && r.status === "awaiting_payment" && <CancelButton bookingId={r.id} paid={false} />}
         {future && r.status === "paid" && <CancelButton bookingId={r.id} paid />}
       </li>

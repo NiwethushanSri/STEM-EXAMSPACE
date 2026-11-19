@@ -50,13 +50,13 @@ async function pdf(pages: number, label: string): Promise<Buffer> {
   return Buffer.from(await doc.save());
 }
 
-async function makeExam(title: string, starts: Date, format: "online" | "in_person", releaseMinutes = 10): Promise<string> {
+async function makeExam(title: string, starts: Date, format: "online" | "in_person", releaseMinutes = 10, paper = "Paper 1"): Promise<string> {
   const { data, error } = await svc()
     .from("exams")
     .insert({
       subject_id: subjectId,
       title: `${tag} ${title}`,
-      paper: "Paper 1",
+      paper,
       format,
       starts_at: starts.toISOString(),
       duration_minutes: 90,
@@ -171,7 +171,7 @@ test("home_candidate_downloads_after_release", async ({ page }) => {
   expect(download.suggestedFilename()).toMatch(/\.pdf$/);
   await expect(paper.getByTestId("paper-downloaded")).toHaveText(/^Downloaded at \d{2}:\d{2} by Cora Tester$/);
   // The button is back to normal and offers a second download.
-  await expect(paper.getByRole("button", { name: /^Download paper again for / })).toBeEnabled();
+  await expect(paper.getByRole("button", { name: /^Download again for / })).toBeEnabled();
 
   // A held release stops the download and says so.
   await svc().from("exams").update({ release_held: true }).eq("id", openExam);
@@ -229,6 +229,30 @@ test("before_release_shows_ready_time", async ({ page }) => {
   await expect(rows.nth(0).getByTestId("paper-message")).toHaveText(readyText(SUMMER));
   await expect(rows.nth(1).getByTestId("paper-message")).toHaveText(readyText(WINTER));
   await expect(page.getByRole("button", { name: /Download/ })).toHaveCount(0);
+});
+
+test("same_subject_bookings_have_different_accessible_names", async ({ page }) => {
+  // Same subject, same title, different paper, same child: the labels must still differ.
+  const p1 = await makeExam("Maths", new Date(Date.now() + 60 * MIN), "online", 120, "Paper 1");
+  const p2 = await makeExam("Maths", new Date(Date.now() + 90 * MIN), "online", 120, "Paper 2");
+  await registerPaper(p1, "paper", await pdf(1, "One"));
+  await registerPaper(p2, "paper", await pdf(1, "Two"));
+  const child = await createAccount({ status: "active", firstName: "Dee" });
+  const parent = await createAccount({ role: "parent", firstName: "Pru" });
+  const { error } = await svc().from("parent_children").insert({ parent_id: parent.id, student_id: child.id });
+  if (error) throw new Error(`link failed: ${error.message}`);
+  await book(p1, child, "home");
+  await book(p2, child, "home");
+  await signIn(page, parent);
+  await page.goto("/account/bookings");
+  const buttons = page.getByRole("button", { name: /^Download paper for / });
+  await expect(buttons).toHaveCount(2);
+  const names = await buttons.evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")));
+  expect(new Set(names).size).toBe(2);
+  expect(names.join("|")).toContain("Paper 1");
+  expect(names.join("|")).toContain("Paper 2");
+  expect(names.every((n) => n?.endsWith("Dee Tester"))).toBe(true);
+  await expect(page.locator("section[aria-label^='Paper for ']")).toHaveCount(2);
 });
 
 test("centre_booking_shows_exam_room_message", async ({ page }) => {
