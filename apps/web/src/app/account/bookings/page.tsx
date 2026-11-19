@@ -6,6 +6,7 @@ import { CancelButton } from "@/components/bookings/CancelButton";
 import { Frame } from "@/components/bookings/Frame";
 import { STATUS_LABEL, STATUS_TONE, type BookingStatus } from "@/components/bookings/status";
 import { Badge } from "@/components/AppShell";
+import { BookingPaper } from "@/components/papers/BookingPaper";
 import { SITTING_MODE_LABEL } from "@/lib/exam-form";
 import { formatLondon, formatPence } from "@/lib/money";
 import { createClient, getSessionProfile } from "@/lib/supabase/server";
@@ -87,6 +88,7 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
           <div className="text-slate-600">This exam is no longer on the timetable.</div>
         )}
         <div className="text-slate-600">{formatPence(r.amount_pence)}</div>
+        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && <BookingPaper bookingId={r.id} />}
         {future && r.status === "awaiting_payment" && <CancelButton bookingId={r.id} paid={false} />}
         {future && r.status === "paid" && <CancelButton bookingId={r.id} paid />}
       </li>
