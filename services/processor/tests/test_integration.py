@@ -171,3 +171,43 @@ def test_home_pdf_is_prepared_matched_and_received(rest):
         assert (script["state"], script["version"]) == ("verified", 1)
     finally:
         cleanup(rest, exam_id)
+
+
+def test_discarded_draft_file_is_removed_after_an_hour(rest):
+    """A family took a photo out of a draft: an hour after the discard the server deletes its object and marks the
+    upload purged; one discarded a minute ago is kept for now."""
+    tag = uuid.uuid4().hex[:8].upper()
+    starts = datetime.now(timezone.utc) - timedelta(hours=3)
+    subject = rest.insert("subjects", {"name": f"ZZ Processor {tag}", "kind": "school"})
+    exam = rest.insert("exams", {
+        "subject_id": subject["id"], "title": TITLE, "paper": "Paper 1", "format": "online",
+        "starts_at": starts.isoformat(), "duration_minutes": 90, "price_pence": 0, "price_confirmed": True,
+        "booking_deadline": starts.isoformat(), "status": "published", "exam_code": f"ZZP{tag}"})
+    exam_id = exam["id"]
+    try:
+        booking = rest.insert("bookings", {"exam_id": exam_id, "status": "paid", "amount_pence": 0, "sitting": "home"})
+        draft = rest.insert("home_submissions", {"booking_id": booking["id"], "seq": 1})
+        uploads = {}
+        for name, discarded_at in (("old", "2000-01-01T00:00:00Z"), ("new", datetime.now(timezone.utc).isoformat())):
+            upload_id = str(uuid.uuid4())
+            path = f"home/{booking['id']}/{upload_id}.jpg"
+            r = rest.http.post(f"/storage/v1/object/script-uploads/{path}", content=b"photo",
+                               headers={"Content-Type": "image/jpeg"})
+            assert r.status_code == 200, f"store upload: HTTP {r.status_code}"
+            rest.insert("script_uploads", {
+                "id": upload_id, "exam_id": exam_id, "booking_id": booking["id"], "submission_id": draft["id"],
+                "kind": "home_photo", "position": 1, "storage_path": path, "mime": "image/jpeg", "byte_size": 5,
+                "state": "discarded", "discarded_at": discarded_at, "uploaded_by": str(uuid.uuid4())})
+            uploads[name] = (upload_id, path)
+
+        with supa.Client.from_env() as client:
+            assert main.cleanup(client) >= 1
+
+        old_id, old_path = uploads["old"]
+        new_id, new_path = uploads["new"]
+        assert rest.select("script_uploads", id=f"eq.{old_id}")[0]["purged_at"]
+        assert rest.http.get(f"/storage/v1/object/script-uploads/{old_path}").status_code >= 400
+        assert rest.select("script_uploads", id=f"eq.{new_id}")[0]["purged_at"] is None
+        assert rest.http.get(f"/storage/v1/object/script-uploads/{new_path}").status_code == 200
+    finally:
+        cleanup(rest, exam_id)

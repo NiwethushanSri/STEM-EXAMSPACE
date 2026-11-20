@@ -59,6 +59,15 @@ class Client:
         return self.rpc("processing_job_finish",
                         {"p_job": job_id, "p_worker": worker, "p_attempt": attempt, "p_ok": ok, "p_error": error})
 
+    def discarded_take(self, limit: int) -> list[dict]:
+        """Up to `limit` uploads a family discarded from a draft more than an hour ago and not yet purged, as
+        [{id, storage_path}] (script_discarded_take). They were never handed in."""
+        return self.rpc("script_discarded_take", {"p_limit": limit}) or []
+
+    def mark_purged(self, upload_ids: list[str]) -> None:
+        """Records that these discarded uploads' objects are deleted (script_upload_purged)."""
+        self.rpc("script_upload_purged", {"p_ids": upload_ids})
+
     # Storage --------------------------------------------------------------------------------------------
 
     def download(self, bucket: str, path: str) -> bytes:
@@ -71,6 +80,11 @@ class Client:
         r = self._http.post(f"/storage/v1/object/{bucket}/{quote(path)}", content=data,
                             headers={"Content-Type": content_type, "x-upsert": "true"})
         _check(r, "upload")
+
+    def remove(self, bucket: str, paths: list[str]) -> None:
+        """Deletes these objects in one request (an object already gone is no error)."""
+        r = self._http.request("DELETE", f"/storage/v1/object/{bucket}", json={"prefixes": list(paths)})
+        _check(r, "remove")
 
 
 def _check(r: httpx.Response, what: str) -> None:

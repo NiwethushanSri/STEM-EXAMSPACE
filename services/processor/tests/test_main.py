@@ -8,7 +8,7 @@ import time
 import pytest
 
 import synth
-from processor import main, pipeline
+from processor import main, pipeline, supa
 from processor.imaging import Quality
 
 EXAM, UPLOAD, PAPER, COPY, BOOKING = "exam-1", "upload-1", "paper-1", "copy-1", "booking-1"
@@ -28,14 +28,17 @@ def claimed(kind="prepare", attempts=1, upload_kind="home_pdf", mime="applicatio
 
 
 class FakeClient:
-    """Records every call. `data` is the upload's bytes; `beats` answers heartbeats; `record` answers record_pages."""
+    """Records every call. `data` is the upload's bytes; `beats` answers heartbeats; `record` answers record_pages;
+    `discarded` is what script_discarded_take lists (each item taken once); `remove_error` is raised by remove."""
 
-    def __init__(self, jobs=(), data=b"", record=None, beats=True, on_download=None):
+    def __init__(self, jobs=(), data=b"", record=None, beats=True, on_download=None, discarded=(), remove_error=None):
         self.jobs = list(jobs)
         self.data = data
         self.record = record or {"ok": True, "pages": 0}
         self.beats = beats
         self.on_download = on_download
+        self.discarded = list(discarded)
+        self.remove_error = remove_error
         self.calls = []
         self.stored = {}
         self.lock = threading.Lock()
@@ -69,6 +72,19 @@ class FakeClient:
     def finish(self, job_id, ok, error=None, *, worker, attempt):
         self._log("finish", job_id, ok, error, worker, attempt)
         return {"ok": True, "state": "done" if ok else "queued"}
+
+    def discarded_take(self, limit):
+        self._log("discarded_take", limit)
+        taken, self.discarded = self.discarded[:limit], self.discarded[limit:]
+        return taken
+
+    def remove(self, bucket, paths):
+        self._log("remove", bucket, list(paths))
+        if self.remove_error:
+            raise self.remove_error
+
+    def mark_purged(self, upload_ids):
+        self._log("mark_purged", list(upload_ids))
 
     def named(self, name):
         return [c for c in self.calls if c[0] == name]
@@ -285,3 +301,97 @@ def test_sigterm_stops_after_the_current_job(monkeypatch):
     assert main.run(client, "w-1") == 1
     assert [c[1] for c in client.named("finish")] == [1]
     assert signal.getsignal(signal.SIGTERM) is before
+
+
+# Discarded draft files ------------------------------------------------------------------------------------------
+
+DISCARDED = [{"id": "up-a", "storage_path": "home/booking-1/up-a.jpg"}, {"id": "up-b", "storage_path": "home/booking-1/up-b.pdf"}]
+
+
+def test_cleanup_removes_discarded_files_then_marks_them_purged():
+    client = FakeClient(discarded=DISCARDED)
+    assert main.cleanup(client) == 2
+    assert [c[0] for c in client.calls] == ["discarded_take", "remove", "mark_purged"]
+    assert client.named("discarded_take") == [("discarded_take", main.CLEANUP_BATCH)]
+    assert client.named("remove") == [("remove", "script-uploads", ["home/booking-1/up-a.jpg", "home/booking-1/up-b.pdf"])]
+    assert client.named("mark_purged") == [("mark_purged", ["up-a", "up-b"])]
+
+
+def test_cleanup_with_nothing_discarded_touches_nothing():
+    client = FakeClient()
+    assert main.cleanup(client) == 0
+    assert client.named("remove") == [] and client.named("mark_purged") == []
+
+
+def test_cleanup_marks_nothing_when_removing_fails():
+    client = FakeClient(discarded=DISCARDED, remove_error=supa.SupabaseError("remove: HTTP 500"))
+    with pytest.raises(supa.SupabaseError):
+        main.cleanup(client)
+    assert client.named("mark_purged") == []
+
+
+def test_cleanup_only_ever_removes_from_script_uploads():
+    client = FakeClient(discarded=DISCARDED)
+    main.cleanup(client)
+    assert {c[1] for c in client.named("remove")} == {"script-uploads"}
+    assert 1 <= main.CLEANUP_BATCH <= 1000
+
+
+def test_run_cleans_up_at_most_once_a_minute():
+    assert main.CLEANUP_SECONDS == 60
+    stop = threading.Event()
+    client = FakeClient(discarded=DISCARDED)
+    threading.Timer(0.3, stop.set).start()
+    main.run(client, "w-1", stop=stop, idle_seconds=0.01)
+    assert len(client.named("claim")) > 3
+    assert len(client.named("discarded_take")) == 1
+
+
+def test_run_cleans_up_again_after_the_interval():
+    stop = threading.Event()
+    client = FakeClient()
+    threading.Timer(0.35, stop.set).start()
+    main.run(client, "w-1", stop=stop, idle_seconds=0.01, cleanup_seconds=0.1)
+    assert 2 <= len(client.named("discarded_take")) <= 5
+
+
+def test_run_cleans_up_between_jobs_never_during_one(monkeypatch):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    stop = threading.Event()
+
+    class Ending(FakeClient):
+        def claim(self, worker_id):
+            job = super().claim(worker_id)
+            if job is None:
+                stop.set()
+            return job
+
+    client = Ending(jobs=[claimed(job_id=1), claimed(job_id=2)])
+    main.run(client, "w-1", stop=stop, idle_seconds=0.01, cleanup_seconds=0)
+    names = [c[0] for c in client.calls if c[0] in ("claim", "finish", "discarded_take")]
+    assert names[:2] == ["discarded_take", "claim"]
+    # Between a claim that returned a job and that job's finish there is no cleanup; between two jobs there is.
+    first, second = names.index("finish"), len(names) - 1 - names[::-1].index("finish")
+    assert "discarded_take" not in names[1:first] and "discarded_take" in names[first:second]
+
+
+def test_run_survives_a_failed_cleanup_and_logs_no_paths(monkeypatch, caplog):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    caplog.set_level(logging.DEBUG, logger="processor")
+    client = FakeClient(jobs=[claimed(job_id=1)], discarded=DISCARDED,
+                        remove_error=supa.SupabaseError("remove: HTTP 500"))
+    assert main.run(client, "w-1", once=True) == 1
+    assert client.named("finish") == [("finish", 1, True, None, "w-1", 1)]
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "SupabaseError" in text
+    for secret in ("home/", "up-a", "booking-1"):
+        assert secret not in text
+
+
+def test_cleanup_logs_the_count_only(caplog):
+    caplog.set_level(logging.DEBUG, logger="processor")
+    main.cleanup(FakeClient(discarded=DISCARDED))
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "2" in text
+    for secret in ("home/", "up-a", "up-b", "booking-1"):
+        assert secret not in text

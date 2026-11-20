@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BookingPaper } from "@/components/papers/BookingPaper";
+import { HomeUpload } from "@/components/scripts/HomeUpload";
 import { formatLondon } from "@/lib/money";
 import {
   DEFAULT_ALLOWED_MATERIALS,
@@ -18,24 +19,16 @@ import { createClient } from "@/lib/supabase/client";
 const BUTTON =
   "rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60";
 
-const SUBMISSION_LINE: Record<string, string> = {
-  draft: "Your upload is not finished yet.",
-  checking: "Your answers are being checked.",
-  received: "Your answers have been received.",
-  needs_attention: "Your answers need attention. The institution will be in touch.",
-  rejected: "Your last upload was not accepted. Please upload again.",
-};
-
 /** Longest wait before looking at the server again, so a long timer never overflows. */
 const MAX_WAIT_MS = 10 * 60_000;
 
 /**
  * The home sitting of one paid booking: the paper download (see BookingPaper), the times, the rules and materials, the
- * acknowledgement, a countdown that follows the database clock, and (after the finish) the place for the upload,
- * which the caller passes as `upload`. `label` names the exam, and the child for a parent, so every control is unique
- * on the page.
+ * acknowledgement, a countdown that follows the database clock, and from the start the upload of the answers and
+ * where they stand (HomeUpload). `label` names the exam, and the child for a parent, so every control is unique on
+ * the page.
  */
-export function SittingPanel({ bookingId, label, upload }: { bookingId: string; label: string; upload?: ReactNode }) {
+export function SittingPanel({ bookingId, label }: { bookingId: string; label: string }) {
   const [state, setState] = useState<SittingState | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -139,7 +132,6 @@ export function SittingPanel({ bookingId, label, upload }: { bookingId: string; 
   const materials = state.materials ?? DEFAULT_ALLOWED_MATERIALS;
   const ack = state.acknowledged;
   const canAcknowledge = !ack && state.ack_as !== null && (text.phase === "before_start" || text.phase === "sitting");
-  const submissionLine = state.submission ? SUBMISSION_LINE[state.submission.state] : null;
 
   return (
     <section aria-label={`Home sitting for ${label}`} data-testid="sitting-panel" className="space-y-3">
@@ -208,12 +200,11 @@ export function SittingPanel({ bookingId, label, upload }: { bookingId: string; 
         </div>
       )}
 
-      {uploading && <div data-testid="sitting-upload">{upload}</div>}
-      {submissionLine && (
-        <p data-testid="sitting-submission" aria-live="polite" className="text-slate-700">
-          {submissionLine}
-          {state.submission?.late ? " It was handed in late." : ""}
-        </p>
+      {!before && (
+        <div data-testid="sitting-upload">
+          {text.phase === "sitting" && <h3 className="font-semibold text-slate-800">Hand in your answers</h3>}
+          <HomeUpload bookingId={bookingId} label={label} phase={text.phase} />
+        </div>
       )}
     </section>
   );

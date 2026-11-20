@@ -180,3 +180,25 @@ export function attendanceMessageFor(code: string | null | undefined, context: A
   const table = attendanceMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
 }
+
+/** Failure codes returned by the home upload RPCs (home_submission_open, script_upload_begin, script_upload_stored,
+ * home_submission_submit and the "Needs your attention" answers). */
+const uploadMessages: Record<string, string> = {
+  uploads_not_open: "You can upload your answers once the exam has started.",
+  uploads_closed: "Uploads for this exam have closed. Please contact the institution.",
+  too_many_files: "You can hand in at most 60 files. Delete some, or put the pages into one PDF.",
+  file_too_large: "This file is too large. Photos can be up to 25 MB and PDFs up to 100 MB.",
+  wrong_file_type: "This file cannot be used. Upload a PDF, or photos as JPEG, PNG or HEIC.",
+  still_uploading: "Some files are still uploading. Wait until every file shows as uploaded, or delete it.",
+  nothing_to_submit: "Add at least one photo or PDF before you submit.",
+  wrong_sitting: "Your booking is for the centre; your answers are collected in the exam room.",
+  not_found: "The file did not arrive. Please try again.",
+  invalid_input: "That did not work. Please check and try again.",
+  conflict: "This has already changed. Refresh the page to see where it stands.",
+  forbidden: "You do not have permission to do that.",
+};
+
+/** Message for a home upload RPC failure code; unknown codes get the generic message. */
+export function uploadMessageFor(code: string | null | undefined): string {
+  return code && Object.hasOwn(uploadMessages, code) ? uploadMessages[code] : messages.internal;
+}

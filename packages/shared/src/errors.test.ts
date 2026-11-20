@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, bookingMessageFor, examMessageFor, messageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, bookingMessageFor, examMessageFor, messageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -104,5 +104,27 @@ describe("attendanceMessageFor", () => {
   });
   it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
     expect(attendanceMessageFor(code, "mark")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("uploadMessageFor", () => {
+  it("maps the home upload codes", () => {
+    expect(uploadMessageFor("uploads_not_open")).toBe("You can upload your answers once the exam has started.");
+    expect(uploadMessageFor("uploads_closed")).toBe("Uploads for this exam have closed. Please contact the institution.");
+    expect(uploadMessageFor("too_many_files")).toContain("at most 60 files");
+    expect(uploadMessageFor("file_too_large")).toContain("25 MB");
+    expect(uploadMessageFor("file_too_large")).toContain("100 MB");
+    expect(uploadMessageFor("wrong_file_type")).toContain("PDF");
+    expect(uploadMessageFor("still_uploading")).toContain("still uploading");
+    expect(uploadMessageFor("nothing_to_submit")).toContain("at least one");
+    expect(uploadMessageFor("wrong_sitting")).toContain("centre");
+    expect(uploadMessageFor("conflict")).toContain("Refresh");
+  });
+  it("falls back to the generic message", () => {
+    expect(uploadMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(uploadMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
+    expect(uploadMessageFor(code)).toBe("Something went wrong. Please try again.");
   });
 });

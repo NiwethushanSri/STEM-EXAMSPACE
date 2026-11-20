@@ -1,4 +1,5 @@
 """The processing server: claim a job, prepare its upload, store the pictures, record the pages, finish the job.
+Between jobs, at most once a minute, it also deletes the files families discarded from drafts (never handed in).
 
 Run with `python -m processor.main` (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the environment). It only
 calls out to Supabase and listens to nothing. Logs carry job and upload ids, the attempt, page counts, timings
@@ -24,6 +25,8 @@ UPLOADS = "script-uploads"
 PAGES = "script-pages"
 IDLE_SECONDS = 2.0  # between claims when there is nothing to do
 HEARTBEAT_SECONDS = 30.0  # the job's lock is renewed this often while it runs (a quiet job is reclaimed after 15 min)
+CLEANUP_SECONDS = 60.0  # discarded draft files are looked for at most this often, between jobs
+CLEANUP_BATCH = 100  # discarded files deleted per look (one storage request)
 
 
 class LostJob(Exception):
@@ -184,6 +187,19 @@ def _abandon(client: Any, worker_id: str, claimed: Any, exc: Exception) -> None:
         log.error("job %s: could not finish: %s", job_id, type(again).__name__)
 
 
+def cleanup(client: Any) -> int:
+    """Deletes from script-uploads the objects of files a family discarded from a draft more than an hour ago (the
+    database lists only those: a file that was handed in is never listed), then marks them purged. Nothing is
+    marked when the deletion fails, so they are listed again next time. Returns how many were deleted."""
+    items = client.discarded_take(CLEANUP_BATCH)
+    if not items:
+        return 0
+    client.remove(UPLOADS, [item["storage_path"] for item in items])
+    client.mark_purged([item["id"] for item in items])
+    log.info("cleanup: %d discarded files deleted", len(items))
+    return len(items)
+
+
 def _on_sigterm(stop: threading.Event) -> Callable[[], None]:
     """Sets `stop` on SIGTERM (only possible in the main thread); returns what puts the old handler back."""
     if threading.current_thread() is not threading.main_thread():
@@ -193,14 +209,24 @@ def _on_sigterm(stop: threading.Event) -> Callable[[], None]:
 
 
 def run(client: Any, worker_id: str, *, once: bool = False, stop: threading.Event | None = None,
-        idle_seconds: float = IDLE_SECONDS, heartbeat_seconds: float = HEARTBEAT_SECONDS) -> int:
+        idle_seconds: float = IDLE_SECONDS, heartbeat_seconds: float = HEARTBEAT_SECONDS,
+        cleanup_seconds: float = CLEANUP_SECONDS) -> int:
     """Claims and runs jobs until SIGTERM (or `stop`), finishing the current job first; waits `idle_seconds`
-    when there is nothing to do. With `once`, claims once and runs at most that job. Returns the jobs run."""
+    when there is nothing to do. Before a claim, when `cleanup_seconds` have passed since the last one (and at the
+    start), deletes discarded draft files (cleanup; a failure is logged and tried again next time). With `once`,
+    claims once and runs at most that job. Returns the jobs run."""
     stop = stop or threading.Event()
     restore = _on_sigterm(stop)
     ran = 0
+    next_cleanup = time.monotonic()
     try:
         while not stop.is_set():
+            if time.monotonic() >= next_cleanup:
+                next_cleanup = time.monotonic() + cleanup_seconds
+                try:
+                    cleanup(client)
+                except Exception as exc:
+                    log.warning("cleanup failed: %s", type(exc).__name__)
             try:
                 claimed = client.claim(worker_id)
             except Exception as exc:

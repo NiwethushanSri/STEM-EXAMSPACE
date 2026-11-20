@@ -627,14 +627,14 @@ isOneToOne: false
                   ]
                 },"script_uploads": {
                   Row: {
-                    "batch_id": string | null,"booking_id": string | null,"byte_size": number,"created_at": string,"exam_id": string,"id": string,"kind": Database["public"]['Enums']["upload_kind"],"mime": string,"position": number | null,"sha256": string | null,"state": Database["public"]['Enums']["upload_state"],"storage_path": string,"stored_at": string | null,"submission_id": string | null,"uploaded_by": string
+                    "batch_id": string | null,"booking_id": string | null,"byte_size": number,"created_at": string,"discarded_at": string | null,"exam_id": string,"id": string,"kind": Database["public"]['Enums']["upload_kind"],"mime": string,"position": number | null,"purged_at": string | null,"sha256": string | null,"state": Database["public"]['Enums']["upload_state"],"storage_path": string,"stored_at": string | null,"submission_id": string | null,"uploaded_by": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "batch_id"?: string | null,"booking_id"?: string | null,"byte_size": number,"created_at"?: string,"exam_id": string,"id"?: string,"kind": Database["public"]['Enums']["upload_kind"],"mime": string,"position"?: number | null,"sha256"?: string | null,"state"?: Database["public"]['Enums']["upload_state"],"storage_path": string,"stored_at"?: string | null,"submission_id"?: string | null,"uploaded_by": string
+                    "batch_id"?: string | null,"booking_id"?: string | null,"byte_size": number,"created_at"?: string,"discarded_at"?: string | null,"exam_id": string,"id"?: string,"kind": Database["public"]['Enums']["upload_kind"],"mime": string,"position"?: number | null,"purged_at"?: string | null,"sha256"?: string | null,"state"?: Database["public"]['Enums']["upload_state"],"storage_path": string,"stored_at"?: string | null,"submission_id"?: string | null,"uploaded_by": string
                   }
                   Update: {
-                    "batch_id"?: string | null,"booking_id"?: string | null,"byte_size"?: number,"created_at"?: string,"exam_id"?: string,"id"?: string,"kind"?: Database["public"]['Enums']["upload_kind"],"mime"?: string,"position"?: number | null,"sha256"?: string | null,"state"?: Database["public"]['Enums']["upload_state"],"storage_path"?: string,"stored_at"?: string | null,"submission_id"?: string | null,"uploaded_by"?: string
+                    "batch_id"?: string | null,"booking_id"?: string | null,"byte_size"?: number,"created_at"?: string,"discarded_at"?: string | null,"exam_id"?: string,"id"?: string,"kind"?: Database["public"]['Enums']["upload_kind"],"mime"?: string,"position"?: number | null,"purged_at"?: string | null,"sha256"?: string | null,"state"?: Database["public"]['Enums']["upload_state"],"storage_path"?: string,"stored_at"?: string | null,"submission_id"?: string | null,"uploaded_by"?: string
                   }
                   Relationships: [
                     {
@@ -988,11 +988,69 @@ isOneToOne: false
 "family_has_booking":
 { Args: { "p_exam": string }; Returns: boolean
                            },
+"home_booking_lock":
+{ Args: { "p_booking": string }; Returns: undefined
+                           },
+"home_missing_confirm_blank":
+{ Args: { "p_pages": (number)[],"p_submission": string }; Returns: Json
+                           },
+"home_missing_pages":
+{ Args: { "p_skip_confirmed": boolean,"p_submission": string }; Returns: (number)[]
+                           },
+"home_page_place":
+{ Args: { "p_after_page": number,"p_page": string }; Returns: Json
+                           },
+"home_page_send_as_is":
+{ Args: { "p_page": string }; Returns: Json
+                           },
+"home_reevaluate":
+{ Args: { "p_booking": string,"p_submission": string }; Returns: Database["public"]['Enums']["submission_state"]
+                           },
 "home_submission_assemble":
 { Args: { "p_now": string,"p_submission": string,"p_upload": string }; Returns: boolean
                            },
 "home_submission_evaluate":
 { Args: { "p_now": string,"p_submission": string }; Returns: Database["public"]['Enums']["submission_state"]
+                           },
+"home_submission_latest":
+{ Args: { "p_booking": string }; Returns: {
+              "blank_confirmed": (number)[],
+"booking_id": string,
+"checked_at": string | null,
+"id": string,
+"late": boolean,
+"replaces_all": boolean,
+"seq": number,
+"state": Database["public"]['Enums']["submission_state"],
+"submitted_at": string | null,
+"submitted_by": string | null
+            }
+                          SetofOptions: {
+        from: "*"
+        to: "home_submissions"
+        isOneToOne: true
+        isSetofReturn: false
+      } },
+"home_submission_open":
+{ Args: { "p_booking": string,"p_now"?: string,"p_replaces_all"?: boolean }; Returns: Json
+                           },
+"home_submission_result":
+{ Args: { "p_submission": string }; Returns: Json
+                           },
+"home_submission_status":
+{ Args: { "p_booking": string }; Returns: Json
+                           },
+"home_submission_submit":
+{ Args: { "p_now"?: string,"p_submission": string }; Returns: Json
+                           },
+"home_upload_code":
+{ Args: { "p_actor": string,"p_at": string,"p_booking": Omit<Database["public"]['Tables']["bookings"]['Row'], Database["public"]['Tables']["bookings"]['ComputedFields']> }; Returns: string
+                           },
+"home_upload_max_bytes":
+{ Args: { "p_kind": Database["public"]['Enums']["upload_kind"] }; Returns: number
+                           },
+"home_upload_type_ok":
+{ Args: { "p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string }; Returns: boolean
                            },
 "is_staff_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
@@ -1197,6 +1255,9 @@ isOneToOne: false
         isOneToOne: true
         isSetofReturn: false
       } },
+"script_discarded_take":
+{ Args: { "p_limit": number,"p_now"?: string }; Returns: Json
+                           },
 "script_evaluate":
 { Args: { "p_script": string }; Returns: undefined
                            },
@@ -1224,8 +1285,23 @@ isOneToOne: false
 "script_raise_mixed":
 { Args: { "p_script": string,"p_upload": string }; Returns: undefined
                            },
+"script_upload_begin":
+{ Args: { "p_bytes": number,"p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string,"p_now"?: string,"p_submission": string }; Returns: Json
+                           },
+"script_upload_discard":
+{ Args: { "p_upload": string }; Returns: Json
+                           },
 "script_upload_path_allowed":
 { Args: { "p_add": boolean,"p_path": string }; Returns: boolean
+                           },
+"script_upload_purged":
+{ Args: { "p_ids": (string)[] }; Returns: undefined
+                           },
+"script_upload_reorder":
+{ Args: { "p_submission": string,"p_uploads": (string)[] }; Returns: Json
+                           },
+"script_upload_stored":
+{ Args: { "p_upload": string }; Returns: Json
                            },
 "script_version_write":
 { Args: { "p_links": Json,"p_now": string,"p_reason": string,"p_script": string,"p_submission": string,"p_upload": string }; Returns: boolean
