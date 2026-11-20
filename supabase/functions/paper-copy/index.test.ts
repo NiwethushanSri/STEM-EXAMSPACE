@@ -92,3 +92,49 @@ Deno.test("insert_download_after_release", async () => {
     await fx.cleanup();
   }
 });
+
+Deno.test("admin_sample_for_admin_only", async () => {
+  const fx = await setup(24 * 60);
+  try {
+    const paper = await fx.addPaper(await makePdf(2), "paper", 2);
+    const asStudent = await call("paper-copy", fx.student.token, { paperId: paper.id, kind: "admin_sample" });
+    assertEquals(asStudent.status, 403);
+    assertEquals((await asStudent.json()).error.code, "forbidden");
+    const asParent = await call("paper-copy", fx.stranger.token, { paperId: paper.id, kind: "admin_sample" });
+    assertEquals(asParent.status, 403);
+    await asParent.arrayBuffer();
+
+    const res = await call("paper-copy", fx.admin.token, { paperId: paper.id, kind: "admin_sample" });
+    assertEquals(res.status, 200);
+    assertEquals(res.headers.get("content-type"), "application/pdf");
+    assertEquals(res.headers.get("content-disposition"), `attachment; filename="${fx.examCode}-SAMPLE.pdf"`);
+    assertEquals(res.headers.get("x-paper-version"), "1");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    assertEquals(new TextDecoder().decode(bytes.slice(0, 4)), "%PDF");
+
+    const unknown = await call("paper-copy", fx.admin.token, { paperId: crypto.randomUUID(), kind: "admin_sample" });
+    assertEquals(unknown.status, 404);
+    await unknown.arrayBuffer();
+    const badId = await call("paper-copy", fx.admin.token, { paperId: "nope", kind: "admin_sample" });
+    assertEquals(badId.status, 400);
+    await badId.arrayBuffer();
+  } finally {
+    await fx.cleanup();
+  }
+});
+
+Deno.test("admin_sample_logs_nothing", async () => {
+  const fx = await setup(24 * 60);
+  try {
+    const paper = await fx.addPaper(await makePdf(2), "paper", 2);
+    const res = await call("paper-copy", fx.admin.token, { paperId: paper.id, kind: "admin_sample" });
+    assertEquals(res.status, 200);
+    await res.arrayBuffer();
+    const copies = await fx.svc.from("paper_copies").select("id").eq("paper_id", paper.id);
+    assertEquals(copies.error, null);
+    assertEquals(copies.data?.length, 0);
+    assertEquals(await downloads(fx), 0);
+  } finally {
+    await fx.cleanup();
+  }
+});

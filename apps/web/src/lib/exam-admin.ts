@@ -20,6 +20,14 @@ export type PaperVersion = {
   uploadedAt: string;
   replaceReason: string | null;
   current: boolean;
+  /** When an admin last saved the page roles (null: not reviewed yet; always null for an insert). */
+  pagesReviewedAt: string | null;
+};
+
+export type PageRole = "answer" | "cover" | "blank" | "information";
+export type PaperLayout = {
+  pages: { page: number; role: PageRole }[];
+  areas: { id: string; page: number; x: number; y: number; w: number; h: number }[];
 };
 
 export type PackCandidate = { bookingId: string; indexNumber: string; name: string };
@@ -42,6 +50,8 @@ export type ExamAdminView = {
   };
   releaseAt: string;
   papers: PaperVersion[];
+  /** Page roles and hidden areas of the current paper (null when there is none). */
+  layout: PaperLayout | null;
   /** Any copy of any version exists: the exam code is locked. */
   hasCopies: boolean;
   /** Any copy of the current paper exists: replacing it needs a reason. */
@@ -64,6 +74,7 @@ type PaperQueryRow = {
   uploaded_at: string;
   replace_reason: string | null;
   superseded_at: string | null;
+  pages_reviewed_at: string | null;
   uploader: Embedded<{ first_name: string; last_name: string }>;
 };
 
@@ -103,7 +114,7 @@ export async function loadExamAdmin(examId: string): Promise<ExamAdminView> {
   const [papersRes, releaseRes, bookings, downloadsRes] = await Promise.all([
     supabase
       .from("exam_papers")
-      .select("id, kind, title, version, page_count, byte_size, uploaded_at, replace_reason, superseded_at, uploader:profiles!exam_papers_uploaded_by_fkey(first_name, last_name)")
+      .select("id, kind, title, version, page_count, byte_size, uploaded_at, replace_reason, superseded_at, pages_reviewed_at, uploader:profiles!exam_papers_uploaded_by_fkey(first_name, last_name)")
       .eq("exam_id", examId)
       .order("kind", { ascending: true })
       .order("version", { ascending: false }),
@@ -132,7 +143,17 @@ export async function loadExamAdmin(examId: string): Promise<ExamAdminView> {
     uploadedAt: p.uploaded_at,
     replaceReason: p.replace_reason,
     current: p.superseded_at === null,
+    pagesReviewedAt: p.pages_reviewed_at,
   }));
+
+  let layout: PaperLayout | null = null;
+  const currentPaper = papers.find((p) => p.kind === "paper" && p.current);
+  if (currentPaper) {
+    const { data: lay, error: layErr } = await supabase.rpc("paper_page_layout", { p_paper: currentPaper.id });
+    const l = lay as { ok?: boolean; pages?: PaperLayout["pages"]; areas?: PaperLayout["areas"] } | null;
+    if (layErr || !l || l.ok !== true) throw new Error("page roles could not be loaded");
+    layout = { pages: l.pages ?? [], areas: l.areas ?? [] };
+  }
 
   const paperIds = papers.map((p) => p.id);
   let hasCopies = false;
@@ -211,6 +232,7 @@ export async function loadExamAdmin(examId: string): Promise<ExamAdminView> {
     },
     releaseAt: (releaseRes.data as string | null) ?? e.starts_at,
     papers,
+    layout,
     hasCopies,
     currentHasCopies,
     centres,

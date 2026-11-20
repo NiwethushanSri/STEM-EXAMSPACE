@@ -205,7 +205,9 @@ export const registerExamPaper = (client: StemClient, input: RegisterExamPaperIn
 
 export type PaperCopyInput =
   | { bookingId: string; kind: "home" | "print_pack" | "reprint" | "admin_preview" }
-  | { bookingId: string; insertId: string };
+  | { bookingId: string; insertId: string }
+  /** Owner/admin: a sample candidate's copy of one paper version (no booking, nothing logged). */
+  | { paperId: string; kind: "admin_sample" };
 
 function parseFunctionError(parsed: unknown): FunctionError | null {
   const e = (parsed as { error?: { code?: unknown; message?: unknown } } | null)?.error;

@@ -46,7 +46,13 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
         </div>
       )}
 
-      <PaperPanel examId={v.exam.id} papers={v.papers} currentHasCopies={v.currentHasCopies} locked={locked} />
+      {current && current.pagesReviewedAt === null && !locked && (
+        <div role="status" data-testid="page-roles-warning" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Check the page roles before the release time. Say which pages are answer pages and hide any candidate name boxes.
+        </div>
+      )}
+
+      <PaperPanel examId={v.exam.id} papers={v.papers} currentHasCopies={v.currentHasCopies} layout={v.layout} locked={locked} />
       <ReleasePanel
         examId={v.exam.id}
         status={v.exam.status}

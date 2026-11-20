@@ -97,3 +97,37 @@ export async function removeInsertAction(examId: string, paperId: string, reason
   refresh(examId);
   return answer(data, error, CONFLICTS.insert, "The insert has been removed.");
 }
+
+type Rpc = { data: unknown; error: unknown };
+const codeOf = (r: Rpc) => (!r.error && r.data && typeof r.data === "object" && !Array.isArray(r.data) ? (r.data as { ok?: unknown; code?: unknown }) : null);
+
+/**
+ * Saves the page roles and the hidden areas of a paper version, each through its own database function (both are
+ * admin only and re-check everything). The roles lock once scripts have come in; the areas can still change then.
+ * `changedPages` are the pages whose areas changed.
+ */
+export async function savePageLayoutAction(
+  examId: string,
+  paperId: string,
+  roles: { page: number; role: string }[],
+  areas: { page: number; x: number; y: number; w: number; h: number }[],
+): Promise<PaperActionResult & { changedPages?: number[] }> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId) || !isUuid(paperId) || !Array.isArray(roles) || !Array.isArray(areas)) return { ok: false, message: GENERIC };
+  const supabase = await createClient();
+  const rolesRes = await supabase.rpc("set_paper_page_roles", { p_paper: paperId, p_roles: roles });
+  const areasRes = await supabase.rpc("set_paper_hidden_areas", { p_paper: paperId, p_areas: areas });
+  refresh(examId);
+  const r = codeOf(rolesRes);
+  const a = codeOf(areasRes);
+  if (r?.ok === true && a?.ok === true) {
+    const changed = (areasRes.data as { changed_pages?: unknown }).changed_pages;
+    return { ok: true, message: "Page roles and hidden areas saved.", changedPages: Array.isArray(changed) ? changed.filter((n): n is number => typeof n === "number") : [] };
+  }
+  if (r?.code === "conflict") {
+    return { ok: false, message: ROLES_LOCKED + (a?.ok === true ? " The hidden areas were saved." : "") };
+  }
+  return answer(r?.ok === true ? areasRes.data : rolesRes.data, r?.ok === true ? areasRes.error : rolesRes.error, ROLES_LOCKED, "");
+}
+
+const ROLES_LOCKED = "Scripts have already come in for this paper, so the page roles can no longer change.";
