@@ -148,12 +148,20 @@ def keystone(page: np.ndarray, k: float, *, fill: float = 0.95, tone: str = "whi
     return _noise(np.random.default_rng(seed), out, 3.0)
 
 
-def on_pile(page: np.ndarray, mm: float) -> np.ndarray:
-    """The page lying on the rest of the pile: the sheet below shows `mm` above it, and the top sheet's
-    edge casts a faint shadow line across it."""
+def on_pile(page: np.ndarray, mm: float, *, under: np.ndarray | None = None, dx_mm: float = 0.0) -> np.ndarray:
+    """The page lying on the rest of the pile: the sheet below shows `mm` above it (and `dx_mm` to its
+    right; negative: to its left), and the top sheet's edge casts a faint shadow line across it. The sheet
+    below is blank, or `under`: another printed page, such as a 1A copy page with its own rules and
+    identity line."""
+    ph, pw = page.shape[:2]
     lead = round(mm * DPI / 25.4)
-    stack = cv2.copyMakeBorder(page, lead, 0, 0, 0, cv2.BORDER_CONSTANT, value=(250, 250, 250))
-    stack[lead - 2:lead + 1] = 215
+    dx = round(dx_mm * DPI / 25.4)
+    stack = np.full((ph + lead, pw + abs(dx), 3), 250, np.uint8)
+    lx, tx = max(dx, 0), max(-dx, 0)
+    if under is not None:
+        stack[0:ph, lx:lx + pw] = under
+    stack[lead:lead + ph, tx:tx + pw] = page
+    stack[lead - 2:lead + 1, tx:tx + pw] = 215
     return stack
 
 

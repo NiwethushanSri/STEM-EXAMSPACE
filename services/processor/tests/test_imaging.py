@@ -160,7 +160,7 @@ def test_marking_image_blanks_top_band_and_areas():
     assert np.array_equal(out[y1 + margin:], page[y1 + margin:])
     assert page[:band].min() < 100  # the input is not changed
     with pytest.raises(ValueError):
-        imaging.marking_image(page, [area], imaging.PageFit(None, None, (0.0, 0.0), math.inf, 1.0, 0.0))
+        imaging.marking_image(page, [area], imaging.PageFit(None, None, None, (0.0, 0.0), math.inf, 1.0, 0.0))
 
 
 def test_fit_page_finds_both_rules_on_a_clean_copy():
@@ -168,7 +168,9 @@ def test_fit_page_finds_both_rules_on_a_clean_copy():
     for i in range(5):
         page = synth.render("copy-a.pdf", i)
         fit = imaging.fit_page(page, imaging.read_code(page))
-        assert fit.expected and fit.coverage == (1.0, 1.0) and fit.error_mm < 0.3
+        assert fit.expected and min(fit.coverage) >= 0.98 and fit.error_mm < 0.3
+        assert fit.top_offset_mm < 1.0 and fit.bottom_offset_mm < 1.0 and not fit.ambiguous and fit.identity
+        assert fit.paint_rule == fit.top_rule  # no lower rule-like line near the top rule
         slope, intercept = fit.top_rule
         assert abs(slope) < 0.001 and abs(intercept - imaging.TOP_RULE_PT * px_per_pt) < 1.5  # 30 pt down
         placed = cv2.perspectiveTransform(np.array([[[18.0, 750.39], [577.28, 750.39]]]), fit.homography)[0]

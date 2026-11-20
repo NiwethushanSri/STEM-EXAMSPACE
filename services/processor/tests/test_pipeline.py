@@ -84,6 +84,16 @@ def assert_hidden(p: pipeline.PreparedPage) -> None:
     assert not (question & ~white).any(), f"{int((question & ~white).sum())} hidden-area pixels show"
 
 
+def assert_hidden_or_flagged(p: pipeline.PreparedPage) -> None:
+    """The page reads as copy A page 2 and either hides every name and hidden-area pixel in its marking
+    picture, or has no marking picture and the flag `layout_unexpected` (ruling R21)."""
+    assert (p.code, p.copy_page) == (A, 2)
+    if p.marking is None:
+        assert pipeline.LAYOUT_UNEXPECTED in p.quality.flags
+    else:
+        assert_hidden(p)
+
+
 @pytest.mark.parametrize("turn,angle,seed", [(180, 7.0, 4), (90, -6.0, 5), (270, 9.0, 6), (0, -8.0, 8)])
 def test_photo_rotated_skewed_dark_background_reads(turn, angle, seed, printed_centre):
     page = TAGGED
@@ -326,17 +336,17 @@ def test_photo_on_light_background_reads(printed_centre):
 
 @pytest.mark.parametrize("k", [0.03, 0.06])
 def test_keystone_home_pdf_name_hidden(k):
-    for tone in ("white", "dark"):  # a full-frame phone photo, top further away, saved straight into a PDF
-        pdf = synth.scan_pdf([synth.keystone(TAGGED, k, tone=tone)])
-        [p] = pipeline.prepare(pdf, "home_pdf", PDF, tag_ctx())
-        assert (p.code, p.copy_page, p.quality.flags) == (A, 2, [])
-        assert_hidden(p)
-        [s] = pipeline.prepare(pdf, "scan_file", PDF, tag_ctx())  # the same picture without page finding
-        assert s.code == A
-        if s.marking is None:
-            assert pipeline.LAYOUT_UNEXPECTED in s.quality.flags
-        else:
-            assert_hidden(s)  # the perspective fit follows the keystone
+    # A full-frame phone photo, top further away, saved straight into a PDF. On a dark table the paper's
+    # edges show, so the page is flattened and read: hidden. On a table as white as the paper no edge shows
+    # and the perspective stays in the picture, where the code and bottom rule mispredict the top rule: the
+    # page is flagged (ruling R21). As a scan file (no page finding) it is flagged either way.
+    pdf = synth.scan_pdf([synth.keystone(TAGGED, k, tone="dark")])
+    [p] = pipeline.prepare(pdf, "home_pdf", PDF, tag_ctx())
+    assert p.quality.flags == []
+    assert_hidden(p)
+    for kind, tone in (("home_pdf", "white"), ("scan_file", "white"), ("scan_file", "dark")):
+        [s] = pipeline.prepare(synth.scan_pdf([synth.keystone(TAGGED, k, tone=tone)]), kind, PDF, tag_ctx())
+        assert_hidden_or_flagged(s)
 
 
 @pytest.mark.parametrize("mm", [5, 10, 15])
@@ -377,14 +387,84 @@ def test_missing_top_rule_flags_layout():
 def test_shadow_above_page_not_taken_for_top_rule(monkeypatch):
     # A full-frame photo on a white table, saved as a scan: a lifted sheet casts a thin shadow line just
     # above its top edge, a straight dark line with bare paper-white beyond its ends, like a rule.
-    pdf = synth.scan_pdf([synth.keystone(TAGGED, 0.03, shadow=True)])
+    pdf = synth.scan_pdf([synth.keystone(TAGGED, 0.0, shadow=True)])
     [p] = pipeline.prepare(pdf, "scan_file", PDF, tag_ctx())
     assert p.quality.flags == []
     assert_hidden(p)
 
-    # Without the identity-line check the shadow is taken for the top rule; the perspective fit absorbs it
-    # (within 1.5 mm) and the whole name shows. This is why the check exists.
+    # The top rule is chosen by where the code and the bottom rule predict it (ruling R21), so even without
+    # the identity-line check the shadow is not taken for it.
     monkeypatch.setattr(imaging, "RULE_TEXT_INK", 0.0)
     [q] = pipeline.prepare(pdf, "scan_file", PDF, tag_ctx())
-    full, marking = decode(q.full), decode(q.marking)
-    assert q.quality.flags == [] and (synth.red(full) & (marking.min(axis=2) <= 225)).sum() > 1000
+    assert_hidden_or_flagged(q)
+
+
+# Fix round 2 (ruling R21): the top rule is checked against the code and the bottom rule, not the fit.
+
+UNDER_A, UNDER_B = synth.render("copy-a.pdf", 2), synth.render("copy-b.pdf", 0)
+
+
+@pytest.mark.parametrize("mm", [12, 15, 18, 22])
+def test_photo_on_pile_of_copies_name_hidden(mm):
+    # The page lies on another 1A copy page that sticks out `mm` above it: from about 11 mm its top rule,
+    # with an identity line above it, shows above the page, a perfect top rule in the wrong place.
+    cases = (
+        (0, 3.0, 40, "dark", UNDER_A, 0.0),
+        (180, -4.0, 41, "dark", UNDER_B, 0.0),
+        (0, 6.0, 42, "light", UNDER_A, 0.0),
+        (180, 2.0, 43, "light", UNDER_B, 0.0),
+        (0, -3.0, 44, "dark", UNDER_B, 6.0),  # the sheet below also sticks out 6 mm to the right
+    )
+    for turn, angle, seed, tone, under, dx in cases:
+        img, _ = synth.photo(synth.on_pile(TAGGED, mm, under=under, dx_mm=dx), turn=turn, angle=angle, skew=0.04,
+                             seed=seed, table_tone=tone)
+        [p] = pipeline.prepare(synth.jpeg(img), "home_photo", "image/jpeg", tag_ctx())
+        assert_hidden_or_flagged(p)
+
+
+@pytest.mark.parametrize("mm", [12, 15, 18])
+def test_scan_overlapping_copies_name_hidden(mm):
+    framed = synth.on_pile(TAGGED, mm, under=UNDER_A)  # two copy pages fed through the scanner overlapping
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(framed, seed=3)]), "scan_file", PDF, tag_ctx())
+    assert_hidden_or_flagged(p)
+
+
+def draw_rule_line(page: np.ndarray, x0_pt: float, x1_pt: float, y_pt: float, thickness: int) -> np.ndarray:
+    out = page.copy()
+    s = W / imaging.PAGE_PT[0]
+    cv2.line(out, (round(x0_pt * s), round(y_pt * s)), (round(x1_pt * s), round(y_pt * s)), (20, 20, 20), thickness)
+    return out
+
+
+def test_lower_master_line_not_taken_for_top_rule():
+    # The real top rule fails its checks (a pen stroke runs along it past its left end, into the margin)
+    # and the master page has a full-width line 15 mm lower: that line is not taken for the top rule.
+    marked = draw_rule_line(TAGGED, 4.0, 40.0, imaging.TOP_RULE_PT, 4)
+    marked = draw_rule_line(marked, *imaging.RULE_X_PT, imaging.TOP_RULE_PT + 15 / 25.4 * 72, 2)
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(marked, seed=5)]), "scan_file", PDF, tag_ctx())
+    assert (p.code, p.copy_page) == (A, 2)
+    assert p.quality.flags == [pipeline.LAYOUT_UNEXPECTED] and p.marking is None
+    full = decode(p.full)
+    fit = imaging.fit_page(full, imaging.read_code(full))
+    assert fit.top_offset_mm > imaging.RULE_PREDICT_MM  # the nearest rule-like line is the master's, 15 mm off
+
+
+def test_second_rule_within_8mm_flags_layout():
+    near = draw_rule_line(TAGGED, *imaging.RULE_X_PT, imaging.TOP_RULE_PT + 5 / 25.4 * 72, 2)  # 5 mm below
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(near, seed=6)]), "scan_file", PDF, tag_ctx())
+    assert p.quality.flags == [pipeline.LAYOUT_UNEXPECTED] and p.marking is None
+    full = decode(p.full)
+    fit = imaging.fit_page(full, imaging.read_code(full))
+    assert fit.ambiguous and fit.top_offset_mm < 1.0  # the real rule is found, but so is a look-alike
+
+
+def test_rule_coverage_counts_its_full_length():
+    cut = TAGGED.copy()
+    s = W / imaging.PAGE_PT[0]
+    y = round(imaging.TOP_RULE_PT * s)
+    cut[y - 4:y + 5, round(18 * s):round(85 * s)] = 255  # the rule's first 12% is missing
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(cut, seed=7)]), "scan_file", PDF, tag_ctx())
+    assert pipeline.LAYOUT_UNEXPECTED in p.quality.flags and p.marking is None
+    full = decode(p.full)
+    fit = imaging.fit_page(full, imaging.read_code(full))
+    assert fit.coverage[0] < imaging.RULE_COVERAGE
