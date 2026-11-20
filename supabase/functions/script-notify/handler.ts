@@ -7,15 +7,15 @@
 // Rules:
 // - Without EMAIL_PROVIDER nothing is sent and nothing is claimed or marked, so turning email on later cannot
 //   announce old events.
-// - A notice is marked sent only when every email of it went out. If one failed it is marked failed and the
-//   database hands it out again after a wait (at most 3 tries), so a recipient who already got it may get it twice.
+// - Each recipient is recorded (script_notice_record) just before their email and forgotten again only if that send
+//   fails, so nobody gets the same notice twice, whatever fails, times out or overlaps. A notice is marked sent when
+//   every email went out; otherwise the database hands it out again after a wait (at most 3 tries), with only the
+//   people not yet recorded.
 // - No new send starts after BUDGET_MS. Notices claimed but not sent in time are retried by the database after 5 minutes.
 // Logs hold counts, kinds and error codes only, never an address or a name.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { errorResponse, jsonResponse } from "../_shared/errors.ts";
 
-/** Notices claimed per database call. */
-export const BATCH = 10;
 /** Wait after each email: about 2 requests a second. */
 export const PACE_MS = 500;
 /** Stop starting sends after this long (the Edge Function wall-clock limit is higher). */
@@ -34,7 +34,7 @@ export interface Deps {
 export interface Notice {
   id: number;
   kind: "receipt" | "needs_attention" | "rejected" | "staff_alert";
-  recipients: { email: string; first_name: string | null }[];
+  recipients: { profile_id: string; email: string; first_name: string | null }[];
   exam: string | null;
   script_number: string | null;
   submission_seq: number | null;
@@ -102,48 +102,61 @@ export function makeHandler(deps: Deps): (req: Request) => Promise<Response> {
     const svc = deps.svc();
     let notices = 0, sent = 0, failed = 0, errors = 0;
 
+    // One notice at a time, and the time is checked before each is claimed, so no attempt is used up without trying.
     while (!outOfTime()) {
-      const next = await svc.rpc("script_notice_next", { p_limit: BATCH });
+      const next = await svc.rpc("script_notice_next", { p_limit: 1 });
       if (next.error) {
         console.error(`[script-notify] next failed code=${next.error.code ?? "unknown"}`);
         errors++;
         break;
       }
-      const batch = (next.data ?? []) as Notice[];
-      if (batch.length === 0) break;
-
-      for (const n of batch) {
-        notices++;
-        const template = TEMPLATES[n.kind];
-        let ok = template !== undefined;
-        for (const r of n.recipients ?? []) {
-          if (outOfTime()) {
-            ok = false; // not tried: the database hands the notice out again
-            break;
-          }
-          let sentOne = false;
-          try {
-            sentOne = await deps.send(r.email, template, dataFor(n, r.first_name));
-          } catch {
-            sentOne = false;
-          }
-          if (sentOne) sent++;
-          else {
-            failed++;
-            ok = false;
-          }
-          await deps.sleep(PACE_MS);
+      const n = ((next.data ?? []) as Notice[])[0];
+      if (!n) break;
+      notices++;
+      const template = TEMPLATES[n.kind];
+      let ok = template !== undefined;
+      for (const r of n.recipients ?? []) {
+        if (outOfTime()) {
+          ok = false; // the rest is left for the next run
+          break;
         }
-        const m = await svc.rpc("script_notice_mark", { p_id: n.id, p_ok: ok });
-        if (m.error) {
-          console.error(`[script-notify] mark failed code=${m.error.code ?? "unknown"}`);
+        // Recorded before the email goes out, and forgotten only if it fails: nobody is emailed twice.
+        const rec = await svc.rpc("script_notice_record", { p_id: n.id, p_profile: r.profile_id });
+        if (rec.error) {
+          console.error(`[script-notify] record failed code=${rec.error.code ?? "unknown"}`);
           errors++;
+          ok = false; // never send without a record
+          continue;
         }
+        if (rec.data === "stopped") break;
+        if (rec.data !== "ok") continue; // someone else has sent it
+        let sentOne = false;
+        try {
+          sentOne = await deps.send(r.email, template, dataFor(n, r.first_name));
+        } catch {
+          sentOne = false;
+        }
+        if (sentOne) sent++;
+        else {
+          failed++;
+          ok = false;
+          const un = await svc.rpc("script_notice_unmark", { p_id: n.id, p_profile: r.profile_id });
+          if (un.error) errors++;
+        }
+        await deps.sleep(PACE_MS);
       }
-      if (batch.length < BATCH) break;
+      const m = await svc.rpc("script_notice_mark", { p_id: n.id, p_ok: ok });
+      if (m.error) {
+        console.error(`[script-notify] mark failed code=${m.error.code ?? "unknown"}`);
+        errors++;
+      }
     }
 
-    console.log(`[script-notify] notices=${notices} sent=${sent} failed=${failed} errors=${errors}`);
-    return jsonResponse({ notices, sent, failed });
+    const gave = await svc.rpc("script_notice_given_up");
+    const givenUp = gave.error ? 0 : Number(gave.data ?? 0);
+    if (givenUp > 0) console.error(`[script-notify] notices given up after 3 attempts: ${givenUp}`);
+
+    console.log(`[script-notify] notices=${notices} sent=${sent} failed=${failed} errors=${errors} given_up=${givenUp}`);
+    return jsonResponse({ notices, sent, failed, given_up: givenUp });
   };
 }

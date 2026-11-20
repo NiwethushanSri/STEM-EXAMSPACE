@@ -5,6 +5,9 @@
 -- worked out when it is sent, from the accounts as they are then. Each notice is claimed before it is sent
 -- (script_notice_next), so two runs never send the same one; a failed one is tried again after a growing wait, up
 -- to 3 times, and nothing older than 6 hours is sent, so turning email on later cannot announce old events.
+-- Each recipient is recorded (script_notices_sent) just before their email goes out and forgotten only if that send
+-- fails, so a failure, timeout or crash never makes a later run email someone twice; a notice is finished when
+-- everyone is recorded.
 -- A student notice is queued once per submission and kind: a re-check that flips a submission back to received
 -- does not send the receipt again, and a new submission has its own receipt.
 
@@ -13,15 +16,33 @@ create table public.script_notices (
   kind text not null check (kind in ('receipt', 'needs_attention', 'rejected', 'staff_alert')),
   script_id uuid references public.scripts (id) on delete set null,
   submission_id uuid references public.home_submissions (id) on delete cascade,
-  -- an exception removed before its alert is sent (a re-run replaces it) takes the alert with it
-  exception_id uuid references public.script_exceptions (id) on delete cascade,
+  -- A re-run deletes and recreates exceptions: the notice keeps what the alert needs (exam, kind) and survives.
+  exception_id uuid references public.script_exceptions (id) on delete set null,
+  exam_id uuid,
+  exception_kind text,
+  -- exam, kind, booking, upload and page of the exception: the same alert is not queued twice within 6 hours
+  dedupe_key text,
   created_at timestamptz not null default now(),
   claimed_at timestamptz,
   sent_at timestamptz,
   attempts int not null default 0,
   constraint script_notices_owner check (
-    (kind = 'staff_alert' and exception_id is not null) or (kind <> 'staff_alert' and submission_id is not null))
+    (kind = 'staff_alert' and exam_id is not null and exception_kind is not null)
+    or (kind <> 'staff_alert' and submission_id is not null))
 );
+create index script_notices_dedupe_idx on public.script_notices (dedupe_key, created_at) where dedupe_key is not null;
+
+-- One row per notice and person, recorded just before the email is sent and removed only when that send fails
+-- (ids only: no address or name), so nobody gets the same notice twice, whatever fails or overlaps.
+create table public.script_notices_sent (
+  notice_id bigint not null references public.script_notices (id) on delete cascade,
+  profile_id uuid not null references public.profiles (id) on delete cascade,
+  sent_at timestamptz not null default now(),
+  primary key (notice_id, profile_id)
+);
+alter table public.script_notices_sent enable row level security;
+revoke all on public.script_notices_sent from public, anon, authenticated, service_role;
+grant select on public.script_notices_sent to service_role;
 create unique index script_notices_once_per_submission on public.script_notices (kind, submission_id)
   where kind <> 'staff_alert';
 create unique index script_notices_once_per_exception on public.script_notices (exception_id)
@@ -67,10 +88,19 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_key text;
 begin
-  insert into public.script_notices (kind, script_id, exception_id)
+  v_key := concat_ws('|', new.exam_id, new.kind, coalesce(new.booking_id::text, '-'), coalesce(new.upload_id::text, '-'),
+    coalesce(new.page_id::text, '-'));
+  if exists (select 1 from public.script_notices n
+             where n.dedupe_key = v_key and n.created_at > now() - interval '6 hours') then
+    return null; -- a re-run recreated an exception already announced
+  end if;
+  insert into public.script_notices (kind, script_id, exception_id, exam_id, exception_kind, dedupe_key)
   values ('staff_alert',
-    coalesce(new.script_id, (select s.id from public.scripts s where s.booking_id = new.booking_id)), new.id)
+    coalesce(new.script_id, (select s.id from public.scripts s where s.booking_id = new.booking_id)), new.id,
+    new.exam_id, new.kind::text, v_key)
   on conflict do nothing;
   return null;
 end;
@@ -94,29 +124,30 @@ stable
 security definer
 set search_path = ''
 as $$
-  select coalesce(jsonb_agg(jsonb_build_object('email', x.email, 'first_name', x.first_name) order by lower(x.email)),
-    '[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('profile_id', x.id, 'email', x.email, 'first_name', x.first_name)
+    order by lower(x.email)), '[]'::jsonb)
   from (
-    select distinct on (lower(r.email)) r.email, r.first_name
+    select distinct on (lower(r.email)) r.id, r.email, r.first_name
     from (
-      select p.email::text as email, p.first_name, 0 as rnk
+      select p.id, p.email::text as email, p.first_name, 0 as rnk
       from public.home_submissions h
       join public.bookings b on b.id = h.booking_id
       join public.profiles p on p.id = b.student_id and p.status = 'active'
       where p_notice.kind <> 'staff_alert' and h.id = p_notice.submission_id
       union all
-      select p.email::text, p.first_name, 1
+      select p.id, p.email::text, p.first_name, 1
       from public.home_submissions h
       join public.bookings b on b.id = h.booking_id
       join public.parent_children pc on pc.student_id = b.student_id
       join public.profiles p on p.id = pc.parent_id and p.status = 'active'
       where p_notice.kind <> 'staff_alert' and h.id = p_notice.submission_id
       union all
-      select p.email::text, p.first_name, 0
+      select p.id, p.email::text, p.first_name, 0
       from public.profiles p
       where p_notice.kind = 'staff_alert' and p.status = 'active' and p.role in ('owner', 'admin')
     ) r
     where r.email is not null and r.email <> ''
+      and not exists (select 1 from public.script_notices_sent s where s.notice_id = p_notice.id and s.profile_id = r.id)
     order by lower(r.email), r.rnk
   ) x
 $$;
@@ -131,15 +162,13 @@ set search_path = ''
 as $$
 declare
   v_sub public.home_submissions%rowtype;
-  v_exc public.script_exceptions%rowtype;
   v_script public.scripts%rowtype;
   v_exam uuid;
   v_label text;
   v_pages int[];
 begin
   if p_notice.kind = 'staff_alert' then
-    select * into v_exc from public.script_exceptions e where e.id = p_notice.exception_id;
-    v_exam := v_exc.exam_id;
+    v_exam := p_notice.exam_id;
   else
     select * into v_sub from public.home_submissions h where h.id = p_notice.submission_id;
     select b.exam_id into v_exam from public.bookings b where b.id = v_sub.booking_id;
@@ -158,7 +187,7 @@ begin
     'at', coalesce(v_sub.checked_at, v_sub.submitted_at, p_notice.created_at),
     'page_count', cardinality(v_pages),
     'pages', to_jsonb(v_pages),
-    'exception_kind', v_exc.kind::text);
+    'exception_kind', p_notice.exception_kind);
 end;
 $$;
 
@@ -177,6 +206,7 @@ declare
   v_now timestamptz := coalesce(p_now, now());
   v_out jsonb := '[]'::jsonb;
   v_n public.script_notices%rowtype;
+  v_rec jsonb;
 begin
   for v_n in
     select n.* from public.script_notices n
@@ -190,8 +220,14 @@ begin
   loop
     update public.script_notices set claimed_at = v_now, attempts = attempts + 1 where id = v_n.id
     returning * into v_n;
-    v_out := v_out || (jsonb_build_object('id', v_n.id, 'kind', v_n.kind,
-      'recipients', public.script_notice_recipients(v_n)) || public.script_notice_content(v_n));
+    v_rec := public.script_notice_recipients(v_n);
+    if jsonb_array_length(v_rec) = 0 then
+      -- everyone was already recorded (a run stopped before marking): nothing left to send
+      update public.script_notices set sent_at = v_now where id = v_n.id;
+      continue;
+    end if;
+    v_out := v_out || (jsonb_build_object('id', v_n.id, 'kind', v_n.kind, 'recipients', v_rec)
+      || public.script_notice_content(v_n));
   end loop;
   return v_out;
 end;
@@ -208,10 +244,55 @@ as $$
   where id = p_id and sent_at is null and coalesce(p_ok, false)
 $$;
 
+-- Records a recipient just before the email is sent. ok: send it. already: someone else did (do not send).
+-- stopped: the notice is already sent.
+create function public.script_notice_record(p_id bigint, p_profile uuid)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.script_notices n where n.id = p_id and n.sent_at is null) then
+    return 'stopped';
+  end if;
+  insert into public.script_notices_sent (notice_id, profile_id) values (p_id, p_profile) on conflict do nothing;
+  return case when found then 'ok' else 'already' end;
+end;
+$$;
+
+-- The email to this recipient failed: forget them so a later run can try again.
+create function public.script_notice_unmark(p_id bigint, p_profile uuid)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  delete from public.script_notices_sent where notice_id = p_id and profile_id = p_profile
+$$;
+
+-- How many notices were given up (3 attempts, unsent) within the look-back window. A count only.
+create function public.script_notice_given_up(p_now timestamptz default null)
+returns int
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select count(*)::int from public.script_notices n
+  where n.sent_at is null and n.attempts >= 3 and n.created_at > coalesce(p_now, now()) - interval '6 hours'
+$$;
+
 revoke execute on function public.script_notice_recipients(public.script_notices) from public, anon, authenticated, service_role;
 revoke execute on function public.script_notice_content(public.script_notices) from public, anon, authenticated, service_role;
 revoke execute on function public.script_notice_next(int, timestamptz) from public, anon, authenticated;
 revoke execute on function public.script_notice_mark(bigint, boolean, timestamptz) from public, anon, authenticated;
+revoke execute on function public.script_notice_record(bigint, uuid) from public, anon, authenticated;
+revoke execute on function public.script_notice_unmark(bigint, uuid) from public, anon, authenticated;
+revoke execute on function public.script_notice_given_up(timestamptz) from public, anon, authenticated;
+grant execute on function public.script_notice_record(bigint, uuid) to service_role;
+grant execute on function public.script_notice_unmark(bigint, uuid) to service_role;
+grant execute on function public.script_notice_given_up(timestamptz) to service_role;
 grant execute on function public.script_notice_next(int, timestamptz) to service_role;
 grant execute on function public.script_notice_mark(bigint, boolean, timestamptz) to service_role;
 

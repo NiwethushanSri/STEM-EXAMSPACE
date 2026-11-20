@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(34);
+select plan(48);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -119,10 +119,55 @@ select is((select min(jsonb_array_length(x -> 'recipients')) from jsonb_array_el
 select is((select count(*)::int from jsonb_array_elements((select j from fresh)) x where x ->> 'kind' = 'staff_alert' and x::text ilike '%Zanzibar%'), 0,
   'a staff alert has no candidate name');
 
+-- ----- recipient_recorded_before_send: a failure, a crash or an overlapping run never repeats an email -----
+create function pg_temp.rid() returns bigint language sql stable as $$
+  select id from public.script_notices where kind = 'receipt' and submission_id = pg_temp.k('d1') $$;
+create function pg_temp.reset() returns void language sql as $$
+  update public.script_notices set attempts = 0, claimed_at = null, sent_at = null $$;
+create function pg_temp.mine_rec() returns jsonb language sql as $$
+  select x -> 'recipients' from jsonb_array_elements(public.script_notice_next(100, now())) x where (x ->> 'id')::bigint = pg_temp.rid() $$;
+select pg_temp.reset();
+select is(public.script_notice_record(pg_temp.rid(), pg_temp.uid('s1')), 'ok', 'a recipient is recorded before the send');
+select is(public.script_notice_record(pg_temp.rid(), pg_temp.uid('s1')), 'already', 'an overlapping run sees them as already done');
+select pg_temp.reset();
+create temp table rr (j jsonb);
+grant all on rr to public;
+insert into rr select pg_temp.mine_rec();
+select is(jsonb_array_length((select j from rr)), 1, 'a retry or a crashed run only has the people not recorded');
+select is((select (j -> 0 ->> 'email') = (select email from public.profiles where id = pg_temp.uid('p1')) from rr), true, 'and that is the one not yet emailed');
+select public.script_notice_unmark(pg_temp.rid(), pg_temp.uid('s1'));
+select pg_temp.reset();
+select is(jsonb_array_length(pg_temp.mine_rec()), 2, 'a failed send is forgotten so the person is tried again');
+select public.script_notice_record(pg_temp.rid(), pg_temp.uid('s1'));
+select public.script_notice_record(pg_temp.rid(), pg_temp.uid('p1'));
+select pg_temp.reset();
+select is(pg_temp.mine_rec(), null, 'a notice whose people are all recorded is not handed out');
+select is((select sent_at is not null from public.script_notices where id = pg_temp.rid()), true, 'and is finished (a crash after the last send cannot repeat it)');
+select is(public.script_notice_record(pg_temp.rid(), pg_temp.uid('s1')), 'stopped', 'nothing is recorded for a finished notice');
+
+-- ----- rerun_does_not_repeat_alert -----
+select pg_temp.reset();
+select public.script_notice_mark((select n.id from public.script_notices n join public.script_exceptions e on e.id = n.exception_id where e.kind = 'late'), true);
+delete from public.script_exceptions where kind in ('late', 'processing_failed');
+select is((select count(*)::int from public.script_notices where kind = 'staff_alert' and exception_id is null), 2, 'deleting exceptions keeps their alerts (exception_id is set to null)');
+insert into public.script_exceptions (exam_id, kind, booking_id) values (pg_temp.k('e'), 'late', pg_temp.k('b1'));
+insert into public.script_exceptions (exam_id, kind, booking_id) values (pg_temp.k('e'), 'processing_failed', pg_temp.k('b2'));
+select is(pg_temp.n('staff_alert'), 5, 'a re-run recreating them within the window queues no second alert');
+select is((select count(*)::int from public.script_notices where kind = 'staff_alert' and sent_at is not null), 1, 'the sent alert stays recorded as sent');
+select is((select x ->> 'exception_kind' from jsonb_array_elements(public.script_notice_next(100, now())) x
+  where x ->> 'kind' = 'staff_alert' and x ->> 'exception_kind' = 'processing_failed'), 'processing_failed', 'an alert whose exception was deleted still says what it is about');
+insert into public.script_exceptions (exam_id, kind, booking_id) values (pg_temp.k('e'), 'late', pg_temp.k('b2'));
+select is(pg_temp.n('staff_alert'), 6, 'a different booking is a different alert');
+
+-- ----- given_up_count -----
+select pg_temp.reset();
+update public.script_notices set attempts = 3 where id = pg_temp.rid() + 1;
+select is(public.script_notice_given_up(now()), 1, 'notices given up after 3 attempts are counted');
+
 -- ----- notice_functions_not_granted_to_authenticated -----
 select ok((select bool_and(has_function_privilege('service_role', f, 'execute')
     and not has_function_privilege('authenticated', f, 'execute') and not has_function_privilege('anon', f, 'execute'))
-  from unnest(array['public.script_notice_next(int,timestamptz)', 'public.script_notice_mark(bigint,boolean,timestamptz)']) f),
+  from unnest(array['public.script_notice_next(int,timestamptz)', 'public.script_notice_mark(bigint,boolean,timestamptz)', 'public.script_notice_record(bigint,uuid)', 'public.script_notice_unmark(bigint,uuid)', 'public.script_notice_given_up(timestamptz)']) f),
   'the notice functions are for the service role only');
 select is((select count(*)::int from unnest(array['select', 'insert', 'update', 'delete']) pr, unnest(array['anon', 'authenticated']) ro
   where has_table_privilege(ro, 'public.script_notices', pr)), 0, 'anon and authenticated cannot touch the table');
