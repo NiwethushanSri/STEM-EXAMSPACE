@@ -1,7 +1,7 @@
 # The rest of the web platform: scripts, marking, results, registration and public pages — Design
 
 Date: 2026-11-20
-Status: Draft for the owner's review
+Status: Approved by the owner 2026-11-20, with the proposals in section 17 accepted for now
 Master plan: the owner's functional specification (`docs/owner/2026-11-functional-specification.pdf`), sections 2 to 7 and 11 to 26. Owner decision 2026-11-17: the specification wins where it differs from what is built; its "decisions to confirm" stay open until the owner answers them.
 Builds on: Part 1, Part 2 and Phase 1A (`2026-11-07-crm-foundation-design.md`, `2026-11-10-part2-exams-bookings-design.md`, `2026-11-17-phase1-papers-design.md`). Their rules still apply: row-level security on every table, writes only through checked SQL functions or server code, closed default privileges with explicit grants, an audit row in the same transaction as every staff change, no personal data in logs, no service-role key in the web app.
 
