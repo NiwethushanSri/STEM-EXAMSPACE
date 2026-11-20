@@ -82,6 +82,9 @@ Phase 1A gives every candidate's paper a copy code, and prints `SX1.<copy code>.
 - A **page** is one page cut from an upload, turned the right way up, straightened, with its code read. Each page keeps a link to the upload and position it came from.
 - A **script** is one candidate's answer pages for one exam: the pages in page-number order, built from one or more uploads. Home and centre scripts become the same kind of record (§16).
 - Every script has a **version**. A later upload or a staff correction makes a new version; earlier versions are kept.
+- A script belongs to the **booking** (one script per candidate per exam). Each page also records which copy, and so which paper version, it was printed from. If the paper was replaced after release, "every page present" is checked against the version the family's pages came from; pages from two versions in one script raise an exception for staff.
+
+**Page roles** (builder's call, from the review). When an admin uploads a paper version (the 1A paper panel), they mark each page of it as an **answer page**, a **cover**, a **blank page** or **information** (formula or data sheets printed inside the paper). Spare answer pages added by 1A are answer pages that may be left empty. Page roles are per paper version (a replacement starts from the previous version's roles), must be set before release, and are used twice: uploads only need answer pages (5.3), and markers are only shown answer pages (5.7, 6.4).
 
 Script states (specification §16, shortened): `receiving` → `checking` → `needs_attention` (an exception is open) → `verified` → `ready_to_mark` → `marking` → `marked` → `checked` (double marking and moderation done) → `final`. Side states: `withdrawn` (booking cancelled or refunded), `void` (staff decision, with reason). A script cannot be marked until it is `verified` and has no open exception (§15).
 
@@ -106,7 +109,7 @@ How, desktop first:
 
 What the server checks and reports, page by page:
 - the QR code belongs to this candidate's copy of this exam, and which page it is;
-- every page of the copy is present; for missing pages the family is asked "Was page 6 left blank?" and can confirm or add it;
+- every **answer page** of the copy is present (covers, blank and information pages need not be uploaded; spare answer pages only if used); for a missing answer page the family is asked "Was page 6 left blank?" and can confirm or add it;
 - duplicates (the same page twice: the clearer one is kept, the other set aside, not deleted);
 - unreadable, too dark, cut off or blurred pages, with "Retake page 4";
 - a page with no code (the candidate wrote on their own paper): the family says which page it follows; staff confirm it later in the exception queue.
@@ -155,7 +158,9 @@ What it does for each upload, in one job:
 3. For photos: find the page edges and correct the perspective; check blur, darkness and cut-off edges.
 4. Read the QR code; turn the page so the code is at the bottom right as printed; straighten small tilts using the code's corners.
 5. Detect blank pages.
-6. Save two pictures per page: the **full page** (staff only) and the **marking page** with the top name band removed (34 points high in the 1A layout, located from the code's position). Markers only ever receive marking pages.
+6. Save two pictures per page: the **full page** (staff only) and the **marking page**. The marking page has the top name band removed (34 points high in the 1A layout, located from the code's position) and every **hidden area** blanked out. Markers only ever receive marking pages of answer pages; covers, blank and information pages are never sent to them.
+
+**Hidden areas** (builder's call, from the review): exam boards print "Candidate name" and "Candidate number" boxes, usually on the cover and sometimes on answer pages, and candidates are trained to fill them in. When setting page roles, the admin draws rectangles over such boxes on the paper's pages; the server blanks those areas on every marking page made from that paper version. The paper's own layout never moves (1A), so a rectangle drawn once covers every candidate. If a marker still sees a name (written elsewhere), a **"Name visible"** button on the marking screen takes the script out of their hands and sends it to the exception queue, where staff blank the area for that page.
 7. Record the page, its code, its quality checks and its link to the upload, then update the script and raise exceptions.
 
 How jobs move: the website or a database function adds a row to a jobs table; the server takes the next job with a lock so two machines never take the same one, retries a failed job twice with a pause, and marks it failed with the reason after that (failed jobs show on the dashboard). Jobs are safe to run twice: running the same upload again replaces its pages and changes nothing else.
@@ -189,7 +194,8 @@ The structure is locked once live marking starts; changing it afterwards needs a
 
 - Markers are staff with the existing `corrector` role. Teachers can also be approved to mark their subjects.
 - An admin approves each marker for subjects, and marks one as **lead marker** per subject.
-- A marker never marks a candidate they tutor or are linked to as a parent; those scripts are skipped for them.
+- A marker never marks a candidate they tutor; those scripts are skipped for them automatically. Because one person can hold only one account role today (owner discussion point 2), a marker who is also a parent or knows a candidate **declares the conflict** to an admin (specification §17); the admin records it against the candidate and allocation skips those scripts. Phase 1B may link such accounts later.
+- **Small subjects** (builder's call, from the review): the lead marker can mark live scripts and second-mark; a second marker is any other approved marker, including the lead. When a subject has only one approved marker, an admin can turn off double marking, seeds and practice for that exam, with a reason that is recorded and shown on the exam's results approval.
 - **Practice first** (owner answer 212): before live marking on an exam, a marker marks a few practice scripts already marked by the lead marker and sees the differences. The lead marker approves them for live marking. Practice marks never count.
 
 ### 6.3 Who marks what (allocation)
@@ -214,7 +220,7 @@ A piece is **submitted** when every question has a mark. Submitted marks can be 
 ### 6.5 Quality checks (§19 to §21; RedMarker and RM Assessor)
 
 - **Double marking** (owner answer 211): a sample of each exam (default 10%, set per exam) is marked again by a second marker who sees neither the first marks nor the first layer. If the totals differ by more than the tolerance (default 10% of the maximum, set per exam) or any question differs by more than its tolerance, the piece goes to the lead marker.
-- **Seeded scripts:** the lead marker marks a few scripts as definitive; they are mixed into markers' queues unannounced. A marker outside tolerance is shown the definitive marks; after three misses in a row the marker is paused until the lead marker approves them again.
+- **Seeded scripts:** the lead marker marks a few scripts as definitive; they are mixed into markers' queues unannounced. A marker outside tolerance is shown the definitive marks; after three misses in a row the marker is paused until the lead marker approves them again. The live scripts a paused marker already submitted are kept but held back from `checked` until the lead marker reviews them, accepting each or sending it back for re-marking by someone else (builder's call, from the review). The lead marker's routine sample of each marker's work does not hold scripts back; a change the lead makes is recorded on the script whatever its state.
 - **Lead marker review:** settles double-marking differences (choosing one mark or setting their own), reviews a sample of each marker's work, and can send a marker's pieces back for re-marking with a note. All changes are recorded with reasons.
 - **Marker statistics:** per marker and exam, the average mark given against the cohort, agreement with the second marker and with seeds, and speed.
 - **Approval** (owner discussion point 12; open decision 4): an admin approves an exam's marking when every script is `checked`. Only then can results be prepared.
@@ -319,7 +325,10 @@ As in 1A, on the local copy only, never the live project:
 - Create the processing server account (Fly.io, London) with a payment card, about £10 a month to confirm; or say which host you prefer.
 - Email provider set up and switched on (launch items L3, L4), so receipts and results emails send.
 - Privacy notice and terms that cover scanned scripts, marking and, later, AI suggestions; ICO registration (owner answer 265).
-- Deploy Phase 1A first, with its release-note steps.
+- Deploy Phase 1A first, with its release-note steps. Scripts can only be matched by code when their papers were printed by 1A; anything sat before that is handled by staff in the exception queue page by page.
+- **Supabase Pro plan** (about $25 a month, to confirm on Supabase's price page). The Free plan caps each file at 50 MB and storage at 1 GB, which a single exam season of scans would exceed; Pro also gives daily backups, which the 1A release notes rely on. Then raise the storage upload limit to 1 GB per file (the builder sets the local copy to match, so tests behave like the live site).
+- **Real test files** for the processing server: a batch from the office scanner at its usual settings (including a duplex batch), and photos of printed 1A pages from several phones, some in poor light. This is the 1A owner trial plus a few photos. If codes read poorly, reading the printed readable code as a fallback is added to Phase 2 (extra work).
+- **The first real exam's date and size** (how many candidates, how many at home and at a centre), so the build can be ordered around it.
 
 ## 17. Open decisions (proposals in the text; the owner confirms or changes)
 
