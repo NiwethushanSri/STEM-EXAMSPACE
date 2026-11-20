@@ -34,6 +34,14 @@ describe("parseExamForm", () => {
       },
     });
   });
+  it("home_rules_and_materials_are_trimmed_and_limited", () => {
+    const r = parseExamForm({ ...base, homeRules: "  Sit alone.\nNo phone.  ", allowedMaterials: " Ruler " }, { withPrice: true });
+    expect(r).toMatchObject({ ok: true, value: { homeRules: "Sit alone.\nNo phone.", allowedMaterials: "Ruler" } });
+    expect(parseExamForm(base, { withPrice: true })).toMatchObject({ ok: true, value: { homeRules: "", allowedMaterials: "" } });
+    expect(parseExamForm({ ...base, homeRules: "x".repeat(2001) }, { withPrice: true }).ok).toBe(false);
+    expect(parseExamForm({ ...base, homeRules: "x".repeat(2000) }, { withPrice: true }).ok).toBe(true);
+    expect(parseExamForm({ ...base, allowedMaterials: "x".repeat(501) }, { withPrice: true }).ok).toBe(false);
+  });
   it("online_exam_drops_centres", () => {
     const r = parseExamForm({ ...base, format: "online", price: "" }, { withPrice: false });
     expect(r).toMatchObject({ ok: true, value: { centres: [], pricePence: null } });

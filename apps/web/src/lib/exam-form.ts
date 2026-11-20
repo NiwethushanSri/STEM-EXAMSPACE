@@ -19,6 +19,8 @@ export const SITTING_MODE_LABEL: Record<"centre" | "home", string> = {
 export type CentreValues = { id?: string; venueId: string; room: string; seatLimit: number };
 
 const MAX_CENTRES = 20;
+export const HOME_RULES_MAX = 2000;
+export const MATERIALS_MAX = 500;
 
 /** The values save_exam takes, read from the exam form. Times are already UTC instants. */
 export type ExamValues = {
@@ -34,6 +36,9 @@ export type ExamValues = {
   /** Null when the form has no price field (teachers). */
   pricePence: number | null;
   bookingDeadline: string;
+  /** Rules and allowed materials for sitting at home; empty means the institution default shows. Saved by set_exam_home_rules. */
+  homeRules: string;
+  allowedMaterials: string;
 };
 
 /**
@@ -131,6 +136,11 @@ ${room}`;
   const durationMinutes = Number(get("duration"));
   if (durationMinutes < 15 || durationMinutes > 600) return fail("The duration must be between 15 and 600 minutes.");
 
+  const homeRules = get("homeRules");
+  if (homeRules.length > HOME_RULES_MAX) return fail(`The home exam rules can be at most ${HOME_RULES_MAX} characters.`);
+  const allowedMaterials = get("allowedMaterials");
+  if (allowedMaterials.length > MATERIALS_MAX) return fail(`The allowed materials can be at most ${MATERIALS_MAX} characters.`);
+
   let pricePence: number | null = null;
   if (opts.withPrice) {
     pricePence = poundsToPence(get("price"));
@@ -151,6 +161,8 @@ ${room}`;
       durationMinutes,
       pricePence,
       bookingDeadline,
+      homeRules,
+      allowedMaterials,
     },
   };
 }

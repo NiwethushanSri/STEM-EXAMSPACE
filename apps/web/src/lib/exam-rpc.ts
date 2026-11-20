@@ -42,6 +42,21 @@ export async function callSaveExam(supabase: Client, v: ExamValues, pricePence: 
 }
 
 /**
+ * Saves the home exam rules and allowed materials of an exam just saved (save_exam does not take them). Returns a
+ * sentence for the person saving when it fails, else null; the exam itself is already saved by then.
+ */
+export async function saveHomeRules(supabase: Client, examId: string, v: ExamValues): Promise<string | null> {
+  const { data, error } = await supabase.rpc("set_exam_home_rules", {
+    p_exam: examId,
+    p_rules: v.homeRules,
+    p_materials: v.allowedMaterials,
+  });
+  const res = data && typeof data === "object" && !Array.isArray(data) ? (data as { ok?: unknown }) : null;
+  if (!error && res?.ok === true) return null;
+  return "The exam was saved, but the home exam rules and allowed materials could not be. Open the exam and save again.";
+}
+
+/**
  * save_exam answers "conflict" for several different reasons. Looks at the exam to tell the admin which
  * one applies (cancelled exam, seat limit below seats taken, price locked by bookings), else the generic text.
  */

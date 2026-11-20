@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { inputClass, labelClass } from "@/components/AuthLayout";
 import type { ExamRow, SubjectOption, VenueOption } from "@/lib/exams-staff";
-import { SITTING_LABEL, type ExamFormat } from "@/lib/exam-form";
+import { HOME_RULES_MAX, MATERIALS_MAX, SITTING_LABEL, type ExamFormat } from "@/lib/exam-form";
 import { utcToLondonParts } from "@/lib/london-time";
 import { penceToInput } from "@/lib/money";
 
@@ -48,6 +48,8 @@ export function ExamForm({
     price: exam?.pricePence != null ? penceToInput(exam.pricePence) : "",
     deadlineDate: deadline.date,
     deadlineTime: deadline.time || "17:00",
+    homeRules: exam?.homeRules ?? "",
+    allowedMaterials: exam?.allowedMaterials ?? "",
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((p) => ({ ...p, [k]: e.target.value }));
 
@@ -160,6 +162,20 @@ export function ExamForm({
           </div>
         )}
       </div>
+      {f.format !== "in_person" && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label htmlFor="ex-home-rules" className={labelClass}>Home exam rules</label>
+            <textarea id="ex-home-rules" value={f.homeRules} onChange={set("homeRules")} maxLength={HOME_RULES_MAX} rows={5} className={inputClass} />
+            <p className="mt-1 text-xs text-slate-500">Shown to families sitting at home. Leave empty to use the institution default rules.</p>
+          </div>
+          <div>
+            <label htmlFor="ex-materials" className={labelClass}>Allowed materials</label>
+            <textarea id="ex-materials" value={f.allowedMaterials} onChange={set("allowedMaterials")} maxLength={MATERIALS_MAX} rows={5} className={inputClass} />
+            <p className="mt-1 text-xs text-slate-500">Leave empty to use the institution default.</p>
+          </div>
+        </div>
+      )}
       {atCentre && (
         <div className="space-y-3">
           <h3 className="text-sm font-semibold text-slate-700">Centres</h3>

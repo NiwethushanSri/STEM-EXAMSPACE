@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { callSaveExam, readRpc } from "@/lib/exam-rpc";
+import { callSaveExam, readRpc, saveHomeRules } from "@/lib/exam-rpc";
 import { parseExamForm } from "@/lib/exam-form";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
@@ -21,9 +21,11 @@ export async function saveTeacherExamAction(raw: Record<string, string>): Promis
   const supabase = await createClient();
   const { data, error } = await callSaveExam(supabase, parsed.value, 0);
   const out = readRpc(data, error, "save_exam");
+  const rulesProblem = out.ok ? await saveHomeRules(supabase, out.id, parsed.value) : null;
   revalidatePath("/teacher/exams");
   revalidatePath("/admin/exams");
   if (!out.ok) return out;
+  if (rulesProblem) return { ok: false, message: rulesProblem };
   return {
     ok: true,
     message: parsed.value.id ? "Draft saved." : "Draft created. An admin will set the price and publish it.",

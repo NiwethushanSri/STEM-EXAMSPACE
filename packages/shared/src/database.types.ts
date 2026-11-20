@@ -185,14 +185,14 @@ isOneToOne: false
                   ]
                 },"exams": {
                   Row: {
-                    "booking_deadline": string,"created_at": string,"created_by": string | null,"currency": string,"duration_minutes": number,"exam_code": string,"format": Database["public"]['Enums']["exam_format"],"id": string,"paper": string,"price_confirmed": boolean,"price_pence": number,"release_held": boolean,"release_minutes_before": number,"release_notified_at": string | null,"released_early_at": string | null,"spare_pages": number,"starts_at": string,"status": Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at": string
+                    "allowed_materials": string | null,"booking_deadline": string,"created_at": string,"created_by": string | null,"currency": string,"duration_minutes": number,"exam_code": string,"format": Database["public"]['Enums']["exam_format"],"home_rules": string | null,"id": string,"paper": string,"price_confirmed": boolean,"price_pence": number,"release_held": boolean,"release_minutes_before": number,"release_notified_at": string | null,"released_early_at": string | null,"spare_pages": number,"starts_at": string,"status": Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "booking_deadline": string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes": number,"exam_code": string,"format": Database["public"]['Enums']["exam_format"],"id"?: string,"paper": string,"price_confirmed"?: boolean,"price_pence": number,"release_held"?: boolean,"release_minutes_before"?: number,"release_notified_at"?: string | null,"released_early_at"?: string | null,"spare_pages"?: number,"starts_at": string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at"?: string
+                    "allowed_materials"?: string | null,"booking_deadline": string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes": number,"exam_code": string,"format": Database["public"]['Enums']["exam_format"],"home_rules"?: string | null,"id"?: string,"paper": string,"price_confirmed"?: boolean,"price_pence": number,"release_held"?: boolean,"release_minutes_before"?: number,"release_notified_at"?: string | null,"released_early_at"?: string | null,"spare_pages"?: number,"starts_at": string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at"?: string
                   }
                   Update: {
-                    "booking_deadline"?: string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes"?: number,"exam_code"?: string,"format"?: Database["public"]['Enums']["exam_format"],"id"?: string,"paper"?: string,"price_confirmed"?: boolean,"price_pence"?: number,"release_held"?: boolean,"release_minutes_before"?: number,"release_notified_at"?: string | null,"released_early_at"?: string | null,"spare_pages"?: number,"starts_at"?: string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id"?: number,"title"?: string,"updated_at"?: string
+                    "allowed_materials"?: string | null,"booking_deadline"?: string,"created_at"?: string,"created_by"?: string | null,"currency"?: string,"duration_minutes"?: number,"exam_code"?: string,"format"?: Database["public"]['Enums']["exam_format"],"home_rules"?: string | null,"id"?: string,"paper"?: string,"price_confirmed"?: boolean,"price_pence"?: number,"release_held"?: boolean,"release_minutes_before"?: number,"release_notified_at"?: string | null,"released_early_at"?: string | null,"spare_pages"?: number,"starts_at"?: string,"status"?: Database["public"]['Enums']["exam_status"],"subject_id"?: number,"title"?: string,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -715,6 +715,32 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"sitting_acknowledgements": {
+                  Row: {
+                    "acknowledged_by": string,"as_role": string,"at": string,"booking_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "acknowledged_by": string,"as_role": string,"at": string,"booking_id": string
+                  }
+                  Update: {
+                    "acknowledged_by"?: string,"as_role"?: string,"at"?: string,"booking_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "sitting_acknowledgements_acknowledged_by_fkey"
+      columns: ["acknowledged_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "sitting_acknowledgements_booking_id_fkey"
+      columns: ["booking_id"]
+isOneToOne: true
+      referencedRelation: "bookings"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"student_details": {
                   Row: {
                     "date_of_birth": string | null,"gender": string | null,"index_number": string | null,"parent_phone": string | null,"photo_path": string | null,"profile_id": string,"requested_by_parent": string | null,"school": string | null,"signup_parent_email": string | null,"signup_parent_name": string | null,"year_group": string | null
@@ -885,6 +911,9 @@ isOneToOne: false
 { Args: { "p_by": string,"p_centre": string,"p_enforce_deadline": boolean,"p_exam": string,"p_note": string,"p_now": string,"p_paid": boolean,"p_sitting": Database["public"]['Enums']["sitting_mode"],"p_student": string }; Returns: Json
                            },
 "booking_paper_state":
+{ Args: { "p_booking": string,"p_now"?: string }; Returns: Json
+                           },
+"booking_sitting_state":
 { Args: { "p_booking": string,"p_now"?: string }; Returns: Json
                            },
 "can_manage_account":
@@ -1204,6 +1233,9 @@ isOneToOne: false
 "set_account_status_tx":
 { Args: { "p_action": string,"p_actor": string,"p_target": string }; Returns: string
                            },
+"set_exam_home_rules":
+{ Args: { "p_exam": string,"p_materials": string,"p_rules": string }; Returns: Json
+                           },
 "set_exam_paper_settings":
 { Args: { "p_exam": string,"p_exam_code": string,"p_reason"?: string,"p_release_minutes_before": number,"p_spare_pages": number }; Returns: Json
                            },
@@ -1215,6 +1247,15 @@ isOneToOne: false
                            },
 "set_paper_page_roles":
 { Args: { "p_paper": string,"p_roles": Json }; Returns: Json
+                           },
+"sitting_access_code":
+{ Args: { "p_acting": boolean,"p_actor": string,"p_booking": Omit<Database["public"]['Tables']["bookings"]['Row'], Database["public"]['Tables']["bookings"]['ComputedFields']> }; Returns: string
+                           },
+"sitting_acknowledge":
+{ Args: { "p_booking": string,"p_now"?: string }; Returns: Json
+                           },
+"sitting_phase":
+{ Args: { "p_exam": Omit<Database["public"]['Tables']["exams"]['Row'], Database["public"]['Tables']["exams"]['ComputedFields']>,"p_now": string }; Returns: string
                            }
           }
           Enums: {
