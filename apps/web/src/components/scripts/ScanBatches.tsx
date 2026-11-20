@@ -7,14 +7,18 @@ import { storeFile } from "@/lib/home-upload";
 import { uploadResumable } from "@/lib/resumable-upload";
 import {
   SCAN_ACCEPT,
+  SCAN_POLL_MAX_FAILURES,
   SCAN_POLL_MS,
+  completeFailureMessage,
   completeSummary,
   fileSize,
+  hasUploadsInFlight,
   isProcessing,
   parseCompleteResult,
   parseScanStatus,
   scanFileProblem,
   scanFileType,
+  startPolling,
   totalsLine,
   type ScanBatchStatus,
 } from "@/lib/scan-batch";
@@ -72,11 +76,26 @@ const UPLOAD_STATE: Record<string, string> = {
 let keys = 0;
 const newKey = () => `s${++keys}`;
 
+/** A note: an ok note in a polite live region (always there), an error as an alert. */
+function NoteLine({ note }: { note: Note | undefined }) {
+  return (
+    <>
+      <div aria-live="polite">{note?.tone === "ok" && <p className="mt-2 text-sm text-slate-700">{note.text}</p>}</div>
+      {note?.tone === "error" && (
+        <p role="alert" className="mt-2 text-sm text-red-700">
+          {note.text}
+        </p>
+      )}
+    </>
+  );
+}
+
 /**
  * Scans of a centre exam, per centre: "New scan batch" (optionally naming the collection manifest), the scanner files
  * uploaded straight to private storage with progress (resumable, one at a time), "Start processing", the live totals
- * (asked again every 3 seconds while a job waits or runs) and "All scans for this centre are uploaded", which marks
- * complete scripts and raises missing pages. The database checks every rule again.
+ * (asked again 3 seconds after each answer while a job waits or runs; after 3 failures in a row it stops and offers
+ * to try again) and "All scans for this centre are uploaded", which marks complete scripts and raises missing pages.
+ * The database checks every rule again.
  */
 export function ScanBatches({ examId, centres, batches: initial }: { examId: string; centres: ScanCentre[]; batches: ScanBatchStatus[] }) {
   const [batches, setBatches] = useState<ScanBatchStatus[]>(initial);
@@ -84,6 +103,7 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
   const [centreNote, setCentreNote] = useState<Record<string, Note | undefined>>({});
   const [batchNote, setBatchNote] = useState<Record<string, Note | undefined>>({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [pollFailed, setPollFailed] = useState(false);
 
   const filesRef = useRef<LocalFile[]>([]);
   const [files, setFilesState] = useState<LocalFile[]>([]);
@@ -95,19 +115,20 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
   /** Uploads, one at a time (scanner files are large). */
   const queue = useRef<Promise<void>>(Promise.resolve());
 
-  const refresh = useCallback(async (ids: string[]) => {
+  /** Asks for these batches' status again; false when any answer did not arrive. */
+  const refresh = useCallback(async (ids: string[]): Promise<boolean> => {
     const got = await Promise.all(ids.map(async (id) => parseScanStatus(await call("scan_batch_status", { p_batch: id }))));
     setBatches((bs) => bs.map((b) => got.find((g) => g?.id === b.id) ?? b));
+    return got.every((g) => g !== null);
   }, []);
 
-  // Live totals: while a job of a batch waits or runs, its status is asked for again every 3 seconds.
+  // Live totals: while a job of a batch waits or runs, its status is asked for again, one ask at a time.
   const active = batches.filter(isProcessing).map((b) => b.id).join(",");
   useEffect(() => {
-    if (!active) return;
+    if (!active || pollFailed) return;
     const ids = active.split(",");
-    const timer = setInterval(() => void refresh(ids), SCAN_POLL_MS);
-    return () => clearInterval(timer);
-  }, [active, refresh]);
+    return startPolling(() => refresh(ids), { intervalMs: SCAN_POLL_MS, maxFailures: SCAN_POLL_MAX_FAILURES, onGiveUp: () => setPollFailed(true) });
+  }, [active, refresh, pollFailed]);
 
   async function createBatch(centreId: string) {
     setBusy(`create:${centreId}`);
@@ -214,7 +235,7 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
     const res = parseCompleteResult(r);
     setCentreNote((m) => ({
       ...m,
-      [centreId]: res ? { tone: "ok", text: completeSummary(res) } : { tone: "error", text: scanMessageFor(r.code, "complete") },
+      [centreId]: res ? { tone: "ok", text: completeSummary(res) } : { tone: "error", text: completeFailureMessage(r) },
     }));
     await refresh(batches.filter((b) => b.centreId === centreId).map((b) => b.id));
     setBusy(null);
@@ -225,12 +246,20 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
       <p className="mb-4 text-sm text-slate-600">
         Upload the office scanner&apos;s files for each centre. Each page is matched to its candidate by the code printed on it.
       </p>
+      {pollFailed && (
+        <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          The totals could not be updated. Check your connection.
+          <button type="button" className={QUIET} onClick={() => setPollFailed(false)}>
+            Update the totals again
+          </button>
+        </div>
+      )}
       <div className="space-y-5">
         {centres.map((c) => {
           const mine = batches.filter((b) => b.centreId === c.id);
           const latest = mine[mine.length - 1];
-          const note = centreNote[c.id];
           const label = `${c.venue} · ${c.room}`;
+          const uploading = hasUploadsInFlight(files, mine.map((b) => b.id));
           return (
             <section key={c.id} data-testid="scan-centre" aria-label={`Scans for ${label}`} className="rounded border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -238,7 +267,8 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
                   <div className="font-medium text-slate-900">{label}</div>
                   {latest && (
                     <div className="text-xs text-slate-500" data-testid="scan-complete-count">
-                      Complete scripts: {latest.candidatesComplete} of {latest.candidatesExpected} candidate{latest.candidatesExpected === 1 ? "" : "s"} present or late
+                      Complete scripts: {latest.candidatesComplete} of {latest.candidatesExpected} candidate{latest.candidatesExpected === 1 ? "" : "s"} present or late ·{" "}
+                      {latest.totals.accepted} accepted
                     </div>
                   )}
                 </div>
@@ -251,10 +281,11 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
                       onChange={(e) => setManifest((m) => ({ ...m, [c.id]: e.target.value }))}
                       maxLength={60}
                       placeholder="M-..."
+                      aria-label={`Manifest number for ${label} (optional)`}
                       className="mt-1 block w-44 rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
                     />
                   </label>
-                  <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => createBatch(c.id)}>
+                  <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => createBatch(c.id)} aria-label={`New scan batch for ${label}`}>
                     New scan batch
                   </button>
                 </div>
@@ -280,17 +311,18 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
               )}
 
               <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-slate-100 pt-3">
-                <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => completeCentre(c.id)}>
+                <button
+                  type="button"
+                  className={BUTTON}
+                  disabled={busy !== null || uploading}
+                  onClick={() => completeCentre(c.id)}
+                  aria-label={`All scans for ${label} are uploaded`}
+                >
                   {busy === `complete:${c.id}` ? "Checking scripts..." : "All scans for this centre are uploaded"}
                 </button>
+                {uploading && <span className="text-xs text-slate-500">Wait until every file of this centre is uploaded.</span>}
               </div>
-              <div aria-live="polite">
-                {note && (
-                  <p role={note.tone === "error" ? "alert" : undefined} className={`mt-2 text-sm ${note.tone === "error" ? "text-red-700" : "text-slate-700"}`}>
-                    {note.text}
-                  </p>
-                )}
-              </div>
+              <NoteLine note={centreNote[c.id]} />
             </section>
           );
         })}
@@ -323,6 +355,7 @@ function BatchRow({
   const failed = files.filter((f) => f.state === "failed").length;
   const stored = b.uploads.some((u) => u.state === "stored") || files.some((f) => f.state === "stored");
   const processing = isProcessing(b);
+  const line = totalsLine(b.totals);
 
   return (
     <li data-testid="scan-batch" className="rounded border border-slate-200 p-3">
@@ -370,7 +403,7 @@ function BatchRow({
                 <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-xs text-red-700">
                   {f.error}
                   {f.file && (
-                    <button type="button" className={QUIET} onClick={() => onRetry(f.key)}>
+                    <button type="button" className={QUIET} onClick={() => onRetry(f.key)} aria-label={`Try again: ${f.name}`}>
                       Try again
                     </button>
                   )}
@@ -390,6 +423,7 @@ function BatchRow({
               multiple
               accept={SCAN_ACCEPT}
               className="sr-only"
+              aria-label={`Add scan files to ${b.number}`}
               onChange={(e) => {
                 const list = Array.from(e.target.files ?? []);
                 e.target.value = "";
@@ -397,7 +431,13 @@ function BatchRow({
               }}
             />
           </label>
-          <button type="button" className={BUTTON} disabled={busy !== null || uploading || !stored} onClick={onSubmit}>
+          <button
+            type="button"
+            className={BUTTON}
+            disabled={busy !== null || uploading || !stored}
+            onClick={onSubmit}
+            aria-label={`Start processing ${b.number}`}
+          >
             {busy === `submit:${b.id}` ? "Starting..." : "Start processing"}
           </button>
           {uploading && <span className="text-xs text-slate-500">Wait until every file is uploaded.</span>}
@@ -408,8 +448,8 @@ function BatchRow({
           )}
         </div>
       ) : (
-        <div className="mt-2 text-sm text-slate-700" aria-live="polite" data-testid="scan-totals">
-          <p>{totalsLine(b.totals)}</p>
+        <div className="mt-2 text-sm text-slate-700" data-testid="scan-totals">
+          <p>{line}</p>
           {processing ? (
             <p className="text-xs text-slate-500">
               {b.jobs.queued} file{b.jobs.queued === 1 ? "" : "s"} waiting, {b.jobs.running} being processed. The totals update every few seconds.
@@ -423,12 +463,12 @@ function BatchRow({
           )}
         </div>
       )}
+      {/* Always present, so a screen reader hears the totals only when the numbers change. */}
+      <p className="sr-only" aria-live="polite">
+        {open ? "" : `${b.number}: ${line}`}
+      </p>
 
-      {note && (
-        <p role={note.tone === "error" ? "alert" : undefined} className={`mt-2 text-sm ${note.tone === "error" ? "text-red-700" : "text-slate-700"}`}>
-          {note.text}
-        </p>
-      )}
+      <NoteLine note={note} />
     </li>
   );
 }

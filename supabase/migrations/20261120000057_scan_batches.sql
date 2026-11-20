@@ -8,12 +8,15 @@
 -- records the scanned custody step. The processing server prepares the pages and script_pages_record (Task 4)
 -- matches them to candidates. scan_batch_status follows a batch; once every scan of a centre is in, staff say so
 -- (scan_centre_complete) and each candidate's script is complete, or a missing_pages exception says what is missing.
+-- A centre script stays complete only until its next version (trigger on script_versions); scan_booking_complete
+-- checks one booking again (Task 10 calls it after changing a centre script).
 --
 -- Every function here is for staff admins (per-action permissions come with Phase 1B). A removed centre takes no new
 -- batch, no completion, and (fixing Task 8) no collection count, manifest or custody event.
 --
 -- Pages that staff confirm were left blank (Task 10's script_exception_dismiss_missing) are the numbers listed under
 -- "dismissed" in the details of a missing_pages exception of the booking (any state); they are not missing any more.
+-- A script whose linked pages are of two paper versions is never complete: staff make its pages one version.
 --
 -- Lock order (as 052): the centre's scan lock (advisory), batch, booking (advisory, in uuid order), script.
 
@@ -276,8 +279,11 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- scan_batch_status: what the batch screen shows.
 --   uploads:  its files handed in or still uploading (not those left out), in order;
---   totals:   its current pages (replaced_at is null) and how many are matched, blank, flagged (raised to staff for
---             itself: no code, an unknown or unexpected code, poor quality) and duplicates;
+--   totals:   its current pages (replaced_at is null), each counted once: flagged (an open exception other than
+--             duplicate names it: no code, an unknown or unexpected code, poor quality), else matched, blank or
+--             duplicate by its state, else set_aside (a page with no code or a rejected code whose exception is
+--             resolved), so pages = matched + blank + flagged + duplicates + set_aside; and accepted: the centre's
+--             scripts verified (or past verification);
 --   jobs:     its processing jobs waiting, running and failed;
 --   candidates_complete / candidates_expected: the centre's present or late candidates whose script is complete,
 --             and how many there are.
@@ -319,12 +325,21 @@ begin
     'totals', (
       select jsonb_build_object(
         'pages', count(*),
-        'matched', count(*) filter (where p.state = 'matched'),
-        'blank', count(*) filter (where p.state = 'blank'),
-        'flagged', count(*) filter (where exists (select 1 from public.script_exceptions e where e.page_id = p.id and e.kind <> 'duplicate')),
-        'duplicates', count(*) filter (where p.state = 'duplicate'))
-      from public.script_pages p join public.script_uploads u on u.id = p.upload_id
-      where u.batch_id = v_b.id and p.replaced_at is null),
+        'flagged', count(*) filter (where t.flagged),
+        'matched', count(*) filter (where not t.flagged and t.state = 'matched'),
+        'blank', count(*) filter (where not t.flagged and t.state = 'blank'),
+        'duplicates', count(*) filter (where not t.flagged and t.state = 'duplicate'),
+        'set_aside', count(*) filter (where not t.flagged and t.state in ('unmatched', 'rejected')),
+        'accepted', (
+          select count(*) from public.scripts s join public.bookings b on b.id = s.booking_id
+          where b.exam_id = v_b.exam_id and b.centre_id = v_b.centre_id and s.source = 'centre'
+            and s.state in ('verified', 'ready_to_mark', 'marking', 'marked', 'checked', 'final')))
+      from (
+        select p.state, exists (select 1 from public.script_exceptions e
+                                where e.page_id = p.id and e.state = 'open' and e.kind <> 'duplicate') as flagged
+        from public.script_pages p join public.script_uploads u on u.id = p.upload_id
+        where u.batch_id = v_b.id and p.replaced_at is null
+      ) t),
     'jobs', (
       select jsonb_build_object(
         'queued', count(*) filter (where j.state = 'queued'),
@@ -345,18 +360,168 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- scan_centre_complete ("All scans for this centre are uploaded"). Refused (still_processing) while a file of the
--- centre's batches is stored but not handed to processing, or queued or processing. Then, for each candidate of the
--- centre marked present or late (a paid or cancel-requested centre booking), the answer pages of their copy's paper
--- version (the version of the script's pages when they are of one, else the candidate's latest copy, else the exam's
--- current paper; spare pages are optional) must be in the current version of the script or dismissed:
---   pages missing -> one open missing_pages exception for the candidate, details {"pages": [...]} (an open one is
---                    brought up to date, never repeated); the script, if any, is not complete;
---   none missing  -> the script is complete and an open missing_pages exception is resolved.
--- A candidate with no script at all misses every answer page. An open missing_pages exception of a booking of the
--- centre that is no longer a candidate (marked absent after all) is resolved. Each script touched is worked out
--- again (script_evaluate): verified when complete with no open exception. Scripts past verification are left alone.
--- Safe to call again. Returns {candidates, complete, missing}.
+-- A centre script is complete only for the pages it shows when it was checked: every new version (a later scan, a
+-- rerun, a staff correction) makes it incomplete until scan_booking_complete checks it again. Home scripts keep
+-- Task 4's rule (complete while the latest submission is received).
+-- ---------------------------------------------------------------------------------------------
+create function public.script_version_uncomplete()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.scripts set complete = false where id = new.script_id and source = 'centre' and complete;
+  return null;
+end;
+$$;
+
+create trigger script_versions_uncomplete after insert on public.script_versions
+  for each row execute function public.script_version_uncomplete();
+
+-- ---------------------------------------------------------------------------------------------
+-- scan_booking_complete (internal): whether one centre booking's script is complete, for scan_centre_complete and
+-- for Task 10's resolutions after they change a centre script. Takes the booking's lock (callers that lock several
+-- bookings take them in uuid order first). A booking is a candidate when it is a paid or cancel-requested centre
+-- booking marked present or late.
+--   not a candidate     -> nothing is needed: an open missing_pages exception is resolved (not_expected);
+--   past verification   -> left alone;
+--   otherwise the paper version is that of the script's linked pages when they are of one version, else the
+--   candidate's latest copy's, else the exam's current paper. Its answer pages (spare pages are optional) count as
+--   there when the current version links a page of that version (or a page without a code that staff placed) at
+--   that copy page, or when they are dismissed: listed under "dismissed" in the details of a missing_pages exception
+--   of the booking (Task 10, any state).
+--   no paper version or no answer page known -> no_paper: one open missing_pages, {"pages": [], "reason": "no_paper"};
+--   answer pages not there                   -> missing: one open missing_pages, {"pages": [...]};
+--   all there but linked pages of two versions -> mixed: not complete; mixed_versions is raised again if none is open;
+--   all there, no script (every page dismissed) -> no_script;
+--   all there                                -> complete.
+-- An open missing_pages exception is brought up to date, never repeated, and resolved (pages_arrived) once nothing is
+-- missing. The script is complete exactly for "complete", then worked out again (script_evaluate). Returns
+-- {ok, booking_id, outcome, pages (the missing ones), complete}.
+-- ---------------------------------------------------------------------------------------------
+create function public.scan_booking_complete(p_booking uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_now timestamptz := now();
+  v_b public.bookings%rowtype;
+  v_x public.scripts%rowtype;
+  v_papers uuid[];
+  v_paper uuid;
+  v_answers int[];
+  v_missing int[] := '{}';
+  v_details jsonb;
+  v_outcome text;
+  v_rows int;
+begin
+  select * into v_b from public.bookings b where b.id = p_booking;
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'not_found');
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('script_booking:' || v_b.id::text, 0));
+  select * into v_x from public.scripts s where s.booking_id = v_b.id for update;
+
+  if not (v_b.sitting = 'centre' and v_b.status in ('paid', 'cancel_requested')
+          and exists (select 1 from public.attendance a
+                      where a.exam_id = v_b.exam_id and a.student_id = v_b.student_id and a.status in ('present', 'late'))) then
+    update public.script_exceptions e
+    set state = 'resolved', resolved_by = v_actor, resolved_at = v_now, resolution = 'not_expected'
+    where e.booking_id = v_b.id and e.kind = 'missing_pages' and e.state = 'open';
+    get diagnostics v_rows = row_count;
+    if v_rows > 0 and v_x.id is not null then
+      perform public.script_evaluate(v_x.id);
+    end if;
+    return jsonb_build_object('ok', true, 'booking_id', v_b.id, 'outcome', 'not_candidate', 'pages', '[]'::jsonb,
+      'complete', coalesce(v_x.complete, false));
+  end if;
+  if v_x.id is not null and v_x.state not in ('receiving', 'checking', 'needs_attention', 'verified') then
+    return jsonb_build_object('ok', true, 'booking_id', v_b.id, 'outcome', 'past_verification', 'pages', '[]'::jsonb,
+      'complete', v_x.complete);
+  end if;
+
+  select coalesce(array_agg(distinct c.paper_id), '{}') into v_papers
+  from public.script_page_links l
+  join public.script_pages p on p.id = l.page_id
+  join public.paper_copies c on c.id = p.copy_id
+  where l.script_id = v_x.id and l.version = v_x.version;
+  if cardinality(v_papers) = 1 then
+    v_paper := v_papers[1];
+  else
+    select c.paper_id into v_paper from public.paper_copies c where c.booking_id = v_b.id order by c.created_at desc, c.id limit 1;
+    if v_paper is null then
+      select p.id into v_paper from public.exam_papers p
+      where p.exam_id = v_b.exam_id and p.kind = 'paper' and p.superseded_at is null order by p.version desc limit 1;
+    end if;
+  end if;
+  select coalesce(array_agg(r.page order by r.page), '{}') into v_answers
+  from public.paper_page_roles r where r.paper_id = v_paper and r.role = 'answer';
+
+  if cardinality(v_answers) = 0 then
+    v_outcome := 'no_paper';
+    v_details := jsonb_build_object('pages', '[]'::jsonb, 'reason', 'no_paper');
+  else
+    select coalesce(array_agg(a.page order by a.page), '{}') into v_missing
+    from unnest(v_answers) a(page)
+    where not exists (
+        select 1 from public.script_page_links l
+        join public.script_pages p on p.id = l.page_id
+        left join public.paper_copies c on c.id = p.copy_id
+        where l.script_id = v_x.id and l.version = v_x.version and l.copy_page = a.page
+          and (p.copy_id is null or c.paper_id = v_paper))
+      and not exists (
+        select 1 from public.script_exceptions e
+        cross join lateral jsonb_array_elements_text(
+          case when jsonb_typeof(e.details -> 'dismissed') = 'array' then e.details -> 'dismissed' else '[]'::jsonb end) d(page)
+        where e.booking_id = v_b.id and e.kind = 'missing_pages' and d.page = a.page::text);
+    v_outcome := case
+      when cardinality(v_missing) > 0 then 'missing'
+      when cardinality(v_papers) > 1 then 'mixed'
+      when v_x.id is null then 'no_script'
+      else 'complete'
+    end;
+    v_details := jsonb_build_object('pages', to_jsonb(v_missing));
+  end if;
+
+  if v_outcome in ('no_paper', 'missing') then
+    update public.script_exceptions e
+    set details = (e.details - 'reason') || v_details, script_id = coalesce(e.script_id, v_x.id)
+    where e.booking_id = v_b.id and e.kind = 'missing_pages' and e.state = 'open';
+    get diagnostics v_rows = row_count;
+    if v_rows = 0 then
+      insert into public.script_exceptions (exam_id, kind, booking_id, script_id, details)
+      values (v_b.exam_id, 'missing_pages', v_b.id, v_x.id, v_details);
+    end if;
+  else
+    update public.script_exceptions e
+    set state = 'resolved', resolved_by = v_actor, resolved_at = v_now, resolution = 'pages_arrived'
+    where e.booking_id = v_b.id and e.kind = 'missing_pages' and e.state = 'open';
+  end if;
+  if v_outcome = 'mixed' then
+    perform public.script_raise_mixed(v_x.id, null);
+  end if;
+
+  if v_x.id is not null then
+    if v_x.complete is distinct from (v_outcome = 'complete') then
+      update public.scripts set complete = (v_outcome = 'complete') where id = v_x.id;
+    end if;
+    perform public.script_evaluate(v_x.id);
+  end if;
+  return jsonb_build_object('ok', true, 'booking_id', v_b.id, 'outcome', v_outcome, 'pages', to_jsonb(v_missing),
+    'complete', v_outcome = 'complete');
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- scan_centre_complete ("All scans for this centre are uploaded"). Refused while a file of the centre's batches is
+-- stored but not handed to processing, or queued or processing (still_processing), and while a paid or
+-- cancel-requested centre booking of the centre has no attendance mark (register_incomplete, with not_marked: how
+-- many). Then every booking of the centre, in uuid order, is checked by scan_booking_complete. Safe to call again.
+-- Returns {candidates, complete, missing (missing pages or no paper known), mixed (pages of two paper versions)}.
 -- ---------------------------------------------------------------------------------------------
 create function public.scan_centre_complete(p_exam uuid, p_centre uuid)
 returns jsonb
@@ -366,19 +531,14 @@ set search_path = ''
 as $$
 declare
   v_actor uuid := auth.uid();
-  v_now timestamptz := now();
   v_centre public.exam_centres%rowtype;
-  v_b public.bookings%rowtype;
-  v_x public.scripts%rowtype;
-  v_papers uuid[];
-  v_paper uuid;
-  v_missing int[];
-  v_rows int;
-  v_script uuid;
-  v_gone uuid[];
+  v_b uuid;
+  v_r jsonb;
+  v_unmarked int;
   v_candidates int := 0;
   v_complete int := 0;
-  v_short int := 0;
+  v_missing int := 0;
+  v_mixed int := 0;
 begin
   if not public.is_staff_admin() then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
@@ -401,104 +561,34 @@ begin
       and (u.state in ('queued', 'processing') or (u.state = 'stored' and sb.submitted_at is null))) then
     return jsonb_build_object('ok', false, 'code', 'still_processing');
   end if;
+  select count(*) into v_unmarked
+  from public.bookings b
+  where b.exam_id = p_exam and b.centre_id = p_centre and b.sitting = 'centre' and b.status in ('paid', 'cancel_requested')
+    and not exists (select 1 from public.attendance a where a.exam_id = b.exam_id and a.student_id = b.student_id);
+  if v_unmarked > 0 then
+    return jsonb_build_object('ok', false, 'code', 'register_incomplete', 'not_marked', v_unmarked);
+  end if;
 
-  for v_b in select b.* from public.bookings b where b.exam_id = p_exam and b.centre_id = p_centre order by b.id loop
-    perform pg_advisory_xact_lock(hashtextextended('script_booking:' || v_b.id::text, 0));
+  for v_b in select b.id from public.bookings b where b.exam_id = p_exam and b.centre_id = p_centre order by b.id loop
+    perform pg_advisory_xact_lock(hashtextextended('script_booking:' || v_b::text, 0));
   end loop;
-
-  for v_b in
-    select b.* from public.bookings b
-    join public.attendance a on a.exam_id = b.exam_id and a.student_id = b.student_id and a.status in ('present', 'late')
-    where b.exam_id = p_exam and b.centre_id = p_centre and b.sitting = 'centre' and b.status in ('paid', 'cancel_requested')
-    order by b.id
-  loop
-    v_candidates := v_candidates + 1;
-    select * into v_x from public.scripts s where s.booking_id = v_b.id for update;
-    if v_x.id is not null and v_x.state not in ('receiving', 'checking', 'needs_attention', 'verified') then
-      if v_x.complete then
+  for v_b in select b.id from public.bookings b where b.exam_id = p_exam and b.centre_id = p_centre order by b.id loop
+    v_r := public.scan_booking_complete(v_b);
+    if v_r ->> 'outcome' is distinct from 'not_candidate' then
+      v_candidates := v_candidates + 1;
+      if (v_r ->> 'complete')::boolean then
         v_complete := v_complete + 1;
-      end if;
-      continue;
-    end if;
-
-    v_paper := null;
-    if v_x.id is not null then
-      select coalesce(array_agg(distinct c.paper_id), '{}') into v_papers
-      from public.script_page_links l
-      join public.script_pages p on p.id = l.page_id
-      join public.paper_copies c on c.id = p.copy_id
-      where l.script_id = v_x.id and l.version = v_x.version;
-      if cardinality(v_papers) = 1 then
-        v_paper := v_papers[1];
+      elsif v_r ->> 'outcome' in ('missing', 'no_paper') then
+        v_missing := v_missing + 1;
+      elsif v_r ->> 'outcome' = 'mixed' then
+        v_mixed := v_mixed + 1;
       end if;
     end if;
-    if v_paper is null then
-      select c.paper_id into v_paper from public.paper_copies c where c.booking_id = v_b.id order by c.created_at desc, c.id limit 1;
-    end if;
-    if v_paper is null then
-      select p.id into v_paper from public.exam_papers p
-      where p.exam_id = p_exam and p.kind = 'paper' and p.superseded_at is null order by p.version desc limit 1;
-    end if;
-
-    select coalesce(array_agg(r.page order by r.page), '{}') into v_missing
-    from public.paper_page_roles r
-    where r.paper_id = v_paper and r.role = 'answer'
-      and not exists (select 1 from public.script_page_links l
-                      where l.script_id = v_x.id and l.version = v_x.version and l.copy_page = r.page)
-      and not exists (
-        select 1 from public.script_exceptions e
-        cross join lateral jsonb_array_elements_text(
-          case when jsonb_typeof(e.details -> 'dismissed') = 'array' then e.details -> 'dismissed' else '[]'::jsonb end) d(page)
-        where e.booking_id = v_b.id and e.kind = 'missing_pages' and d.page = r.page::text);
-
-    if cardinality(v_missing) > 0 then
-      v_short := v_short + 1;
-      update public.script_exceptions e
-      set details = e.details || jsonb_build_object('pages', to_jsonb(v_missing)), script_id = coalesce(e.script_id, v_x.id)
-      where e.booking_id = v_b.id and e.kind = 'missing_pages' and e.state = 'open';
-      get diagnostics v_rows = row_count;
-      if v_rows = 0 then
-        insert into public.script_exceptions (exam_id, kind, booking_id, script_id, details)
-        values (p_exam, 'missing_pages', v_b.id, v_x.id, jsonb_build_object('pages', to_jsonb(v_missing)));
-      end if;
-      if v_x.complete then
-        update public.scripts set complete = false where id = v_x.id;
-      end if;
-    else
-      update public.script_exceptions e
-      set state = 'resolved', resolved_by = v_actor, resolved_at = v_now, resolution = 'pages_arrived'
-      where e.booking_id = v_b.id and e.kind = 'missing_pages' and e.state = 'open';
-      if v_x.id is not null then
-        v_complete := v_complete + 1;
-        if not v_x.complete then
-          update public.scripts set complete = true where id = v_x.id;
-        end if;
-      end if;
-    end if;
-    if v_x.id is not null then
-      perform public.script_evaluate(v_x.id);
-    end if;
-  end loop;
-
-  -- Bookings of the centre that are no longer candidates need nothing.
-  with gone as (
-    update public.script_exceptions e
-    set state = 'resolved', resolved_by = v_actor, resolved_at = v_now, resolution = 'not_expected'
-    from public.bookings b
-    where e.booking_id = b.id and e.kind = 'missing_pages' and e.state = 'open'
-      and b.exam_id = p_exam and b.centre_id = p_centre
-      and not (b.sitting = 'centre' and b.status in ('paid', 'cancel_requested')
-               and exists (select 1 from public.attendance a
-                           where a.exam_id = b.exam_id and a.student_id = b.student_id and a.status in ('present', 'late')))
-    returning e.booking_id)
-  select coalesce(array_agg(distinct gone.booking_id), '{}') into v_gone from gone;
-  for v_script in select s.id from public.scripts s where s.booking_id = any (v_gone) order by s.booking_id loop
-    perform public.script_evaluate(v_script);
   end loop;
 
   insert into public.audit_log (actor_id, action, target_type, target_id)
   values (v_actor, 'scan_centre_completed', 'exam_centre', p_centre);
-  return jsonb_build_object('ok', true, 'candidates', v_candidates, 'complete', v_complete, 'missing', v_short);
+  return jsonb_build_object('ok', true, 'candidates', v_candidates, 'complete', v_complete, 'missing', v_missing, 'mixed', v_mixed);
 end;
 $$;
 
@@ -663,6 +753,8 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 revoke execute on function public.scan_upload_type_ok(text) from public, anon, authenticated, service_role;
 revoke execute on function public.scan_upload_max_bytes() from public, anon, authenticated, service_role;
+revoke execute on function public.scan_booking_complete(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.script_version_uncomplete() from public, anon, authenticated, service_role;
 
 revoke execute on function public.scan_batch_create(uuid, uuid, text) from public, anon;
 revoke execute on function public.scan_upload_begin(uuid, text, bigint) from public, anon;

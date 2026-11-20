@@ -1443,6 +1443,9 @@ isOneToOne: false
 "scan_batch_submit":
 { Args: { "p_batch": string }; Returns: Json
                            },
+"scan_booking_complete":
+{ Args: { "p_booking": string }; Returns: Json
+                           },
 "scan_centre_complete":
 { Args: { "p_centre": string,"p_exam": string }; Returns: Json
                            },

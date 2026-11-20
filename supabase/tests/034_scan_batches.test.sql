@@ -1,19 +1,21 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(90);
+select plan(103);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
 -- Fixtures. Exam e (centres ce1, ce2, ce3) and exam f (centre cf), one subject. Paper of e: 4 pages (1 cover, 2-3
 -- answer, 4 information); every copy has 6 pages (5-6 spare). Centre ce1: b1 present, b2 late, b3 present (sends
 -- nothing), b4 absent, b5 present but cancelled, b8 present with a cancellation requested. b6 sits at home, b7 at
--- ce2, b9 at ce3 (removed near the end). Staff: admin, admin2, a suspended admin, a teacher of the subject.
+-- ce2, b9 at ce3 (removed near the end); b10 (ce1) is added later, not marked on the register. Exam g (centre cg) has
+-- no paper: gb is present. Exam h (centre ch) has two paper versions (v1: 2-3 answer; v2: 2-4 answer): hb is present
+-- with a copy of each, the v2 copy the latest. Staff: admin, admin2, a suspended admin, a teacher of the subject.
 -- ---------------------------------------------------------------------------------------------
 create temp table c (name text primary key, id uuid not null);
 grant select on c to public;
 insert into c values ('admin', tests.create_user('admin', 'active')), ('admin2', tests.create_user('admin', 'active')),
   ('admin3', tests.create_user('admin', 'suspended')), ('teacher', tests.create_user('teacher', 'active'));
-insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 9) i;
+insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 10) i;
 create temp table kv (name text primary key, id uuid);
 grant all on kv to public;
 create temp table res (name text primary key, j jsonb);
@@ -28,7 +30,8 @@ insert into public.subjects (name, kind) values ('ZZ Scan batches', 'school');
 insert into public.venues (name, rooms) values ('ZZ Scan hall', array['R1', 'R2', 'R3']);
 insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence, price_confirmed, booking_deadline, status)
 select s.id, 'ZZS ' || t.n, 'P1', 'both', t.at::timestamptz, 90, 0, true, t.at::timestamptz - interval '1 day', 'published'
-from public.subjects s, (values ('e', '2031-06-07 10:00 Europe/London'), ('f', '2031-06-08 10:00 Europe/London')) t(n, at)
+from public.subjects s, (values ('e', '2031-06-07 10:00 Europe/London'), ('f', '2031-06-08 10:00 Europe/London'),
+             ('g', '2031-06-09 10:00 Europe/London'), ('h', '2031-06-10 10:00 Europe/London')) t(n, at)
 where s.name = 'ZZ Scan batches';
 insert into kv select substr(e.title, 5), e.id from public.exams e join public.subjects s on s.id = e.subject_id where s.name = 'ZZ Scan batches';
 insert into public.teacher_subjects select pg_temp.uid('teacher'), id from public.subjects where name = 'ZZ Scan batches';
@@ -38,6 +41,9 @@ insert into kv select 'ce' || right(room, 1), id from public.exam_centres where 
 insert into public.exam_centres (exam_id, venue_id, room, seat_limit)
 select pg_temp.k('f'), v.id, 'R1', 50 from public.venues v where v.name = 'ZZ Scan hall';
 insert into kv select 'cf', id from public.exam_centres where exam_id = pg_temp.k('f');
+insert into public.exam_centres (exam_id, venue_id, room, seat_limit)
+select pg_temp.k(t.x), v.id, 'R1', 50 from public.venues v, (values ('g'), ('h')) t(x) where v.name = 'ZZ Scan hall';
+insert into kv select 'c' || t.x, ec.id from public.exam_centres ec join (values ('g'), ('h')) t(x) on ec.exam_id = pg_temp.k(t.x);
 
 insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size)
 values (pg_temp.k('e'), 'paper', 'Question paper', 1, pg_temp.k('e')::text || '/' || gen_random_uuid()::text || '.pdf', 4, 1000);
@@ -58,6 +64,24 @@ insert into public.attendance (exam_id, student_id, status, marked_by, marked_at
 select pg_temp.k('e'), pg_temp.uid(t.s), t.st::public.attendance_status, pg_temp.uid('admin'), '2031-06-07 09:00Z'
 from (values ('s1', 'present'), ('s2', 'late'), ('s3', 'present'), ('s4', 'absent'), ('s5', 'present'), ('s6', 'present'),
              ('s7', 'present'), ('s8', 'present'), ('s9', 'present')) t(s, st);
+
+insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size, superseded_at)
+values (pg_temp.k('h'), 'paper', 'Question paper', 1, pg_temp.k('h')::text || '/' || gen_random_uuid()::text || '.pdf', 4, 1000, now());
+insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size)
+values (pg_temp.k('h'), 'paper', 'Question paper', 2, pg_temp.k('h')::text || '/' || gen_random_uuid()::text || '.pdf', 4, 1000);
+insert into kv select 'hv' || version, id from public.exam_papers where exam_id = pg_temp.k('h');
+update public.paper_page_roles
+set role = (case when page = 1 then 'cover' when page = 4 and paper_id = pg_temp.k('hv1') then 'information' else 'answer' end)::public.page_role
+where paper_id in (pg_temp.k('hv1'), pg_temp.k('hv2'));
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
+select pg_temp.k(t.x), pg_temp.uid('s1'), pg_temp.uid('s1'), 'paid', 0, 'centre', pg_temp.k('c' || t.x) from (values ('g'), ('h')) t(x);
+insert into kv select t.x || 'b', b.id from public.bookings b join (values ('g'), ('h')) t(x) on b.exam_id = pg_temp.k(t.x);
+insert into public.attendance (exam_id, student_id, status, marked_by, marked_at)
+select pg_temp.k(t.x), pg_temp.uid('s1'), 'present', pg_temp.uid('admin'), '2031-06-09 09:00Z' from (values ('g'), ('h')) t(x);
+insert into public.paper_copies (code, booking_id, paper_id, page_count, created_at)
+values (public.copy_code_new(), pg_temp.k('hb'), pg_temp.k('hv1'), 6, now() - interval '1 hour'),
+       (public.copy_code_new(), pg_temp.k('hb'), pg_temp.k('hv2'), 6, now());
+insert into kv select 'hc' || right(k.name, 1), pc.id from public.paper_copies pc join kv k on k.id = pc.paper_id where k.name in ('hv1', 'hv2');
 
 -- Staff calls. A successful call keeps its result under p_name, and the new id in kv.
 create function pg_temp.batch(p_name text, p_exam text, p_centre text, p_manifest text default null) returns jsonb language plpgsql as $$
@@ -88,13 +112,17 @@ create function pg_temp.stored(p_name text) returns jsonb language sql as $$ sel
 create function pg_temp.submit(p_batch text) returns jsonb language sql as $$ select public.scan_batch_submit(pg_temp.k(p_batch)) $$;
 create function pg_temp.status(p_batch text) returns jsonb language sql as $$ select public.scan_batch_status(pg_temp.k(p_batch)) $$;
 create function pg_temp.complete(p_centre text) returns jsonb language sql as $$ select public.scan_centre_complete(pg_temp.k('e'), pg_temp.k(p_centre)) $$;
+-- pages/matched/blank/flagged/duplicates/set_aside/accepted
 create function pg_temp.totals(p_batch text) returns text language sql as $$
-  select concat_ws('/', t ->> 'pages', t ->> 'matched', t ->> 'blank', t ->> 'flagged', t ->> 'duplicates')
+  select concat_ws('/', t ->> 'pages', t ->> 'matched', t ->> 'blank', t ->> 'flagged', t ->> 'duplicates', t ->> 'set_aside', t ->> 'accepted')
   from (select pg_temp.status(p_batch) -> 'totals' as t) x $$;
+create function pg_temp.complete_in(p_exam text, p_centre text) returns jsonb language sql as $$
+  select public.scan_centre_complete(pg_temp.k(p_exam), pg_temp.k(p_centre)) $$;
 create function pg_temp.counts(j jsonb) returns text language sql immutable as $$
   select concat_ws('/', j ->> 'candidates', j ->> 'complete', j ->> 'missing') $$;
 grant execute on function pg_temp.batch(text, text, text, text), pg_temp.bgn(text, text, text, bigint), pg_temp.put(text, bigint, text),
-  pg_temp.stored(text), pg_temp.submit(text), pg_temp.status(text), pg_temp.complete(text), pg_temp.totals(text), pg_temp.counts(jsonb) to public;
+  pg_temp.stored(text), pg_temp.submit(text), pg_temp.status(text), pg_temp.complete(text), pg_temp.totals(text), pg_temp.counts(jsonb),
+  pg_temp.complete_in(text, text) to public;
 
 -- The processing server (as postgres): one prepared page (p_copy null: a page with no code), and a prepare job run.
 create function pg_temp.page(p_up text, p_idx int, p_copy text, p_page int, p_sharp numeric default 200, p_flags text[] default '{}',
@@ -152,7 +180,8 @@ select ok(not exists (select 1 from unnest(array['public.scan_batch_create(uuid,
     'public.scan_batch_submit(uuid)', 'public.scan_batch_status(uuid)', 'public.scan_centre_complete(uuid,uuid)']) f
   where has_function_privilege('anon', f, 'execute') or not has_function_privilege('authenticated', f, 'execute')),
   'the scan functions are for signed-in users (they check the caller), never anon');
-select ok(not exists (select 1 from unnest(array['public.scan_upload_type_ok(text)', 'public.scan_upload_max_bytes()']) f,
+select ok(not exists (select 1 from unnest(array['public.scan_upload_type_ok(text)', 'public.scan_upload_max_bytes()',
+    'public.scan_booking_complete(uuid)', 'public.script_version_uncomplete()']) f,
   unnest(array['anon', 'authenticated', 'service_role']) r where has_function_privilege(r, f, 'execute')), 'the scan helpers are internal');
 select ok(exists (select 1 from pg_constraint where conrelid = 'public.scan_batches'::regclass and contype = 'f'
                     and confrelid = 'public.collection_manifests'::regclass)
@@ -298,7 +327,8 @@ create temp table u1_pages as select jsonb_build_array(
 select is((pg_temp.run('u1', (select j from u1_pages)) ->> 'pages'), '10', 'status_totals_count_pages: the first file is recorded');
 select is((pg_temp.run('u2', jsonb_build_array(pg_temp.page('u2', 0, 'c1', 5), pg_temp.page('u2', 1, 'c7', 2))) ->> 'pages'), '2', 'and the second');
 select tests.as_user(pg_temp.uid('admin'));
-select is(pg_temp.totals('bt1'), '12/7/1/4/1', 'pages, matched, blank, flagged (no code, absent, blurred, other centre) and duplicates');
+select is(pg_temp.totals('bt1'), '12/6/1/4/1/0/0',
+  'each page once: matched, blank, flagged (open: no code, absent, blurred b8 page 3, other centre), duplicate, set aside; none accepted');
 select is(pg_temp.status('bt1') -> 'jobs' ->> 'queued', '0', 'no job waits any more');
 select tests.as_postgres();
 insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u1'), 'prepare');
@@ -306,12 +336,28 @@ select pg_temp.run('u1', (select j from u1_pages));
 select is((select count(*)::int from public.script_pages where upload_id = pg_temp.k('u1') and replaced_at is not null), 3,
   'the first file run again keeps b1''s earlier pages, replaced (older versions show them)');
 select tests.as_user(pg_temp.uid('admin'));
-select is(pg_temp.totals('bt1'), '12/7/1/4/1', 'the totals count the current pages only');
+select is(pg_temp.totals('bt1'), '12/6/1/4/1/0/0', 'the totals count the current pages only');
+select tests.as_postgres();
+update public.script_exceptions set state = 'resolved', resolved_at = now(), resolution = 'blank'
+where upload_id = pg_temp.k('u1') and kind = 'no_code' and state = 'open';
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.totals('bt1'), '12/6/1/3/1/1/0', 'flagged counts open exceptions only: the page dealt with is set aside, and the totals still add up');
 select is(pg_temp.status('bt1') ->> 'candidates_complete', '0', 'no candidate is complete before the centre is');
 
 -- ---------------------------------------------------------------------------------------------
 -- complete_raises_missing_pages_and_verifies_complete
 -- ---------------------------------------------------------------------------------------------
+select tests.as_postgres();
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
+values (pg_temp.k('e'), pg_temp.uid('s10'), pg_temp.uid('s10'), 'paid', 0, 'centre', pg_temp.k('ce1'));
+insert into kv select 'b10', id from public.bookings where exam_id = pg_temp.k('e') and student_id = pg_temp.uid('s10');
+select tests.as_user(pg_temp.uid('admin'));
+select is((select concat_ws('/', j ->> 'code', j ->> 'not_marked') from (select pg_temp.complete('ce1') as j) x), 'register_incomplete/1',
+  'a centre with a candidate not marked on the register cannot be completed');
+select tests.as_postgres();
+insert into public.attendance (exam_id, student_id, status, marked_by, marked_at)
+values (pg_temp.k('e'), pg_temp.uid('s10'), 'absent', pg_temp.uid('admin'), '2031-06-07 09:05Z');
+select tests.as_user(pg_temp.uid('admin'));
 insert into res select 'cp1', pg_temp.complete('ce1');
 select is(pg_temp.counts(pg_temp.r('cp1')), '4/2/2',
   'complete_raises_missing_pages_and_verifies_complete: four candidates, two complete, two with pages missing');
@@ -328,11 +374,17 @@ select is((select details from public.script_exceptions where booking_id = pg_te
 select tests.as_user(pg_temp.uid('admin'));
 select is((pg_temp.status('bt1') ->> 'candidates_complete') || '/' || (pg_temp.status('bt1') ->> 'candidates_expected'), '2/4',
   'the status counts the complete candidates of the centre');
+select is(pg_temp.status('bt1') -> 'totals' ->> 'accepted', '1', 'and b1''s verified script as accepted');
 select is(pg_temp.counts(pg_temp.complete('ce1')), '4/2/2', 'completing again gives the same answer');
 select tests.as_postgres();
 select is((select count(*)::int from public.script_exceptions where exam_id = pg_temp.k('e') and kind = 'missing_pages'), 2,
   'with no second exception for anyone');
 select is((select count(*)::int from public.audit_log where action = 'scan_centre_completed' and target_id = pg_temp.k('ce1')), 2, 'each completion is audited');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u2'), 'prepare');
+select pg_temp.run('u2', jsonb_build_array(pg_temp.page('u2', 0, 'c1', 5, 250), pg_temp.page('u2', 1, 'c7', 2)));
+select is(pg_temp.script('b1'), 'false/receiving', 'a new version of b1''s script (the second file run again) makes it incomplete');
+select is(public.scan_booking_complete(pg_temp.k('b1')) ->> 'outcome', 'complete', 'checking b1 again finds it still complete');
+select is(pg_temp.script('b1'), 'true/verified', 'and marks it complete and verified again');
 
 -- ---------------------------------------------------------------------------------------------
 -- absent_candidate_needs_no_script
@@ -386,6 +438,59 @@ select is(pg_temp.counts(pg_temp.complete('ce1')), '3/3/0', 'b3 marked absent af
 select tests.as_postgres();
 select is((select count(*)::int from public.script_exceptions where booking_id = pg_temp.k('b3') and kind = 'missing_pages' and state = 'open'), 0,
   'and their open missing_pages exception is resolved');
+
+-- ---------------------------------------------------------------------------------------------
+-- No paper version known (exam g has none): never complete, one missing_pages exception says why.
+-- ---------------------------------------------------------------------------------------------
+select tests.as_user(pg_temp.uid('admin'));
+insert into res select 'cg1', pg_temp.complete_in('g', 'cg');
+select is(pg_temp.counts(pg_temp.r('cg1')), '1/0/1', 'a candidate whose paper is not known is not complete');
+select is(pg_temp.counts(pg_temp.complete_in('g', 'cg')), '1/0/1', 'nor when completing again');
+select tests.as_postgres();
+select is((select string_agg(state || ':' || details::text, ',') from public.script_exceptions where booking_id = pg_temp.k('gb') and kind = 'missing_pages'),
+  'open:{"pages": [], "reason": "no_paper"}', 'one open missing_pages exception: no pages known, reason no_paper');
+
+-- ---------------------------------------------------------------------------------------------
+-- Pages of two paper versions (exam h): hb's first file has v1 pages 2, 3 and 5 and v2 page 4.
+-- ---------------------------------------------------------------------------------------------
+select tests.as_user(pg_temp.uid('admin'));
+select pg_temp.batch('bth1', 'h', 'ch');
+select pg_temp.bgn('uh1', 'bth1', 'application/pdf', 700);
+select tests.as_postgres();
+select pg_temp.put('uh1', 700, 'application/pdf');
+select tests.as_user(pg_temp.uid('admin'));
+select pg_temp.stored('uh1');
+select pg_temp.submit('bth1');
+select tests.as_postgres();
+select pg_temp.run('uh1', jsonb_build_array(pg_temp.page('uh1', 0, 'hc1', 2), pg_temp.page('uh1', 1, 'hc1', 3), pg_temp.page('uh1', 2, 'hc2', 4),
+  pg_temp.page('uh1', 3, 'hc1', 5)));
+update public.script_exceptions set state = 'resolved', resolved_at = now(), resolution = 'accepted'
+where booking_id = pg_temp.k('hb') and kind = 'mixed_versions' and state = 'open';
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.counts(pg_temp.complete_in('h', 'ch')), '1/0/1',
+  'pages of two versions: v1 pages 2-3 do not stand in for v2 pages 2-3, even with mixed_versions resolved');
+select tests.as_postgres();
+select is(pg_temp.script('hb') || ' ' || pg_temp.missing('hb'), 'false/needs_attention open:[2, 3]',
+  'the script is not complete and v2''s pages 2 and 3 are missing');
+select tests.as_user(pg_temp.uid('admin'));
+select pg_temp.batch('bth2', 'h', 'ch');
+select pg_temp.bgn('uh2', 'bth2', 'application/pdf', 800);
+select tests.as_postgres();
+select pg_temp.put('uh2', 800, 'application/pdf');
+select tests.as_user(pg_temp.uid('admin'));
+select pg_temp.stored('uh2');
+select pg_temp.submit('bth2');
+select tests.as_postgres();
+select pg_temp.run('uh2', jsonb_build_array(pg_temp.page('uh2', 0, 'hc2', 2, 300), pg_temp.page('uh2', 1, 'hc2', 3, 300)));
+update public.script_exceptions set state = 'resolved', resolved_at = now(), resolution = 'accepted'
+where booking_id = pg_temp.k('hb') and kind = 'mixed_versions' and state = 'open';
+select tests.as_user(pg_temp.uid('admin'));
+select is((select concat_ws('/', j ->> 'candidates', j ->> 'complete', j ->> 'missing', j ->> 'mixed') from (select pg_temp.complete_in('h', 'ch') as j) x),
+  '1/0/0/1', 'with every v2 answer page but v1 page 5 still linked, the script is reported mixed, not complete');
+select tests.as_postgres();
+select is(pg_temp.script('hb') || ' ' || pg_temp.missing('hb') || ' '
+          || (select count(*) from public.script_exceptions where booking_id = pg_temp.k('hb') and kind = 'mixed_versions' and state = 'open'),
+  'false/needs_attention resolved:[2, 3] 1', 'nothing is missing any more, and mixed_versions is open again for staff');
 
 -- ---------------------------------------------------------------------------------------------
 -- A removed centre takes no scans, collection, manifest or custody.
