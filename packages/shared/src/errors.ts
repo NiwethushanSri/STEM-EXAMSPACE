@@ -294,6 +294,8 @@ const exceptionMessages: Record<string, string> = {
   page_replaced: "This file has been processed again. Refresh the page.",
   still_mixed: "The script still shows pages from two versions of the paper. Make its pages one version first.",
   not_late: "This script was not handed in late.",
+  name_not_hidden: "Hide the candidate's name on the page first, or tick \"There is no name on this page\".",
+  other_family: "A page handed in by one family can only go to that family's own bookings, not to another family's.",
 };
 
 /** Message for an exception queue RPC failure code; unknown codes get the generic message. */

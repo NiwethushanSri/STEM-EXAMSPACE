@@ -1,10 +1,10 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Badge } from "@/components/AppShell";
 import { PageViewer } from "@/components/scripts/PageViewer";
-import { findCandidatesAction, resolveExceptionAction, saveHiddenAreasAction, type CandidateOption } from "@/app/admin/scripts/exceptions/actions";
+import { findCandidatesAction, resolveExceptionAction, saveHiddenAreasAction } from "@/app/admin/scripts/exceptions/actions";
 import {
   KIND_LABEL,
   actionLabel,
@@ -12,10 +12,12 @@ import {
   candidateLabel,
   copyPages,
   foundInWords,
+  needsNameCheck,
   reasonProblem,
   reasonRequired,
   rejectsSubmission,
   resolutionLabel,
+  type CandidateOption,
   type QueueAction,
   type QueueArea,
   type QueueItem,
@@ -28,6 +30,8 @@ import { formatLondon } from "@/lib/money";
 const BUTTON = "rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
 const QUIET = "rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
 const FIELD = "rounded border border-slate-300 px-2 py-1.5 text-sm";
+/** A label around a visually hidden radio shows the radio's keyboard focus. */
+const FOCUS_WITHIN = "focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-600";
 
 type Note = { ok: boolean; text: string };
 
@@ -57,6 +61,8 @@ export function ExceptionQueue({ items, more }: { items: QueueItem[]; more: bool
   const [selected, setSelected] = useState<string | null>(items[0]?.id ?? null);
   /** What the last resolution did: kept here, as the resolved problem leaves the list. */
   const [flash, setFlash] = useState<string | null>(null);
+  /** Set when staff choose a problem in the list: its detail pane then takes the focus (a keyboard or screen reader user lands on it). */
+  const [chosen, setChosen] = useState(false);
   const current = items.find((i) => i.id === selected) ?? items[0] ?? null;
 
   const done = (
@@ -87,7 +93,10 @@ export function ExceptionQueue({ items, more }: { items: QueueItem[]; more: bool
                 <button
                   type="button"
                   aria-current={current?.id === i.id ? "true" : undefined}
-                  onClick={() => setSelected(i.id)}
+                  onClick={() => {
+                  setSelected(i.id);
+                  setChosen(true);
+                }}
                   className={`block w-full rounded px-3 py-2 text-left text-sm ${current?.id === i.id ? "bg-blue-50 ring-1 ring-blue-600" : "hover:bg-slate-50"}`}
                 >
                   <span className="flex items-center justify-between gap-2">
@@ -106,14 +115,18 @@ export function ExceptionQueue({ items, more }: { items: QueueItem[]; more: bool
           </ul>
           {more && <p className="px-3 py-2 text-xs text-slate-500">Showing the 200 newest. Resolve these, or narrow the filters, to see the rest.</p>}
         </section>
-        {current && <Detail key={current.id} item={current} onDone={setFlash} />}
+        {current && <Detail key={current.id} item={current} onDone={setFlash} focusOnOpen={chosen} />}
       </div>
     </>
   );
 }
 
-function Detail({ item, onDone }: { item: QueueItem; onDone: (message: string) => void }) {
+function Detail({ item, onDone, focusOnOpen }: { item: QueueItem; onDone: (message: string) => void; focusOnOpen: boolean }) {
   const headingId = useId();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (focusOnOpen) heading.current?.focus();
+  }, [focusOnOpen]);
   const words = foundInWords(item);
   const actions = actionsFor(item);
   const [action, setAction] = useState<QueueAction | null>(actions[0] ?? null);
@@ -121,7 +134,7 @@ function Detail({ item, onDone }: { item: QueueItem; onDone: (message: string) =
   return (
     <section aria-labelledby={headingId} data-testid="exception-detail" className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div>
-        <h2 id={headingId} className="flex flex-wrap items-center gap-2 text-base font-semibold text-slate-900">
+        <h2 id={headingId} ref={heading} tabIndex={-1} className="flex flex-wrap items-center gap-2 text-base font-semibold text-slate-900 focus:outline-none">
           {KIND_LABEL[item.kind]}
           {item.state === "resolved" ? <Badge tone="green">Resolved</Badge> : <Badge tone="amber">Open</Badge>}
         </h2>
@@ -188,7 +201,10 @@ function Detail({ item, onDone }: { item: QueueItem; onDone: (message: string) =
           <legend className="text-sm font-semibold text-slate-800">Resolve</legend>
           <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="What to do">
             {actions.map((a) => (
-              <label key={a} className={`cursor-pointer rounded border px-3 py-1.5 text-sm ${action === a ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-300 hover:bg-slate-50"}`}>
+              <label
+                key={a}
+                className={`cursor-pointer rounded border px-3 py-1.5 text-sm ${FOCUS_WITHIN} ${action === a ? "border-blue-600 bg-blue-50 text-blue-900" : "border-slate-300 hover:bg-slate-50"}`}
+              >
                 <input type="radio" name={`action-${item.id}`} className="sr-only" checked={action === a} onChange={() => setAction(a)} />
                 {actionLabel(a, item)}
               </label>
@@ -257,9 +273,12 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
   const [note, setNote] = useState<Note | null>(null);
   const missing = Array.isArray(item.details.pages) ? item.details.pages.filter((n): n is number => typeof n === "number") : [];
   const [pages, setPages] = useState<number[]>([]);
-  const [choice, setChoice] = useState<{ bookingId: string; copyPage: number } | null>(() =>
-    item.kind === "duplicate" && item.booking && item.page?.copyPage ? { bookingId: item.booking.id, copyPage: item.page.copyPage } : null,
+  const [choice, setChoice] = useState<{ bookingId: string; copyPage: number; occupied: boolean } | null>(() =>
+    item.kind === "duplicate" && item.booking && item.page?.copyPage ? { bookingId: item.booking.id, copyPage: item.page.copyPage, occupied: true } : null,
   );
+  const [replace, setReplace] = useState(false);
+  const [noName, setNoName] = useState(false);
+  const nameCheck = action === "confirm" && needsNameCheck(item);
   const required = reasonRequired(action);
   const familySees = (action === "reject" && rejectsSubmission(item)) || action === "late_reject";
 
@@ -269,7 +288,10 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
     let input: ResolveInput;
     if (action === "assign") {
       if (!choice) return setNote({ ok: false, text: "Choose the candidate and the page first." });
-      input = { action, exceptionId: item.id, bookingId: choice.bookingId, copyPage: choice.copyPage, reason };
+      // A duplicate's "Use this page instead" replaces the page kept, which staff see beside it.
+      const replacing = item.kind === "duplicate" || (choice.occupied && replace);
+      if (choice.occupied && !replacing) return setNote({ ok: false, text: 'That page already holds a page. Tick "Replace the page that is there" to replace it.' });
+      input = { action, exceptionId: item.id, bookingId: choice.bookingId, copyPage: choice.copyPage, reason, replace: replacing };
     } else if (action === "dismiss_missing") {
       if (pages.length === 0) return setNote({ ok: false, text: "Choose the pages that were left blank." });
       input = { action, exceptionId: item.id, pages, reason };
@@ -277,7 +299,10 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
       if (!item.script) return;
       input = { action, scriptId: item.script.id, reason };
     } else if (action === "confirm") {
-      input = { action, exceptionId: item.id, reason };
+      if (nameCheck && !noName) {
+        return setNote({ ok: false, text: 'Hide the candidate\'s name first ("Hide the name"), or tick "There is no name on this page".' });
+      }
+      input = { action, exceptionId: item.id, reason, noName: nameCheck && noName };
     } else if (action === "blank" || action === "keep_existing" || action === "reject") {
       input = { action, exceptionId: item.id, reason };
     } else {
@@ -305,8 +330,29 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
         <AssignPicker
           examId={item.exam.id}
           suggestedPage={item.page?.copyPage ?? (typeof item.details.after_page === "number" ? item.details.after_page : null)}
-          onChoose={setChoice}
+          onChoose={(c) => {
+            setChoice(c);
+            setReplace(false);
+          }}
         />
+      )}
+      {action === "assign" && item.kind !== "duplicate" && choice?.occupied && (
+        <label className="flex items-start gap-2 text-sm text-slate-800">
+          <input type="checkbox" className="mt-1" checked={replace} onChange={(e) => setReplace(e.target.checked)} />
+          <span>
+            Replace the page that is there
+            <span className="block text-xs text-slate-500">The page it replaces stays as a duplicate for review.</span>
+          </span>
+        </label>
+      )}
+      {nameCheck && (
+        <label className="flex items-start gap-2 text-sm text-slate-800">
+          <input type="checkbox" className="mt-1" checked={noName} onChange={(e) => setNoName(e.target.checked)} />
+          <span>
+            There is no name on this page
+            <span className="block text-xs text-slate-500">Otherwise hide the name first with &quot;Hide the name&quot;.</span>
+          </span>
+        </label>
       )}
       {action === "dismiss_missing" && (
         <fieldset className="space-y-1">
@@ -322,9 +368,20 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
         </fieldset>
       )}
       {action === "reject" && rejectsSubmission(item) && (
-        <p className="text-sm text-amber-900">The family&apos;s whole submission is rejected and they are emailed. An earlier submission, if any, counts again.</p>
+        <p className="text-sm text-amber-900">
+          The family&apos;s submission is rejected, with any later one that still counts this page, and they are emailed once with your reason. An
+          earlier submission, if any, counts again; this page is taken out of the script.
+        </p>
       )}
-      {action === "late_reject" && <p className="text-sm text-amber-900">The late pages are rejected and the family is emailed. Pages handed in on time, if any, count again.</p>}
+      {action === "late_reject" && (
+        <p className="text-sm text-amber-900">
+          The late upload is set aside and the family is emailed with your reason. Pages handed in on time are used; if there are none, the script is void and will not
+          be marked.
+        </p>
+      )}
+      {action === "reject" && !rejectsSubmission(item) && item.upload?.source === "home" && (
+        <p className="text-sm text-slate-700">A later upload already replaced this page, so the family&apos;s submission stays as it is.</p>
+      )}
       <ReasonBox value={reason} onChange={setReason} required={required} familySees={familySees} />
       <button type="button" className={BUTTON} disabled={busy} onClick={submit}>
         {busy ? "Saving..." : actionLabel(action, item)}
@@ -335,7 +392,15 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
 }
 
 /** "Assign": find the exam's candidate by index number, then choose the page of their copy. */
-function AssignPicker({ examId, suggestedPage, onChoose }: { examId: string; suggestedPage: number | null; onChoose: (c: { bookingId: string; copyPage: number } | null) => void }) {
+function AssignPicker({
+  examId,
+  suggestedPage,
+  onChoose,
+}: {
+  examId: string;
+  suggestedPage: number | null;
+  onChoose: (c: { bookingId: string; copyPage: number; occupied: boolean } | null) => void;
+}) {
   const searchId = useId();
   const pageId = useId();
   const [query, setQuery] = useState("");
@@ -346,10 +411,11 @@ function AssignPicker({ examId, suggestedPage, onChoose }: { examId: string; sug
   const [copyPage, setCopyPage] = useState<number | null>(suggestedPage);
   const chosen = found?.find((c) => c.bookingId === bookingId) ?? null;
 
-  function pick(b: string | null, p: number | null) {
+  function pick(b: string | null, p: number | null, list: CandidateOption[] | null = found) {
     setBookingId(b);
     setCopyPage(p);
-    onChoose(b && p ? { bookingId: b, copyPage: p } : null);
+    const c = list?.find((x) => x.bookingId === b) ?? null;
+    onChoose(b && p ? { bookingId: b, copyPage: p, occupied: !!c?.pages.includes(p) } : null);
   }
 
   async function search() {
@@ -362,7 +428,7 @@ function AssignPicker({ examId, suggestedPage, onChoose }: { examId: string; sug
       return setNote({ ok: false, text: r.message });
     }
     setFound(r.candidates);
-    pick(null, copyPage);
+    pick(null, copyPage, r.candidates);
     if (r.candidates.length === 0) setNote({ ok: false, text: "No candidate of this exam has that index number." });
   }
 
@@ -423,7 +489,7 @@ function AssignPicker({ examId, suggestedPage, onChoose }: { examId: string; sug
             {copyPages(chosen.copyPages).map((n) => (
               <option key={n} value={n}>
                 Page {n}
-                {chosen.pages.includes(n) ? " (replaces the page there)" : ""}
+                {chosen.pages.includes(n) ? " (holds a page already)" : ""}
               </option>
             ))}
           </select>

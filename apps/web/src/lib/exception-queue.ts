@@ -1,5 +1,6 @@
 /** The exception queue: what script_exceptions_list answers, the plain words staff read for each problem, which
  * actions fit it, and the calls those actions make. The database checks every rule again. */
+import { exceptionMessageFor } from "@stem/shared";
 import { formatLondon } from "./money";
 
 export const EXCEPTION_KINDS = [
@@ -77,6 +78,8 @@ export type QueueItem = {
   upload: { id: string; kind: string; state: string; source: "home" | "centre"; position: number | null; batchNumber: string | null; submissionSeq: number | null } | null;
   /** For a late hand-in: the submission handed in late. */
   submission: { id: string; seq: number; state: string; submittedAt: string | null } | null;
+  /** Whether rejecting it rejects a family's submission (the database works it out: script_reject_targets). */
+  rejectsSubmission: boolean;
   resolved: { by: string | null; at: string | null; resolution: string | null; reason: string | null } | null;
 };
 
@@ -178,6 +181,7 @@ function parseItem(v: unknown): QueueItem | null {
           }
         : null,
     submission: sub && str(sub.id) ? { id: str(sub.id)!, seq: num(sub.seq) ?? 0, state: str(sub.state) ?? "", submittedAt: str(sub.submitted_at) } : null,
+    rejectsSubmission: v.rejects_submission === true,
     resolved: r ? { by: str(r.by), at: str(r.at), resolution: str(r.resolution), reason: str(r.reason) } : null,
   };
 }
@@ -277,6 +281,7 @@ export function foundInWords(item: QueueItem): string[] {
     case "name_visible":
       return ["A marker reported that a name can be seen on this page. Hide it, then confirm."];
     case "processing_failed": {
+      if (isRemaskFailure(item)) return ["The marking picture could not be made (this is not the family's file)."];
       const attempts = num(d.attempts);
       return [`The file could not be prepared${attempts !== null ? ` after ${attempts} attempts` : ""}.`];
     }
@@ -309,16 +314,27 @@ const ACTIONS: Record<ExceptionKind, QueueAction[]> = {
   processing_failed: ["confirm", "reject"],
 };
 
-/** The actions that fit an open exception (none once resolved). */
+/** A remask job that failed (expected until the script repository makes marking pictures): not the family's file. */
+export const isRemaskFailure = (item: QueueItem) => item.kind === "processing_failed" && item.details.kind === "remask";
+
+/** The actions that fit an open exception (none once resolved). A remask failure can only be noted. */
 export function actionsFor(item: QueueItem): QueueAction[] {
   if (item.state !== "open") return [];
   if (item.kind === "missing_pages" && numbers(item.details.pages).length === 0) return [];
   if (item.kind === "late" && !item.script) return [];
+  if (isRemaskFailure(item)) return ["confirm"];
   return ACTIONS[item.kind];
 }
 
-/** Whether rejecting this exception rejects a family's submission. */
-export const rejectsSubmission = (item: QueueItem) => item.upload?.source === "home";
+/** Whether rejecting this exception rejects a family's submission (as the database says). */
+export const rejectsSubmission = (item: QueueItem) => item.rejectsSubmission;
+
+/** Whether confirming needs a staff hidden area on the page first, or "There is no name on this page": a page whose
+ * layout was unexpected (the name band could not be found), or a reported visible name, with no area drawn yet. */
+export function needsNameCheck(item: QueueItem): boolean {
+  if (!item.page || item.page.areas.length > 0) return false;
+  return item.kind === "name_visible" || (item.kind === "poor_quality" && item.page.flags.includes("layout_unexpected"));
+}
 
 export function actionLabel(action: QueueAction, item: QueueItem): string {
   switch (action) {
@@ -364,9 +380,9 @@ export function reasonProblem(reason: string, required: boolean): string | null 
 }
 
 export type ResolveInput =
-  | { action: "assign"; exceptionId: string; bookingId: string; copyPage: number; reason: string }
+  | { action: "assign"; exceptionId: string; bookingId: string; copyPage: number; reason: string; replace?: boolean }
   | { action: "blank" | "keep_existing" | "reject"; exceptionId: string; reason: string }
-  | { action: "confirm"; exceptionId: string; reason?: string }
+  | { action: "confirm"; exceptionId: string; reason?: string; noName?: boolean }
   | { action: "dismiss_missing"; exceptionId: string; pages: number[]; reason: string }
   | { action: "late_accept" | "late_reject"; scriptId: string; reason: string };
 
@@ -376,7 +392,13 @@ export function rpcFor(input: ResolveInput): { fn: string; args: Record<string, 
     case "assign":
       return {
         fn: "script_exception_assign",
-        args: { p_exception: input.exceptionId, p_booking: input.bookingId, p_copy_page: input.copyPage, p_reason: input.reason.trim() },
+        args: {
+          p_exception: input.exceptionId,
+          p_booking: input.bookingId,
+          p_copy_page: input.copyPage,
+          p_reason: input.reason.trim(),
+          ...(input.replace ? { p_replace: true } : {}),
+        },
       };
     case "blank":
     case "keep_existing":
@@ -384,7 +406,10 @@ export function rpcFor(input: ResolveInput): { fn: string; args: Record<string, 
       return { fn: `script_exception_${input.action}`, args: { p_exception: input.exceptionId, p_reason: input.reason.trim() } };
     case "confirm": {
       const reason = (input.reason ?? "").trim();
-      return { fn: "script_exception_confirm", args: reason ? { p_exception: input.exceptionId, p_reason: reason } : { p_exception: input.exceptionId } };
+      return {
+        fn: "script_exception_confirm",
+        args: { p_exception: input.exceptionId, ...(reason ? { p_reason: reason } : {}), ...(input.noName ? { p_no_name: true } : {}) },
+      };
     }
     case "dismiss_missing":
       return { fn: "script_exception_dismiss_missing", args: { p_exception: input.exceptionId, p_pages: input.pages, p_reason: input.reason.trim() } };
@@ -412,8 +437,11 @@ const RESOLUTIONS: Record<string, string> = {
 
 export const resolutionLabel = (r: string | null) => (r ? (RESOLUTIONS[r] ?? r) : "");
 
-/** A second resolution's answer: who resolved it first, and when. */
-export function conflictMessage(r: { resolved_by?: unknown; resolved_at?: unknown }): string {
+/** A conflict answer: a copy page already holding a page (occupied), a page that changed meanwhile, or a second
+ * resolution (who resolved it first, and when). */
+export function conflictMessage(r: { resolved_by?: unknown; resolved_at?: unknown; reason?: unknown }): string {
+  if (r.reason === "occupied") return "That page of the candidate's script already holds a page. Tick \"Replace the page that is there\" to replace it.";
+  if (r.reason === "changed") return "This page changed while you were working. Refresh the page and try again.";
   const by = str(r.resolved_by);
   const at = str(r.resolved_at);
   if (!by && !at) return "This has already been resolved. Refresh the page to see how.";
@@ -429,3 +457,80 @@ export function candidateLabel(b: QueueBooking | null): string {
 
 /** Copy pages 1 to n, for the page picker. */
 export const copyPages = (n: number | null) => Array.from({ length: Math.max(0, Math.min(n ?? 0, 200)) }, (_, i) => i + 1);
+
+/** What a resolution answered (the fields the messages need). */
+export type ResolveAnswer = { outcome?: unknown; replaced_page_id?: unknown; state?: unknown };
+
+/** What the screen says after a resolution, from what the database says happened. */
+export function resolvedMessage(input: ResolveInput, a: ResolveAnswer): string {
+  switch (input.action) {
+    case "assign":
+      return a.replaced_page_id
+        ? "Assigned. The page is in the candidate's script; the page that was there is kept for review as a duplicate."
+        : "Assigned. The page is in the candidate's script.";
+    case "blank":
+      return "Marked as blank. The page is set aside.";
+    case "keep_existing":
+      return "Kept the page already chosen.";
+    case "reject":
+      return a.outcome === "submission_rejected"
+        ? "Rejected. The family's submission is rejected and they have been emailed with your reason."
+        : a.outcome === "set_aside"
+          ? "Rejected. The page is set aside."
+          : "Rejected. A later upload had already replaced this page, so nothing else changed.";
+    case "confirm":
+      return "Confirmed.";
+    case "dismiss_missing":
+      return a.state === "resolved" ? "Confirmed as left blank." : "Saved. Some pages are still missing.";
+    case "late_accept":
+      return "The late script will be marked.";
+    case "late_reject":
+      return a.outcome === "void"
+        ? "The script is void, so it will not be marked. The family has been emailed with your reason."
+        : "The late upload is set aside; the on-time pages are used. The family has been emailed with your reason.";
+  }
+}
+
+/** What the screen says when a resolution was refused. */
+export function failureMessage(a: { code?: unknown; reason?: unknown; resolved_by?: unknown; resolved_at?: unknown }): string {
+  if (a.code === "conflict") return conflictMessage(a);
+  if (a.code === "forbidden" && a.reason === "other_family") return exceptionMessageFor("other_family");
+  return exceptionMessageFor(typeof a.code === "string" ? a.code : null);
+}
+
+/** A candidate of the exam that "Assign" can choose. */
+export type CandidateOption = {
+  bookingId: string;
+  name: string;
+  indexNumber: string | null;
+  sitting: string;
+  status: string;
+  /** Present, late or absent on the register, or null. */
+  attendance: string | null;
+  scriptNumber: string | null;
+  /** The copy pages their script shows now. */
+  pages: number[];
+  /** How many pages their copy has (the pages a page can be assigned to). */
+  copyPages: number | null;
+};
+
+/** script_exception_candidates' answer, or null for a failure. Malformed rows are left out. */
+export function parseCandidates(data: unknown): CandidateOption[] | null {
+  if (!isObject(data) || data.ok !== true || !Array.isArray(data.candidates)) return null;
+  return data.candidates.flatMap((c): CandidateOption[] => {
+    if (!isObject(c) || !str(c.booking_id)) return [];
+    return [
+      {
+        bookingId: str(c.booking_id)!,
+        name: str(c.name) ?? "No name",
+        indexNumber: str(c.index_number),
+        sitting: str(c.sitting) ?? "",
+        status: str(c.status) ?? "",
+        attendance: str(c.attendance),
+        scriptNumber: str(c.script_number),
+        pages: numbers(c.pages),
+        copyPages: num(c.copy_pages),
+      },
+    ];
+  });
+}

@@ -2,21 +2,39 @@
 --
 -- Anything the processing server or a family left uncertain is an open row of script_exceptions. Staff admins see
 -- them in one queue (script_exceptions_list) and resolve each with a reason: assign the page to a candidate's page,
--- mark it blank, keep the page already chosen over a duplicate, reject it (at home the submission is rejected and the
--- family emailed), confirm it (a family's placement, a page sent as it is, a picture of poor quality), dismiss
--- missing pages (left blank), or decide on a late home script (script_late_decide). Every resolution records who,
--- when and the reason on the exception and in audit_log (the reason is 3 to 300 characters; confirming needs none).
--- A second resolution of the same exception answers conflict with who resolved it and when.
+-- mark it blank, keep the page already chosen over a duplicate, reject it, confirm it (a family's placement, a page
+-- sent as it is, a picture of poor quality), dismiss missing pages (left blank), or decide on a late home script
+-- (script_late_decide). Every resolution records who, when and the reason on the exception and in audit_log (the
+-- reason is 3 to 300 characters; confirming needs none). Exceptions a resolution closes as a side effect (set_aside,
+-- submission_rejected, one_version) carry the same reason and get an audit row each. A second resolution of the same
+-- exception answers conflict with who resolved it and when.
 --
 -- The original stays untouched: a resolution never changes or deletes a page row (script_pages). A correction is a
 -- new script version (script_versions with created_by and a staff reason; earlier versions are kept), the
--- exception's resolution, and, for staff hidden areas, rows of script_page_hidden_areas.
+-- exception's resolution, and, for staff hidden areas, rows of script_page_hidden_areas. A page staff rejected, marked
+-- blank or set aside is "refused" (script_page_refused): a script that still shows one is never verified, and a home
+-- submission whose script shows one is never received (no receipt), whatever put it back.
+--
+-- Rejecting at home (script_reject_targets): when the script still shows the page, the submission the page came from
+-- is rejected, with every later submission that still counts (each builds on it, so the family's latest is rejected
+-- too and they hand in again); when the page's own submission is the latest handed in, that one is rejected; a page of
+-- an older submission that a later upload already replaced only closes its exception. Rejected submissions stop
+-- counting: the script goes back to the version before the first of them, and the family gets one email (for the
+-- latest) and sees the reason. A remask failure is not the family's file and cannot be rejected (only noted).
+--
+-- Late scripts: accepting keeps the late pages. Rejecting rejects the late submissions: an on-time submission counts
+-- again if there is one ("the late upload is set aside; the on-time pages are used"); if not, the script is void
+-- (state_reason late_rejected), visibly not marked.
+--
+-- No resolution rewrites a script past verification (script_locked): Phase 3 owns those. (Task 4's
+-- script_version_write still lets a scan version such a script, as Task 9 relies on; the refusal is in the staff
+-- correction writer script_links_write, with a clean check before each resolution changes anything.)
 --
 -- Staff hidden areas (ruling R17): rectangles that staff draw over a candidate's name on one page's full picture
 -- (fractions of the stored picture, from its top left, as Task 1's paper areas). They are how a page whose layout
--- was unexpected (no marking picture) is made ready: hide the name, then confirm. Task 11 applies them, with the
--- nominal name band, when it re-makes marking pictures; here they are stored, and confirming or assigning a page with
--- no marking picture (or with staff areas) queues a remask job for its file.
+-- was unexpected (no marking picture) is made ready: hide the name, then confirm (or say there is no name on it).
+-- Task 11 applies them, with the nominal name band, when it re-makes marking pictures; here they are stored, and
+-- confirming or assigning a page with no marking picture (or with staff areas) queues a remask job for its file.
 --
 -- After a resolution the scripts concerned are worked out again (script_resolution_settle): a script whose pages are
 -- one paper version again loses its open mixed_versions exception; a centre script is checked by Task 9's
@@ -24,7 +42,8 @@
 -- the booking already has a missing_pages exception), so pages are never called missing while scans still arrive;
 -- otherwise script_evaluate.
 --
--- Lock order (as 052): booking (advisory, in uuid order), then the exception and page rows, home submission, script.
+-- Lock order (as 052): booking (advisory, in uuid order), then the exception and page rows, home submission, script
+-- (script_resolution_lock).
 
 -- ---------------------------------------------------------------------------------------------
 -- Schema additions.
@@ -120,6 +139,50 @@ as $$
   ) t
 $$;
 
+-- Locks what resolving this exception changes, in the lock order: the bookings it and its page concern (with
+-- p_extra), then the exception row and its page row. Which scripts show the page can change until the page row is
+-- locked, so the bookings are worked out again afterwards. Bookings that joined are locked too (an advisory lock
+-- taken in a transaction is held until it ends, so the retry adds the missing ones; an inverted order is caught by
+-- the deadlock detector); if they changed once more, the answer is null and the caller refuses (conflict, changed).
+-- Returns the bookings locked (distinct, no nulls); an exception that is gone gives what was locked so far.
+create function public.script_resolution_lock(p_exception uuid, p_extra uuid[])
+returns uuid[]
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_page uuid;
+  v_want uuid[];
+  v_locked uuid[] := '{}';
+  v_try int;
+begin
+  for v_try in 1..3 loop
+    select e.page_id,
+           array(select distinct b from unnest(array[e.booking_id] || coalesce(p_extra, '{}'::uuid[]) || public.script_page_bookings(e.page_id)) b
+                 where b is not null order by 1)
+    into v_page, v_want
+    from public.script_exceptions e where e.id = p_exception;
+    if not found then
+      return v_locked;
+    end if;
+    if v_try > 1 and v_want <@ v_locked then
+      return v_locked;
+    end if;
+    if v_try = 3 then
+      return null;
+    end if;
+    perform public.script_bookings_lock(v_want);
+    v_locked := array(select distinct b from unnest(v_locked || v_want) b order by 1);
+    perform 1 from public.script_exceptions e where e.id = p_exception for update;
+    if v_page is not null then
+      perform 1 from public.script_pages p where p.id = v_page for update;
+    end if;
+  end loop;
+  return null;
+end;
+$$;
+
 -- Whether a centre booking has been checked for completeness: its centre's scans were declared all in
 -- (scan_centre_complete), or it has a missing_pages exception. Before that, pages are still arriving.
 create function public.script_centre_checked(p_booking uuid)
@@ -135,11 +198,24 @@ as $$
       or exists (select 1 from public.script_exceptions e where e.booking_id = p_booking and e.kind = 'missing_pages')
 $$;
 
+-- A page staff refused: an exception about it was resolved as rejected, blank, set aside or with its submission.
+create function public.script_page_refused(p_page uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from public.script_exceptions e
+                 where e.page_id = p_page and e.state = 'resolved'
+                   and e.resolution in ('rejected', 'blank', 'set_aside', 'submission_rejected'))
+$$;
+
 -- Works a booking's script out again after a resolution (the caller holds the booking's lock). An open
--- mixed_versions exception closes (one_version) once the current pages are of one paper version. A centre booking
--- that has been checked is checked again (scan_booking_complete, which also evaluates the script); any other script
--- is evaluated (script_evaluate).
-create function public.script_resolution_settle(p_booking uuid, p_actor uuid)
+-- mixed_versions exception closes (one_version, with the triggering reason, audited) once the current pages are of
+-- one paper version. A centre booking that has been checked is checked again (scan_booking_complete, which also
+-- evaluates the script); any other script is evaluated (script_evaluate).
+create function public.script_resolution_settle(p_booking uuid, p_actor uuid, p_reason text)
 returns void
 language plpgsql
 security definer
@@ -155,15 +231,19 @@ begin
   select * into v_b from public.bookings b where b.id = p_booking;
   select * into v_x from public.scripts s where s.booking_id = p_booking;
   if v_x.id is not null then
-    update public.script_exceptions e
-    set state = 'resolved', resolved_by = p_actor, resolved_at = now(), resolution = 'one_version'
-    where e.kind = 'mixed_versions' and e.state = 'open'
-      and (e.script_id = v_x.id or (e.script_id is null and e.booking_id = p_booking))
-      and (select count(distinct c.paper_id)
-           from public.script_page_links l
-           join public.script_pages p on p.id = l.page_id
-           join public.paper_copies c on c.id = p.copy_id
-           where l.script_id = v_x.id and l.version = v_x.version) <= 1;
+    with closed as (
+      update public.script_exceptions e
+      set state = 'resolved', resolved_by = p_actor, resolved_at = now(), resolution = 'one_version', reason = p_reason
+      where e.kind = 'mixed_versions' and e.state = 'open'
+        and (e.script_id = v_x.id or (e.script_id is null and e.booking_id = p_booking))
+        and (select count(distinct c.paper_id)
+             from public.script_page_links l
+             join public.script_pages p on p.id = l.page_id
+             join public.paper_copies c on c.id = p.copy_id
+             where l.script_id = v_x.id and l.version = v_x.version) <= 1
+      returning e.id)
+    insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+    select p_actor, 'script_exception_one_version', 'script_exception', c.id, p_reason from closed c;
   end if;
   if v_b.sitting = 'centre' and (v_x.id is null or v_x.source = 'centre') and public.script_centre_checked(p_booking) then
     perform public.scan_booking_complete(p_booking);
@@ -174,7 +254,8 @@ end;
 $$;
 
 -- Writes the next version of a script with these links as a staff correction (who made it, and why), and raises
--- mixed_versions when its pages now come from two paper versions. True when a version was written.
+-- mixed_versions when its pages now come from two paper versions. True when a version was written. A script past
+-- verification is never rewritten here (script_locked; the resolutions check first and answer cleanly).
 create function public.script_links_write(p_script uuid, p_links jsonb, p_reason text, p_actor uuid, p_now timestamptz)
 returns boolean
 language plpgsql
@@ -182,6 +263,10 @@ security definer
 set search_path = ''
 as $$
 begin
+  if exists (select 1 from public.scripts s
+             where s.id = p_script and s.state not in ('receiving', 'checking', 'needs_attention', 'verified')) then
+    raise exception 'script_locked';
+  end if;
   if not public.script_version_write(p_script, p_links, null, null, p_reason, p_now) then
     return false;
   end if;
@@ -190,6 +275,18 @@ begin
   perform public.script_raise_mixed(p_script, null);
   return true;
 end;
+$$;
+
+-- Whether a script that shows this page is past verification (a resolution may not change its pages).
+create function public.script_page_locked(p_page uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from public.script_page_links l join public.scripts s on s.id = l.script_id and l.version = s.version
+                 where l.page_id = p_page and s.state not in ('receiving', 'checking', 'needs_attention', 'verified'))
 $$;
 
 -- Resolves an exception as the actor, now, with how and why, and audits it as p_action.
@@ -207,8 +304,8 @@ as $$
 $$;
 
 -- Sets a page aside: each script that shows it now gets a version without it, and its other open exceptions close
--- with it (set_aside). The caller holds the locks of the page's bookings (script_page_bookings).
-create function public.script_page_set_aside(p_page uuid, p_actor uuid, p_now timestamptz)
+-- with it (set_aside, with the reason, audited). The caller holds the locks of the page's bookings.
+create function public.script_page_set_aside(p_page uuid, p_actor uuid, p_now timestamptz, p_reason text)
 returns void
 language plpgsql
 security definer
@@ -226,18 +323,23 @@ begin
       from public.script_page_links l join public.scripts s on s.id = l.script_id and l.version = s.version
       where l.script_id = v_s and l.page_id <> p_page), 'staff_set_aside', p_actor, p_now);
   end loop;
-  update public.script_exceptions e
-  set state = 'resolved', resolved_by = p_actor, resolved_at = p_now, resolution = 'set_aside'
-  where e.page_id = p_page and e.state = 'open';
+  with closed as (
+    update public.script_exceptions e
+    set state = 'resolved', resolved_by = p_actor, resolved_at = p_now, resolution = 'set_aside', reason = p_reason
+    where e.page_id = p_page and e.state = 'open'
+    returning e.id)
+  insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+  select p_actor, 'script_exception_set_aside', 'script_exception', c.id, p_reason from closed c;
 end;
 $$;
 
--- Rejects home submissions of a booking (the caller holds its lock). Each becomes rejected with the reason (Task 7's
--- trigger emails the family), the open exceptions about their files close (submission_rejected), and the script stops
--- showing their pages: it goes back to the links of the version before the first of them, with the pages from
--- elsewhere that the current version shows (a staff correction) kept on top. When the submission that now counts
--- (the latest handed in and not rejected) was on time, or none does, the script is no longer late and its open late
--- exception closes.
+-- Rejects home submissions of a booking (the caller holds its lock). Each becomes rejected with the reason; Task 7's
+-- trigger queues an email per submission, and all but the one for the latest of them are withdrawn (the family
+-- follows its latest submission: one email). The open exceptions about their files close (submission_rejected, with
+-- the reason, audited), and the script stops showing their pages: it goes back to the links of the version before the
+-- first of them, with the pages from elsewhere that the current version shows (a staff correction) kept on top. When
+-- the submission that now counts (the latest handed in and not rejected) was on time, or none does, the script is no
+-- longer late and its open late exception closes the same way.
 create function public.script_home_reject(p_booking uuid, p_subs uuid[], p_reason text, p_actor uuid, p_now timestamptz)
 returns void
 language plpgsql
@@ -248,13 +350,23 @@ declare
   v_x public.scripts%rowtype;
   v_first int;
   v_links jsonb;
+  v_last uuid;
 begin
   perform 1 from public.home_submissions s where s.id = any (p_subs) order by s.id for update;
+  select s.id into v_last from public.home_submissions s
+  where s.id = any (p_subs) and s.booking_id = p_booking order by s.seq desc limit 1;
   update public.home_submissions s set state = 'rejected', rejected_reason = p_reason
   where s.id = any (p_subs) and s.booking_id = p_booking and s.state not in ('draft', 'rejected');
-  update public.script_exceptions e
-  set state = 'resolved', resolved_by = p_actor, resolved_at = p_now, resolution = 'submission_rejected'
-  where e.state = 'open' and e.upload_id in (select u.id from public.script_uploads u where u.submission_id = any (p_subs));
+  delete from public.script_notices n
+  where n.kind = 'rejected' and n.sent_at is null and n.claimed_at is null
+    and n.submission_id = any (p_subs) and n.submission_id is distinct from v_last;
+  with closed as (
+    update public.script_exceptions e
+    set state = 'resolved', resolved_by = p_actor, resolved_at = p_now, resolution = 'submission_rejected', reason = p_reason
+    where e.state = 'open' and e.upload_id in (select u.id from public.script_uploads u where u.submission_id = any (p_subs))
+    returning e.id)
+  insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+  select p_actor, 'script_exception_submission_rejected', 'script_exception', c.id, p_reason from closed c;
 
   select * into v_x from public.scripts s where s.booking_id = p_booking for update;
   if v_x.id is not null then
@@ -274,10 +386,53 @@ begin
   if not coalesce((select s.late from public.home_submissions s
                    where s.booking_id = p_booking and s.state not in ('draft', 'rejected') order by s.seq desc limit 1), false) then
     update public.scripts set late = false where booking_id = p_booking and late;
-    update public.script_exceptions e
-    set state = 'resolved', resolved_by = p_actor, resolved_at = p_now, resolution = 'submission_rejected'
-    where e.booking_id = p_booking and e.kind = 'late' and e.state = 'open';
+    with closed as (
+      update public.script_exceptions e
+      set state = 'resolved', resolved_by = p_actor, resolved_at = p_now, resolution = 'submission_rejected', reason = p_reason
+      where e.booking_id = p_booking and e.kind = 'late' and e.state = 'open'
+      returning e.id)
+    insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+    select p_actor, 'script_exception_submission_rejected', 'script_exception', c.id, p_reason from closed c;
   end if;
+end;
+$$;
+
+-- The home submissions that rejecting this exception rejects (see the header): none for a scanned page or file, or
+-- for a remask failure; when the booking's current script shows the exception's page, the page's own submission and
+-- every later one handed in that still counts; else, when its own submission is the latest handed in (and not
+-- rejected), that one; else none.
+create function public.script_reject_targets(p_exception uuid)
+returns uuid[]
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_e public.script_exceptions%rowtype;
+  v_sub public.home_submissions%rowtype;
+  v_latest public.home_submissions%rowtype;
+begin
+  select * into v_e from public.script_exceptions e where e.id = p_exception;
+  if not found or (v_e.kind = 'processing_failed' and v_e.details ->> 'kind' = 'remask') then
+    return '{}';
+  end if;
+  select s.* into v_sub from public.home_submissions s join public.script_uploads u on u.submission_id = s.id
+  where u.id = coalesce(v_e.upload_id, (select p.upload_id from public.script_pages p where p.id = v_e.page_id));
+  if v_sub.id is null then
+    return '{}';
+  end if;
+  if v_e.page_id is not null and exists (
+       select 1 from public.scripts s join public.script_page_links l on l.script_id = s.id and l.version = s.version
+       where s.booking_id = v_sub.booking_id and l.page_id = v_e.page_id) then
+    return array(select s.id from public.home_submissions s
+                 where s.booking_id = v_sub.booking_id and s.seq >= v_sub.seq and s.state not in ('draft', 'rejected') order by s.seq);
+  end if;
+  v_latest := public.home_submission_latest(v_sub.booking_id);
+  if v_latest.id = v_sub.id and v_sub.state not in ('draft', 'rejected') then
+    return array[v_sub.id];
+  end if;
+  return '{}';
 end;
 $$;
 
@@ -294,6 +449,155 @@ as $$
   where p.id = p_page
     and (p.marking_path is null or exists (select 1 from public.script_page_hidden_areas a where a.page_id = p.id))
   on conflict do nothing
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- A refused page never counts: a home submission whose script shows one is not received, and a script that shows
+-- one is not verified. (Same as 20261120000052 otherwise.)
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.home_submission_evaluate(p_submission uuid, p_now timestamptz)
+returns public.submission_state
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_s public.home_submissions%rowtype;
+  v_script uuid;
+  v_version int;
+  v_papers uuid[];
+  v_paper uuid;
+  v_state public.submission_state;
+begin
+  select * into v_s from public.home_submissions s where s.id = p_submission for update;
+  if not found then
+    return null;
+  end if;
+  if v_s.state in ('draft', 'rejected') then
+    return v_s.state;
+  end if;
+
+  if exists (select 1 from public.script_uploads u
+             where u.submission_id = v_s.id and u.state in ('pending', 'stored', 'queued', 'processing')) then
+    v_state := 'checking';
+  else
+    select s.id, s.version into v_script, v_version from public.scripts s where s.booking_id = v_s.booking_id;
+    select coalesce(array_agg(distinct c.paper_id), '{}') into v_papers
+    from public.script_page_links l
+    join public.script_pages p on p.id = l.page_id
+    join public.paper_copies c on c.id = p.copy_id
+    where l.script_id = v_script and l.version = v_version;
+    if cardinality(v_papers) = 1 then
+      v_paper := v_papers[1];
+    elsif cardinality(v_papers) = 0 then
+      select c.paper_id into v_paper from public.paper_copies c
+      where c.booking_id = v_s.booking_id order by c.created_at desc, c.id limit 1;
+    end if;
+
+    if v_paper is null
+       or exists (
+         select 1 from public.paper_page_roles r
+         where r.paper_id = v_paper and r.role = 'answer' and r.page <> all (v_s.blank_confirmed)
+           and not exists (select 1 from public.script_page_links l
+                           where l.script_id = v_script and l.version = v_version and l.copy_page = r.page))
+       or exists (
+         select 1 from public.script_page_links l
+         join public.script_pages p on p.id = l.page_id
+         where l.script_id = v_script and l.version = v_version
+           and public.script_page_is_answer(p.copy_id, p.copy_page)
+           and public.script_page_poor(p.quality, p.marking_path, true)
+           and not exists (select 1 from public.script_exceptions e where e.page_id = p.id and e.kind = 'poor_quality'))
+       or exists (
+         select 1 from public.script_pages p
+         join public.script_uploads u on u.id = p.upload_id
+         where u.submission_id = v_s.id and p.replaced_at is null and p.state = 'unmatched' and p.placed_after is null)
+       or exists (
+         select 1 from public.script_page_links l
+         where l.script_id = v_script and l.version = v_version and public.script_page_refused(l.page_id))
+    then
+      v_state := 'needs_attention';
+    else
+      v_state := 'received';
+    end if;
+  end if;
+
+  if v_state is distinct from v_s.state then
+    update public.home_submissions
+    set state = v_state, checked_at = case when v_state <> 'checking' then p_now else checked_at end
+    where id = v_s.id;
+  end if;
+  return v_state;
+end;
+$$;
+
+create or replace function public.script_evaluate_at(p_script uuid, p_now timestamptz)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_x public.scripts%rowtype;
+  v_sub uuid;
+  v_sub_state public.submission_state;
+  v_complete boolean;
+  v_busy boolean;
+  v_open boolean;
+  v_state public.script_state;
+  v_received timestamptz;
+begin
+  select * into v_x from public.scripts s where s.id = p_script;
+  if not found then
+    return;
+  end if;
+  if v_x.source = 'home' then
+    select s.id into v_sub from public.home_submissions s
+    where s.booking_id = v_x.booking_id and s.state not in ('draft', 'rejected')
+    order by s.seq desc limit 1
+    for update;
+  end if;
+  select * into v_x from public.scripts s where s.id = p_script for update;
+  if v_x.state not in ('receiving', 'checking', 'needs_attention', 'verified') then
+    return;
+  end if;
+
+  v_complete := v_x.complete;
+  v_received := v_x.received_at;
+  if v_x.source = 'home' then
+    if v_sub is not null then
+      v_sub_state := public.home_submission_evaluate(v_sub, p_now);
+    end if;
+    v_complete := coalesce(v_sub_state = 'received', false);
+    if v_complete then
+      v_received := coalesce(v_received, p_now);
+    end if;
+  end if;
+
+  v_busy := coalesce(v_sub_state = 'checking', false)
+    or exists (select 1 from public.script_uploads u
+               where u.state in ('queued', 'processing')
+                 and (u.booking_id = v_x.booking_id
+                      or u.submission_id in (select s.id from public.home_submissions s where s.booking_id = v_x.booking_id)))
+    or exists (select 1 from public.script_page_links l
+               join public.script_pages p on p.id = l.page_id
+               join public.script_uploads u on u.id = p.upload_id
+               where l.script_id = v_x.id and l.version = v_x.version and u.state in ('queued', 'processing'));
+  v_open := exists (select 1 from public.script_exceptions e
+                    where e.state = 'open'
+                      and (e.script_id = v_x.id or (e.script_id is null and e.booking_id = v_x.booking_id)))
+    or exists (select 1 from public.script_page_links l
+               where l.script_id = v_x.id and l.version = v_x.version and public.script_page_refused(l.page_id));
+  v_state := case
+    when v_busy then 'checking'
+    when v_complete and not v_open then 'verified'
+    when v_x.source = 'centre' and not v_complete and not v_open then 'receiving'
+    else 'needs_attention'
+  end;
+
+  if (v_x.state, v_x.complete, v_x.received_at) is distinct from (v_state, v_complete, v_received) then
+    update public.scripts set state = v_state, complete = v_complete, received_at = v_received where id = v_x.id;
+  end if;
+end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
@@ -339,7 +643,7 @@ $$;
 
 -- One exception as the queue shows it: what the server found (details), the exam, the candidate and script, the
 -- page (and the page kept, for a duplicate; the script's pages, for mixed versions and missing pages), the file it
--- came from, the late submission, and how it was resolved.
+-- came from, the late submission, whether rejecting it rejects a family's submission, and how it was resolved.
 create function public.script_exception_json(p_exception uuid)
 returns jsonb
 language sql
@@ -378,6 +682,7 @@ as $$
     'submission', case when p_e.kind = 'late' then (
       select jsonb_build_object('id', hs.id, 'seq', hs.seq, 'state', hs.state, 'late', hs.late, 'submitted_at', hs.submitted_at)
       from public.home_submissions hs where hs.id = (p_e.details ->> 'submission_id')::uuid) end,
+    'rejects_submission', p_e.state = 'open' and cardinality(public.script_reject_targets(p_e.id)) > 0,
     'resolved', case when p_e.state = 'resolved' then jsonb_build_object(
       'by', (select nullif(btrim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), '') from public.profiles p where p.id = p_e.resolved_by),
       'at', p_e.resolved_at, 'resolution', p_e.resolution, 'reason', p_e.reason) end)
@@ -424,14 +729,64 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- script_exception_assign: puts the exception's page into a candidate's script at copy page p_copy_page (a new
--- version; a page the script showed there is replaced, and named in the answer). For a page with no code, an
--- unknown or unexpected code, a family-placed page, or a duplicate ("use this page instead"). The candidate must be
--- booked (paid or cancel requested) for the same exam and the same sitting as the file (a scanned page goes to a
--- centre candidate marked present or late, a home page to a home candidate), p_copy_page within their copy, and their
--- script not past verification. A candidate with no script yet gets one.
+-- script_exception_candidates: "Assign" looks a candidate up by index number. The exam's paid or cancel-requested
+-- bookings whose student's index number contains p_query (spaces, hyphens and case ignored: "se 2026 0142" finds
+-- SE-2026-0142), at most 10, filtered by the exam before the limit. Each with name, sitting, status, attendance,
+-- script number, the copy pages the script shows and the copy's page count.
 -- ---------------------------------------------------------------------------------------------
-create function public.script_exception_assign(p_exception uuid, p_booking uuid, p_copy_page int, p_reason text)
+create function public.script_exception_candidates(p_exam uuid, p_query text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_q text := regexp_replace(upper(coalesce(p_query, '')), '[^A-Z0-9]', '', 'g');
+begin
+  if not public.is_staff_admin() then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  if p_exam is null or char_length(v_q) < 2 or char_length(coalesce(p_query, '')) > 40 then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  return jsonb_build_object('ok', true, 'candidates', coalesce((
+    select jsonb_agg(jsonb_build_object(
+             'booking_id', t.id, 'name', t.name, 'index_number', t.index_number, 'sitting', t.sitting, 'status', t.status,
+             'attendance', t.attendance, 'script_number', t.number,
+             'pages', coalesce((select jsonb_agg(l.copy_page order by l.copy_page) from public.script_page_links l
+                                where l.script_id = t.script_id and l.version = t.version), '[]'::jsonb),
+             'copy_pages', (select c.page_count from public.paper_copies c where c.booking_id = t.id order by c.created_at desc, c.id limit 1))
+           order by t.index_number, t.id)
+    from (
+      select b.id, b.sitting, b.status, d.index_number,
+             nullif(btrim(coalesce(pr.first_name, '') || ' ' || coalesce(pr.last_name, '')), '') as name,
+             (select a.status from public.attendance a where a.exam_id = b.exam_id and a.student_id = b.student_id) as attendance,
+             s.id as script_id, s.number, s.version
+      from public.bookings b
+      join public.student_details d on d.profile_id = b.student_id
+      join public.profiles pr on pr.id = b.student_id
+      left join public.scripts s on s.booking_id = b.id
+      where b.exam_id = p_exam and b.status in ('paid', 'cancel_requested')
+        and replace(upper(d.index_number), '-', '') like '%' || v_q || '%'
+      order by d.index_number, b.id
+      limit 10
+    ) t), '[]'::jsonb));
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- script_exception_assign: puts the exception's page into a candidate's script at copy page p_copy_page (a new
+-- version). For a page with no code, an unknown or unexpected code, a family-placed page, or a duplicate ("use this
+-- page instead"). The candidate must be booked (paid or cancel requested) for the same exam and the same sitting as
+-- the file: a scanned page goes to a centre candidate marked present or late; a page handed in from home goes to its
+-- own booking or to a home booking of a sibling (a student sharing a linked parent with the uploading booking's
+-- student), else forbidden (other_family). p_copy_page must be within their copy, and their script not past
+-- verification. A copy page that already holds a page needs p_replace (else conflict, occupied); the page displaced
+-- gets an open duplicate exception so staff see it (not for a duplicate's "use this page instead", where staff chose
+-- between the two pages shown side by side). A candidate with no script yet gets one.
+-- ---------------------------------------------------------------------------------------------
+create function public.script_exception_assign(p_exception uuid, p_booking uuid, p_copy_page int, p_reason text, p_replace boolean default false)
 returns jsonb
 language plpgsql
 security definer
@@ -447,9 +802,12 @@ declare
   v_b public.bookings%rowtype;
   v_x public.scripts%rowtype;
   v_home boolean;
+  v_from uuid;
   v_pages int;
   v_links jsonb;
   v_old uuid;
+  v_bookings uuid[];
+  v_s uuid;
 begin
   if not public.is_staff_admin() then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
@@ -466,8 +824,11 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
 
-  perform public.script_bookings_lock(array[v_e.booking_id, v_b.id] || public.script_page_bookings(v_e.page_id));
-  select * into v_e from public.script_exceptions e where e.id = p_exception for update;
+  v_bookings := public.script_resolution_lock(p_exception, array[v_b.id]);
+  if v_bookings is null then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'changed');
+  end if;
+  select * into v_e from public.script_exceptions e where e.id = p_exception;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -477,7 +838,7 @@ begin
   if v_e.kind not in ('no_code', 'unknown_code', 'not_expected', 'uncoded_family_page', 'duplicate') or v_e.page_id is null then
     return jsonb_build_object('ok', false, 'code', 'wrong_kind');
   end if;
-  select * into v_p from public.script_pages p where p.id = v_e.page_id for update;
+  select * into v_p from public.script_pages p where p.id = v_e.page_id;
   if v_p.replaced_at is not null then
     return jsonb_build_object('ok', false, 'code', 'page_replaced');
   end if;
@@ -493,8 +854,17 @@ begin
   if v_b.sitting <> (case when v_home then 'home' else 'centre' end)::public.sitting_mode then
     return jsonb_build_object('ok', false, 'code', 'wrong_sitting');
   end if;
-  if not v_home and not exists (select 1 from public.attendance a
-                                where a.exam_id = v_b.exam_id and a.student_id = v_b.student_id and a.status in ('present', 'late')) then
+  if v_home then
+    select s.booking_id into v_from from public.home_submissions s where s.id = v_up.submission_id;
+    if v_b.id is distinct from v_from and not exists (
+         select 1 from public.bookings f
+         join public.parent_children a on a.student_id = f.student_id
+         join public.parent_children o on o.parent_id = a.parent_id
+         where f.id = v_from and o.student_id = v_b.student_id) then
+      return jsonb_build_object('ok', false, 'code', 'forbidden', 'reason', 'other_family');
+    end if;
+  elsif not exists (select 1 from public.attendance a
+                    where a.exam_id = v_b.exam_id and a.student_id = v_b.student_id and a.status in ('present', 'late')) then
     return jsonb_build_object('ok', false, 'code', 'not_present');
   end if;
   select c.page_count into v_pages from public.paper_copies c where c.booking_id = v_b.id order by c.created_at desc, c.id limit 1;
@@ -510,15 +880,28 @@ begin
   if v_x.id is not null and v_x.state not in ('receiving', 'checking', 'needs_attention', 'verified') then
     return jsonb_build_object('ok', false, 'code', 'script_locked');
   end if;
-  if v_x.id is null then
+  if v_x.id is not null then
+    v_old := (public.script_links(v_x.id) ->> p_copy_page::text)::uuid;
+    if v_old is not null and v_old <> v_p.id and not coalesce(p_replace, false) then
+      return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'occupied', 'page_id', v_old);
+    end if;
+  else
     v_x := public.script_create(v_b.id, (case when v_home then 'home' else 'centre' end)::public.script_source, v_now);
   end if;
   v_links := public.script_links(v_x.id);
-  v_old := (v_links ->> p_copy_page::text)::uuid;
   v_links := coalesce((select jsonb_object_agg(t.k, t.v) from jsonb_each_text(v_links) t(k, v) where t.v <> v_p.id::text), '{}'::jsonb)
              || jsonb_build_object(p_copy_page::text, v_p.id);
   perform public.script_links_write(v_x.id, v_links, 'staff_assign', v_actor, v_now);
   select * into v_x from public.scripts s where s.id = v_x.id;
+
+  if v_old is not null and v_old <> v_p.id
+     and not (v_e.kind = 'duplicate' and v_old = (v_e.details ->> 'kept_page_id')::uuid)
+     and not exists (select 1 from public.script_exceptions e where e.page_id = v_old and e.kind = 'duplicate' and e.state = 'open') then
+    insert into public.script_exceptions (exam_id, kind, booking_id, script_id, page_id, upload_id, details)
+    select v_e.exam_id, 'duplicate', v_b.id, v_x.id, o.id, o.upload_id,
+      jsonb_build_object('copy_page', p_copy_page, 'kept_page_id', v_p.id, 'from', 'staff')
+    from public.script_pages o where o.id = v_old;
+  end if;
 
   update public.script_exceptions
   set details = details || jsonb_build_object('assigned', jsonb_build_object(
@@ -528,10 +911,9 @@ begin
   where id = v_e.id;
   perform public.script_exception_close(v_e.id, 'assigned', v_reason, v_actor, v_now, 'script_exception_assigned');
   perform public.script_page_remask(v_p.id);
-  perform public.script_resolution_settle(v_b.id, v_actor);
-  if v_e.booking_id is distinct from v_b.id then
-    perform public.script_resolution_settle(v_e.booking_id, v_actor);
-  end if;
+  foreach v_s in array v_bookings loop
+    perform public.script_resolution_settle(v_s, v_actor, v_reason);
+  end loop;
   return jsonb_build_object('ok', true, 'exception_id', v_e.id, 'resolution', 'assigned', 'script_id', v_x.id,
     'script_number', v_x.number, 'version', v_x.version,
     'replaced_page_id', case when v_old is distinct from v_p.id then v_old end);
@@ -565,14 +947,15 @@ begin
   if v_reason is null then
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
-  select * into v_e from public.script_exceptions e where e.id = p_exception;
-  if not found then
+  if not exists (select 1 from public.script_exceptions e where e.id = p_exception) then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
 
-  v_bookings := array(select distinct b from unnest(array[v_e.booking_id] || public.script_page_bookings(v_e.page_id)) b where b is not null order by 1);
-  perform public.script_bookings_lock(v_bookings);
-  select * into v_e from public.script_exceptions e where e.id = p_exception for update;
+  v_bookings := public.script_resolution_lock(p_exception, '{}');
+  if v_bookings is null then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'changed');
+  end if;
+  select * into v_e from public.script_exceptions e where e.id = p_exception;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -582,11 +965,14 @@ begin
   if v_e.kind not in ('no_code', 'unknown_code', 'other_exam', 'not_expected', 'uncoded_family_page') or v_e.page_id is null then
     return jsonb_build_object('ok', false, 'code', 'wrong_kind');
   end if;
+  if public.script_page_locked(v_e.page_id) then
+    return jsonb_build_object('ok', false, 'code', 'script_locked');
+  end if;
 
   perform public.script_exception_close(v_e.id, 'blank', v_reason, v_actor, v_now, 'script_exception_blank');
-  perform public.script_page_set_aside(v_e.page_id, v_actor, v_now);
+  perform public.script_page_set_aside(v_e.page_id, v_actor, v_now, v_reason);
   foreach v_b in array v_bookings loop
-    perform public.script_resolution_settle(v_b, v_actor);
+    perform public.script_resolution_settle(v_b, v_actor, v_reason);
   end loop;
   return jsonb_build_object('ok', true, 'exception_id', v_e.id, 'resolution', 'blank');
 end;
@@ -618,14 +1004,15 @@ begin
   if v_reason is null then
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
-  select * into v_e from public.script_exceptions e where e.id = p_exception;
-  if not found then
+  if not exists (select 1 from public.script_exceptions e where e.id = p_exception) then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
 
-  v_bookings := array(select distinct b from unnest(array[v_e.booking_id] || public.script_page_bookings(v_e.page_id)) b where b is not null order by 1);
-  perform public.script_bookings_lock(v_bookings);
-  select * into v_e from public.script_exceptions e where e.id = p_exception for update;
+  v_bookings := public.script_resolution_lock(p_exception, '{}');
+  if v_bookings is null then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'changed');
+  end if;
+  select * into v_e from public.script_exceptions e where e.id = p_exception;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -638,18 +1025,18 @@ begin
 
   perform public.script_exception_close(v_e.id, 'kept', v_reason, v_actor, v_now, 'script_exception_kept');
   foreach v_b in array v_bookings loop
-    perform public.script_resolution_settle(v_b, v_actor);
+    perform public.script_resolution_settle(v_b, v_actor, v_reason);
   end loop;
   return jsonb_build_object('ok', true, 'exception_id', v_e.id, 'resolution', 'kept');
 end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- script_exception_reject: the page (or file) is not accepted. At home the submission is rejected (the family is
--- emailed with the reason) when it is the latest handed in, or the page is one the script shows now (then the latest
--- submission, which counts it, is rejected): script_home_reject. An older submission already replaced is left as it
--- is. A scanned page is set aside, out of any script that showed it. For pages with no code, unknown, unexpected or
--- other exam's codes, family-placed pages, poor quality, and files that could not be processed.
+-- script_exception_reject: the page (or file) is not accepted. At home the submissions script_reject_targets names
+-- are rejected (script_home_reject: the family is emailed once and sees the reason); a scanned page is set aside, out
+-- of any script that showed it. The page is set aside in every case. outcome: submission_rejected, set_aside (a
+-- scanned page) or closed (nothing else counted it). For pages with no code, unknown, unexpected or other exam's
+-- codes, family-placed pages, poor quality, and files that could not be prepared (not a remask failure: wrong_kind).
 -- ---------------------------------------------------------------------------------------------
 create function public.script_exception_reject(p_exception uuid, p_reason text)
 returns jsonb
@@ -663,10 +1050,10 @@ declare
   v_reason text := public.script_resolution_reason(p_reason);
   v_e public.script_exceptions%rowtype;
   v_sub public.home_submissions%rowtype;
-  v_latest public.home_submissions%rowtype;
+  v_targets uuid[];
   v_bookings uuid[];
   v_b uuid;
-  v_rejected boolean := false;
+  v_outcome text;
 begin
   if not public.is_staff_admin() then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
@@ -684,47 +1071,55 @@ begin
   select s.* into v_sub from public.home_submissions s join public.script_uploads u on u.submission_id = s.id
   where u.id = coalesce(v_e.upload_id, (select p.upload_id from public.script_pages p where p.id = v_e.page_id));
 
-  v_bookings := array(select distinct b from unnest(array[v_e.booking_id, v_sub.booking_id] || public.script_page_bookings(v_e.page_id)) b where b is not null order by 1);
-  perform public.script_bookings_lock(v_bookings);
-  select * into v_e from public.script_exceptions e where e.id = p_exception for update;
+  v_bookings := public.script_resolution_lock(p_exception, array[v_sub.booking_id]);
+  if v_bookings is null then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'changed');
+  end if;
+  select * into v_e from public.script_exceptions e where e.id = p_exception;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
   if v_e.state <> 'open' then
     return public.script_exception_conflict(v_e.id);
   end if;
-  if v_e.kind not in ('no_code', 'unknown_code', 'other_exam', 'not_expected', 'uncoded_family_page', 'poor_quality', 'processing_failed') then
+  if v_e.kind not in ('no_code', 'unknown_code', 'other_exam', 'not_expected', 'uncoded_family_page', 'poor_quality', 'processing_failed')
+     or (v_e.kind = 'processing_failed' and v_e.details ->> 'kind' = 'remask') then
     return jsonb_build_object('ok', false, 'code', 'wrong_kind');
+  end if;
+  v_targets := public.script_reject_targets(v_e.id);
+  if (v_e.page_id is not null and public.script_page_locked(v_e.page_id))
+     or (cardinality(v_targets) > 0 and exists (
+           select 1 from public.scripts s where s.booking_id = v_sub.booking_id
+             and s.state not in ('receiving', 'checking', 'needs_attention', 'verified'))) then
+    return jsonb_build_object('ok', false, 'code', 'script_locked');
   end if;
 
   perform public.script_exception_close(v_e.id, 'rejected', v_reason, v_actor, v_now, 'script_exception_rejected');
-  if v_sub.id is not null then
-    v_latest := public.home_submission_latest(v_sub.booking_id);
-    if v_latest.state not in ('draft', 'rejected')
-       and (v_latest.id = v_sub.id
-            or exists (select 1 from public.script_page_links l join public.scripts s on s.id = l.script_id and l.version = s.version
-                       where s.booking_id = v_sub.booking_id and l.page_id = v_e.page_id)) then
-      perform public.script_home_reject(v_sub.booking_id, array[v_latest.id], v_reason, v_actor, v_now);
-      v_rejected := true;
-    end if;
-  elsif v_e.page_id is not null then
-    perform public.script_page_set_aside(v_e.page_id, v_actor, v_now);
+  if cardinality(v_targets) > 0 then
+    perform public.script_home_reject(v_sub.booking_id, v_targets, v_reason, v_actor, v_now);
+    v_outcome := 'submission_rejected';
+  end if;
+  if v_e.page_id is not null then
+    perform public.script_page_set_aside(v_e.page_id, v_actor, v_now, v_reason);
+    v_outcome := coalesce(v_outcome, case when v_sub.id is null then 'set_aside' else 'closed' end);
   end if;
   foreach v_b in array v_bookings loop
-    perform public.script_resolution_settle(v_b, v_actor);
+    perform public.script_resolution_settle(v_b, v_actor, v_reason);
   end loop;
-  return jsonb_build_object('ok', true, 'exception_id', v_e.id, 'resolution', 'rejected', 'submission_rejected', v_rejected);
+  return jsonb_build_object('ok', true, 'exception_id', v_e.id, 'resolution', 'rejected',
+    'outcome', coalesce(v_outcome, 'closed'), 'submission_rejected', cardinality(v_targets) > 0);
 end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- script_exception_confirm: staff accept the page as it is: a family's placement of a page with no code, a page of
--- poor quality (or sent as it is; hide the name first when its layout was unexpected), a reported visible name once
--- hidden, a file that could not be processed (noted), or mixed versions once the script shows one version again
--- (still_mixed before). A page with no marking picture, or with staff hidden areas, gets a remask job. The reason is
--- optional (3 to 300 characters when given).
+-- poor quality (or sent as it is), a reported visible name, a file that could not be processed (noted), or mixed
+-- versions once the script shows one version again (still_mixed before). A page whose layout was unexpected, and a
+-- visible name, need a staff hidden area on the page first, or p_no_name ("There is no name on this page", kept in
+-- the details); else name_not_hidden. A page with no marking picture, or with staff hidden areas, gets a remask job.
+-- The reason is optional (3 to 300 characters when given).
 -- ---------------------------------------------------------------------------------------------
-create function public.script_exception_confirm(p_exception uuid, p_reason text default null)
+create function public.script_exception_confirm(p_exception uuid, p_reason text default null, p_no_name boolean default false)
 returns jsonb
 language plpgsql
 security definer
@@ -736,6 +1131,7 @@ declare
   v_given text := nullif(btrim(coalesce(p_reason, '')), '');
   v_reason text := public.script_resolution_reason(p_reason);
   v_e public.script_exceptions%rowtype;
+  v_name_check boolean;
   v_bookings uuid[];
   v_b uuid;
 begin
@@ -748,14 +1144,15 @@ begin
   if v_given is not null and v_reason is null then
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
-  select * into v_e from public.script_exceptions e where e.id = p_exception;
-  if not found then
+  if not exists (select 1 from public.script_exceptions e where e.id = p_exception) then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
 
-  v_bookings := array(select distinct b from unnest(array[v_e.booking_id] || public.script_page_bookings(v_e.page_id)) b where b is not null order by 1);
-  perform public.script_bookings_lock(v_bookings);
-  select * into v_e from public.script_exceptions e where e.id = p_exception for update;
+  v_bookings := public.script_resolution_lock(p_exception, '{}');
+  if v_bookings is null then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'changed');
+  end if;
+  select * into v_e from public.script_exceptions e where e.id = p_exception;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
@@ -774,13 +1171,23 @@ begin
        where s.id = coalesce(v_e.script_id, (select x.id from public.scripts x where x.booking_id = v_e.booking_id))) > 1 then
     return jsonb_build_object('ok', false, 'code', 'still_mixed');
   end if;
+  v_name_check := v_e.kind = 'name_visible'
+    or (v_e.kind = 'poor_quality' and exists (select 1 from public.script_pages p
+                                              where p.id = v_e.page_id and coalesce(p.quality -> 'flags' ? 'layout_unexpected', false)));
+  if v_name_check and not coalesce(p_no_name, false)
+     and not exists (select 1 from public.script_page_hidden_areas a where a.page_id = v_e.page_id) then
+    return jsonb_build_object('ok', false, 'code', 'name_not_hidden');
+  end if;
 
+  if v_name_check and coalesce(p_no_name, false) then
+    update public.script_exceptions set details = details || '{"no_name": true}'::jsonb where id = v_e.id;
+  end if;
   perform public.script_exception_close(v_e.id, 'confirmed', v_reason, v_actor, v_now, 'script_exception_confirmed');
   if v_e.page_id is not null then
     perform public.script_page_remask(v_e.page_id);
   end if;
   foreach v_b in array v_bookings loop
-    perform public.script_resolution_settle(v_b, v_actor);
+    perform public.script_resolution_settle(v_b, v_actor, v_reason);
   end loop;
   return jsonb_build_object('ok', true, 'exception_id', v_e.id, 'resolution', 'confirmed');
 end;
@@ -848,7 +1255,7 @@ begin
   end if;
   insert into public.audit_log (actor_id, action, target_type, target_id, reason)
   values (v_actor, 'script_missing_dismissed', 'script_exception', v_e.id, v_reason);
-  perform public.script_resolution_settle(v_e.booking_id, v_actor);
+  perform public.script_resolution_settle(v_e.booking_id, v_actor, v_reason);
 
   select * into v_e from public.script_exceptions e where e.id = v_e.id;
   return jsonb_build_object('ok', true, 'exception_id', v_e.id, 'state', v_e.state, 'dismissed', to_jsonb(v_dismissed),
@@ -858,10 +1265,12 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- script_late_decide: staff decide whether a late home script is marked. Accept: late_decision accept, the script
--- stays late. Reject: every late submission of the booking still counting is rejected with the reason (the family is
--- emailed; an earlier on-time submission counts again), late_decision reject. Either way the open late exception is
--- resolved (late_accepted or late_rejected) and audited against the script. not_late when the script never had a
--- late exception; conflict (with who decided) when it was decided already.
+-- stays late (a script made void by an earlier rejection is worked out again). Reject: every late submission of the
+-- booking still counting is rejected with the reason (the family is emailed once and sees it); when an on-time
+-- submission then counts, its pages are used (outcome on_time_used); when none does, the script is void with
+-- state_reason late_rejected (outcome void), visibly not marked. Either way the open late exception is resolved
+-- (late_accepted or late_rejected) and audited against the script. not_late when the script never had a late
+-- exception; conflict (with who decided) when it was decided already; script_locked past verification.
 -- ---------------------------------------------------------------------------------------------
 create function public.script_late_decide(p_script uuid, p_accept boolean, p_reason text)
 returns jsonb
@@ -875,6 +1284,7 @@ declare
   v_reason text := public.script_resolution_reason(p_reason);
   v_x public.scripts%rowtype;
   v_e public.script_exceptions%rowtype;
+  v_outcome text;
 begin
   if not public.is_staff_admin() then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
@@ -903,6 +1313,11 @@ begin
     end if;
     return public.script_exception_conflict(v_e.id);
   end if;
+  select * into v_x from public.scripts s where s.id = p_script for update;
+  if v_x.state not in ('receiving', 'checking', 'needs_attention', 'verified')
+     and not (v_x.state = 'void' and v_x.state_reason = 'late_rejected') then
+    return jsonb_build_object('ok', false, 'code', 'script_locked');
+  end if;
 
   update public.script_exceptions
   set state = 'resolved', resolved_by = v_actor, resolved_at = v_now, reason = v_reason,
@@ -910,15 +1325,28 @@ begin
   where id = v_e.id;
   insert into public.audit_log (actor_id, action, target_type, target_id, reason)
   values (v_actor, case when p_accept then 'script_late_accepted' else 'script_late_rejected' end, 'script', v_x.id, v_reason);
-  if not p_accept then
+  if v_x.state = 'void' then
+    update public.scripts set state = 'receiving', state_reason = null where id = v_x.id;
+  end if;
+  if p_accept then
+    update public.scripts set late_decision = 'accept' where id = v_x.id;
+    v_outcome := 'accepted';
+  else
     perform public.script_home_reject(v_x.booking_id,
       array(select s.id from public.home_submissions s
             where s.booking_id = v_x.booking_id and s.late and s.state not in ('draft', 'rejected') order by s.id),
       v_reason, v_actor, v_now);
+    if exists (select 1 from public.home_submissions s where s.booking_id = v_x.booking_id and s.state not in ('draft', 'rejected')) then
+      update public.scripts set late_decision = 'reject' where id = v_x.id;
+      v_outcome := 'on_time_used';
+    else
+      update public.scripts set late_decision = 'reject', state = 'void', state_reason = 'late_rejected' where id = v_x.id;
+      v_outcome := 'void';
+    end if;
   end if;
-  update public.scripts set late_decision = case when p_accept then 'accept' else 'reject' end where id = v_x.id;
-  perform public.script_resolution_settle(v_x.booking_id, v_actor);
-  return jsonb_build_object('ok', true, 'script_id', v_x.id, 'late_decision', case when p_accept then 'accept' else 'reject' end);
+  perform public.script_resolution_settle(v_x.booking_id, v_actor, v_reason);
+  return jsonb_build_object('ok', true, 'script_id', v_x.id, 'late_decision', case when p_accept then 'accept' else 'reject' end,
+    'outcome', v_outcome);
 end;
 $$;
 
@@ -1092,32 +1520,41 @@ revoke execute on function public.script_resolution_reason(text) from public, an
 revoke execute on function public.script_exception_conflict(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.script_bookings_lock(uuid[]) from public, anon, authenticated, service_role;
 revoke execute on function public.script_page_bookings(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.script_resolution_lock(uuid, uuid[]) from public, anon, authenticated, service_role;
 revoke execute on function public.script_centre_checked(uuid) from public, anon, authenticated, service_role;
-revoke execute on function public.script_resolution_settle(uuid, uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.script_page_refused(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.script_resolution_settle(uuid, uuid, text) from public, anon, authenticated, service_role;
 revoke execute on function public.script_links_write(uuid, jsonb, text, uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.script_page_locked(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.script_exception_close(uuid, text, text, uuid, timestamptz, text) from public, anon, authenticated, service_role;
-revoke execute on function public.script_page_set_aside(uuid, uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.script_page_set_aside(uuid, uuid, timestamptz, text) from public, anon, authenticated, service_role;
 revoke execute on function public.script_home_reject(uuid, uuid[], text, uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.script_reject_targets(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.script_page_remask(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.script_booking_json(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.script_page_json(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.script_exception_json(uuid) from public, anon, authenticated, service_role;
+-- Re-created above; still internal (as 20261120000052).
+revoke execute on function public.home_submission_evaluate(uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.script_evaluate_at(uuid, timestamptz) from public, anon, authenticated, service_role;
 
 revoke execute on function public.script_exceptions_list(uuid, public.exception_kind, text) from public, anon;
-revoke execute on function public.script_exception_assign(uuid, uuid, int, text) from public, anon;
+revoke execute on function public.script_exception_candidates(uuid, text) from public, anon;
+revoke execute on function public.script_exception_assign(uuid, uuid, int, text, boolean) from public, anon;
 revoke execute on function public.script_exception_blank(uuid, text) from public, anon;
 revoke execute on function public.script_exception_keep_existing(uuid, text) from public, anon;
 revoke execute on function public.script_exception_reject(uuid, text) from public, anon;
-revoke execute on function public.script_exception_confirm(uuid, text) from public, anon;
+revoke execute on function public.script_exception_confirm(uuid, text, boolean) from public, anon;
 revoke execute on function public.script_exception_dismiss_missing(uuid, int[], text) from public, anon;
 revoke execute on function public.script_late_decide(uuid, boolean, text) from public, anon;
 revoke execute on function public.script_page_set_hidden_areas(uuid, jsonb, text) from public, anon;
 grant execute on function public.script_exceptions_list(uuid, public.exception_kind, text) to authenticated;
-grant execute on function public.script_exception_assign(uuid, uuid, int, text) to authenticated;
+grant execute on function public.script_exception_candidates(uuid, text) to authenticated;
+grant execute on function public.script_exception_assign(uuid, uuid, int, text, boolean) to authenticated;
 grant execute on function public.script_exception_blank(uuid, text) to authenticated;
 grant execute on function public.script_exception_keep_existing(uuid, text) to authenticated;
 grant execute on function public.script_exception_reject(uuid, text) to authenticated;
-grant execute on function public.script_exception_confirm(uuid, text) to authenticated;
+grant execute on function public.script_exception_confirm(uuid, text, boolean) to authenticated;
 grant execute on function public.script_exception_dismiss_missing(uuid, int[], text) to authenticated;
 grant execute on function public.script_late_decide(uuid, boolean, text) to authenticated;
 grant execute on function public.script_page_set_hidden_areas(uuid, jsonb, text) to authenticated;

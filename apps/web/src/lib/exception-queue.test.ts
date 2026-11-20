@@ -4,10 +4,14 @@ import {
   actionLabel,
   actionsFor,
   conflictMessage,
+  failureMessage,
   foundInWords,
+  needsNameCheck,
+  parseCandidates,
   parseQueue,
   reasonProblem,
   resolutionLabel,
+  resolvedMessage,
   rpcFor,
   type QueueItem,
 } from "./exception-queue";
@@ -46,6 +50,7 @@ const raw = (over: Record<string, unknown> = {}) => ({
   linked_pages: null,
   upload: { id: "22222222-2222-4222-8222-222222222222", kind: "scan_file", state: "processed", source: "centre", position: 1, batch_number: "B-MATH1-01", submission_id: null, submission_seq: null, submission_state: null },
   submission: null,
+  rejects_submission: false,
   resolved: null,
   ...over,
 });
@@ -99,7 +104,10 @@ describe("foundInWords", () => {
       "Page 2 was confirmed as left blank.",
     ]);
     expect(foundInWords(item({ kind: "missing_pages", details: { pages: [], reason: "no_paper" } }))[0]).toContain("page roles");
-    expect(foundInWords(item({ kind: "processing_failed", details: { attempts: 3 } }))[0]).toContain("3 attempts");
+    expect(foundInWords(item({ kind: "processing_failed", details: { kind: "prepare", attempts: 3 } }))[0]).toBe("The file could not be prepared after 3 attempts.");
+    expect(foundInWords(item({ kind: "processing_failed", page: null, details: { kind: "remask", attempts: 3 } }))[0]).toBe(
+      "The marking picture could not be made (this is not the family's file).",
+    );
   });
   it("names both paper versions of a duplicate when they differ", () => {
     const words = foundInWords(item());
@@ -147,14 +155,22 @@ describe("actionsFor", () => {
     expect(actionsFor(item({ kind: "mixed_versions" }))).toEqual(["confirm"]);
     expect(actionsFor(item({ kind: "late" }))).toEqual(["late_accept", "late_reject"]);
     expect(actionsFor(item({ kind: "late", script: null }))).toEqual([]);
-    expect(actionsFor(item({ kind: "processing_failed", page: null }))).toEqual(["confirm", "reject"]);
+    expect(actionsFor(item({ kind: "processing_failed", page: null, details: { kind: "prepare" } }))).toEqual(["confirm", "reject"]);
+    expect(actionsFor(item({ kind: "processing_failed", page: null, details: { kind: "remask" } }))).toEqual(["confirm"]);
   });
   it("offers nothing once resolved", () => {
     expect(actionsFor(item({ state: "resolved", resolved: { by: "A", at: "2031-07-07T12:00:00Z", resolution: "kept", reason: null } }))).toEqual([]);
   });
   it("labels the actions for home and centre", () => {
     expect(actionLabel("reject", item({ kind: "no_code" }))).toBe("Reject this page");
-    expect(actionLabel("reject", item({ kind: "not_expected", upload: { ...raw().upload, source: "home" } }))).toBe("Reject the submission");
+    expect(actionLabel("reject", item({ kind: "not_expected", upload: { ...raw().upload, source: "home" }, rejects_submission: true }))).toBe(
+      "Reject the submission",
+    );
+    // A home page an upload already replaced: rejecting it rejects no submission, so the button does not say so.
+    expect(actionLabel("reject", item({ kind: "poor_quality", upload: { ...raw().upload, source: "home" }, rejects_submission: false }))).toBe(
+      "Reject this page",
+    );
+    expect(actionLabel("confirm", item({ kind: "processing_failed", page: null, details: { kind: "remask" } }))).toBe("Noted");
     expect(actionLabel("assign", item())).toBe("Use this page instead");
     expect(actionLabel("confirm", item({ kind: "poor_quality" }))).toBe("Accept as it is");
   });
@@ -185,6 +201,17 @@ describe("rpcFor", () => {
       args: { p_exception: "e", p_reason: "Sharper" },
     });
     expect(rpcFor({ action: "confirm", exceptionId: "e", reason: "  " })).toEqual({ fn: "script_exception_confirm", args: { p_exception: "e" } });
+    expect(rpcFor({ action: "confirm", exceptionId: "e", reason: "", noName: true })).toEqual({
+      fn: "script_exception_confirm",
+      args: { p_exception: "e", p_no_name: true },
+    });
+    expect(rpcFor({ action: "assign", exceptionId: "e", bookingId: "b", copyPage: 2, reason: "Real page 2", replace: true }).args).toEqual({
+      p_exception: "e",
+      p_booking: "b",
+      p_copy_page: 2,
+      p_reason: "Real page 2",
+      p_replace: true,
+    });
     expect(rpcFor({ action: "dismiss_missing", exceptionId: "e", pages: [3, 4], reason: "Blank" })).toEqual({
       fn: "script_exception_dismiss_missing",
       args: { p_exception: "e", p_pages: [3, 4], p_reason: "Blank" },
@@ -202,8 +229,65 @@ describe("words", () => {
     expect(resolutionLabel("dismissed")).toBe("Confirmed left blank");
     expect(resolutionLabel("something_new")).toBe("something_new");
   });
+  it("says why an assignment or a changed page was refused", () => {
+    expect(conflictMessage({ reason: "occupied" })).toContain("already holds a page");
+    expect(conflictMessage({ reason: "changed" })).toBe("This page changed while you were working. Refresh the page and try again.");
+  });
   it("says who resolved it first", () => {
     expect(conflictMessage({ resolved_by: "Ada Admin", resolved_at: "2031-07-07T11:00:00Z" })).toMatch(/^Already resolved by Ada Admin on .+\. Refresh the page\.$/);
     expect(conflictMessage({})).toBe("This has already been resolved. Refresh the page to see how.");
+  });
+});
+
+describe("needsNameCheck", () => {
+  it("asks for a hidden area or 'no name' on a page whose layout was unexpected, and for a visible name", () => {
+    const layout = page({ quality: { sharpness: 100, brightness: 180, cut_off: false, flags: ["layout_unexpected"] }, areas: [] });
+    expect(needsNameCheck(item({ kind: "poor_quality", page: layout }))).toBe(true);
+    expect(needsNameCheck(item({ kind: "poor_quality", page: { ...layout, areas: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.1 }] } }))).toBe(false);
+    expect(needsNameCheck(item({ kind: "poor_quality", page: page({ quality: { flags: ["blurred"] }, areas: [] }) }))).toBe(false);
+    expect(needsNameCheck(item({ kind: "name_visible", page: page({ areas: [] }) }))).toBe(true);
+    expect(needsNameCheck(item({ kind: "uncoded_family_page" }))).toBe(false);
+  });
+});
+
+describe("resolvedMessage", () => {
+  it("says what actually happened", () => {
+    expect(resolvedMessage({ action: "reject", exceptionId: "e", reason: "r" }, { outcome: "submission_rejected" })).toBe(
+      "Rejected. The family's submission is rejected and they have been emailed with your reason.",
+    );
+    expect(resolvedMessage({ action: "reject", exceptionId: "e", reason: "r" }, { outcome: "set_aside" })).toBe("Rejected. The page is set aside.");
+    expect(resolvedMessage({ action: "reject", exceptionId: "e", reason: "r" }, { outcome: "closed" })).toContain("nothing else changed");
+    expect(resolvedMessage({ action: "late_reject", scriptId: "s", reason: "r" }, { outcome: "on_time_used" })).toMatch(
+      /^The late upload is set aside; the on-time pages are used\./,
+    );
+    expect(resolvedMessage({ action: "late_reject", scriptId: "s", reason: "r" }, { outcome: "void" })).toContain("void");
+    expect(resolvedMessage({ action: "assign", exceptionId: "e", bookingId: "b", copyPage: 2, reason: "r" }, { replaced_page_id: "p" })).toContain(
+      "kept for review as a duplicate",
+    );
+  });
+});
+
+describe("failureMessage", () => {
+  it("names another family, a conflict, or the code's message", () => {
+    expect(failureMessage({ code: "forbidden", reason: "other_family" })).toContain("another family");
+    expect(failureMessage({ code: "forbidden" })).toBe("You do not have permission to do that.");
+    expect(failureMessage({ code: "conflict", resolved_by: "Ada Admin", resolved_at: "2031-07-07T11:00:00Z" })).toContain("Ada Admin");
+    expect(failureMessage({ code: "still_mixed" })).toContain("two versions");
+  });
+});
+
+describe("parseCandidates", () => {
+  it("reads what script_exception_candidates answers", () => {
+    const c = parseCandidates({
+      ok: true,
+      candidates: [
+        { booking_id: "b", name: "Sam Pupil", index_number: "SE-2026-0001", sitting: "centre", status: "paid", attendance: "present", script_number: "S-1", pages: [2, 3], copy_pages: 6 },
+        { booking_id: 5 },
+      ],
+    });
+    expect(c).toEqual([
+      { bookingId: "b", name: "Sam Pupil", indexNumber: "SE-2026-0001", sitting: "centre", status: "paid", attendance: "present", scriptNumber: "S-1", pages: [2, 3], copyPages: 6 },
+    ]);
+    expect(parseCandidates({ ok: false, code: "invalid_input" })).toBeNull();
   });
 });

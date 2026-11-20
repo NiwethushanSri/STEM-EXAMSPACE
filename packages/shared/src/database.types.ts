@@ -1527,16 +1527,19 @@ isOneToOne: false
 { Args: { "p_now": string,"p_script": string }; Returns: undefined
                            },
 "script_exception_assign":
-{ Args: { "p_booking": string,"p_copy_page": number,"p_exception": string,"p_reason": string }; Returns: Json
+{ Args: { "p_booking": string,"p_copy_page": number,"p_exception": string,"p_reason": string,"p_replace"?: boolean }; Returns: Json
                            },
 "script_exception_blank":
 { Args: { "p_exception": string,"p_reason": string }; Returns: Json
+                           },
+"script_exception_candidates":
+{ Args: { "p_exam": string,"p_query": string }; Returns: Json
                            },
 "script_exception_close":
 { Args: { "p_action": string,"p_actor": string,"p_id": string,"p_now": string,"p_reason": string,"p_resolution": string }; Returns: undefined
                            },
 "script_exception_confirm":
-{ Args: { "p_exception": string,"p_reason"?: string }; Returns: Json
+{ Args: { "p_exception": string,"p_no_name"?: boolean,"p_reason"?: string }; Returns: Json
                            },
 "script_exception_conflict":
 { Args: { "p_exception": string }; Returns: Json
@@ -1604,14 +1607,20 @@ isOneToOne: false
 "script_page_json":
 { Args: { "p_page": string }; Returns: Json
                            },
+"script_page_locked":
+{ Args: { "p_page": string }; Returns: boolean
+                           },
 "script_page_poor":
 { Args: { "p_answer": boolean,"p_marking": string,"p_quality": Json }; Returns: boolean
+                           },
+"script_page_refused":
+{ Args: { "p_page": string }; Returns: boolean
                            },
 "script_page_remask":
 { Args: { "p_page": string }; Returns: undefined
                            },
 "script_page_set_aside":
-{ Args: { "p_actor": string,"p_now": string,"p_page": string }; Returns: undefined
+{ Args: { "p_actor": string,"p_now": string,"p_page": string,"p_reason": string }; Returns: undefined
                            },
 "script_page_set_hidden_areas":
 { Args: { "p_areas": Json,"p_page": string,"p_reason": string }; Returns: Json
@@ -1625,11 +1634,17 @@ isOneToOne: false
 "script_raise_mixed":
 { Args: { "p_script": string,"p_upload": string }; Returns: undefined
                            },
+"script_reject_targets":
+{ Args: { "p_exception": string }; Returns: (string)[]
+                           },
+"script_resolution_lock":
+{ Args: { "p_exception": string,"p_extra": (string)[] }; Returns: (string)[]
+                           },
 "script_resolution_reason":
 { Args: { "p_reason": string }; Returns: string
                            },
 "script_resolution_settle":
-{ Args: { "p_actor": string,"p_booking": string }; Returns: undefined
+{ Args: { "p_actor": string,"p_booking": string,"p_reason": string }; Returns: undefined
                            },
 "script_upload_begin":
 { Args: { "p_bytes": number,"p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string,"p_now"?: string,"p_submission": string }; Returns: Json
