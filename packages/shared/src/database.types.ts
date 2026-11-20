@@ -331,14 +331,14 @@ isOneToOne: false
                   ]
                 },"home_submissions": {
                   Row: {
-                    "blank_confirmed": (number)[],"booking_id": string,"checked_at": string | null,"id": string,"late": boolean,"replaces_all": boolean,"seq": number,"state": Database["public"]['Enums']["submission_state"],"submitted_at": string | null,"submitted_by": string | null
+                    "blank_confirmed": (number)[],"booking_id": string,"checked_at": string | null,"id": string,"late": boolean,"rejected_reason": string | null,"replaces_all": boolean,"seq": number,"state": Database["public"]['Enums']["submission_state"],"submitted_at": string | null,"submitted_by": string | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "blank_confirmed"?: (number)[],"booking_id": string,"checked_at"?: string | null,"id"?: string,"late"?: boolean,"replaces_all"?: boolean,"seq": number,"state"?: Database["public"]['Enums']["submission_state"],"submitted_at"?: string | null,"submitted_by"?: string | null
+                    "blank_confirmed"?: (number)[],"booking_id": string,"checked_at"?: string | null,"id"?: string,"late"?: boolean,"rejected_reason"?: string | null,"replaces_all"?: boolean,"seq": number,"state"?: Database["public"]['Enums']["submission_state"],"submitted_at"?: string | null,"submitted_by"?: string | null
                   }
                   Update: {
-                    "blank_confirmed"?: (number)[],"booking_id"?: string,"checked_at"?: string | null,"id"?: string,"late"?: boolean,"replaces_all"?: boolean,"seq"?: number,"state"?: Database["public"]['Enums']["submission_state"],"submitted_at"?: string | null,"submitted_by"?: string | null
+                    "blank_confirmed"?: (number)[],"booking_id"?: string,"checked_at"?: string | null,"id"?: string,"late"?: boolean,"rejected_reason"?: string | null,"replaces_all"?: boolean,"seq"?: number,"state"?: Database["public"]['Enums']["submission_state"],"submitted_at"?: string | null,"submitted_by"?: string | null
                   }
                   Relationships: [
                     {
@@ -748,6 +748,32 @@ isOneToOne: false
       columns: ["profile_id"]
 isOneToOne: false
       referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"script_page_hidden_areas": {
+                  Row: {
+                    "created_at": string,"created_by": string | null,"h": number,"id": string,"page_id": string,"w": number,"x": number,"y": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"created_by"?: string | null,"h": number,"id"?: string,"page_id": string,"w": number,"x": number,"y": number
+                  }
+                  Update: {
+                    "created_at"?: string,"created_by"?: string | null,"h"?: number,"id"?: string,"page_id"?: string,"w"?: number,"x"?: number,"y"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "script_page_hidden_areas_created_by_fkey"
+      columns: ["created_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_page_hidden_areas_page_id_fkey"
+      columns: ["page_id"]
+isOneToOne: false
+      referencedRelation: "script_pages"
       referencedColumns: ["id"]
     }
                   ]
@@ -1221,6 +1247,7 @@ isOneToOne: false
 "checked_at": string | null,
 "id": string,
 "late": boolean,
+"rejected_reason": string | null,
 "replaces_all": boolean,
 "seq": number,
 "state": Database["public"]['Enums']["submission_state"],
@@ -1458,6 +1485,15 @@ isOneToOne: false
 "scan_upload_type_ok":
 { Args: { "p_mime": string }; Returns: boolean
                            },
+"script_booking_json":
+{ Args: { "p_booking": string }; Returns: Json
+                           },
+"script_bookings_lock":
+{ Args: { "p_bookings": (string)[] }; Returns: undefined
+                           },
+"script_centre_checked":
+{ Args: { "p_booking": string }; Returns: boolean
+                           },
 "script_create":
 { Args: { "p_booking": string,"p_now": string,"p_source": Database["public"]['Enums']["script_source"] }; Returns: {
               "booking_id": string,
@@ -1490,8 +1526,47 @@ isOneToOne: false
 "script_evaluate_at":
 { Args: { "p_now": string,"p_script": string }; Returns: undefined
                            },
+"script_exception_assign":
+{ Args: { "p_booking": string,"p_copy_page": number,"p_exception": string,"p_reason": string }; Returns: Json
+                           },
+"script_exception_blank":
+{ Args: { "p_exception": string,"p_reason": string }; Returns: Json
+                           },
+"script_exception_close":
+{ Args: { "p_action": string,"p_actor": string,"p_id": string,"p_now": string,"p_reason": string,"p_resolution": string }; Returns: undefined
+                           },
+"script_exception_confirm":
+{ Args: { "p_exception": string,"p_reason"?: string }; Returns: Json
+                           },
+"script_exception_conflict":
+{ Args: { "p_exception": string }; Returns: Json
+                           },
+"script_exception_dismiss_missing":
+{ Args: { "p_exception": string,"p_pages": (number)[],"p_reason": string }; Returns: Json
+                           },
+"script_exception_json":
+{ Args: { "p_exception": string }; Returns: Json
+                           },
+"script_exception_keep_existing":
+{ Args: { "p_exception": string,"p_reason": string }; Returns: Json
+                           },
+"script_exception_reject":
+{ Args: { "p_exception": string,"p_reason": string }; Returns: Json
+                           },
+"script_exceptions_list":
+{ Args: { "p_exam"?: string,"p_kind"?: Database["public"]['Enums']["exception_kind"],"p_state"?: string }; Returns: Json
+                           },
+"script_home_reject":
+{ Args: { "p_actor": string,"p_booking": string,"p_now": string,"p_reason": string,"p_subs": (string)[] }; Returns: undefined
+                           },
+"script_late_decide":
+{ Args: { "p_accept": boolean,"p_reason": string,"p_script": string }; Returns: Json
+                           },
 "script_links":
 { Args: { "p_script": string }; Returns: Json
+                           },
+"script_links_write":
+{ Args: { "p_actor": string,"p_links": Json,"p_now": string,"p_reason": string,"p_script": string }; Returns: boolean
                            },
 "script_notice_content":
 { Args: { "p_notice": Omit<Database["public"]['Tables']["script_notices"]['Row'], Database["public"]['Tables']["script_notices"]['ComputedFields']> }; Returns: Json
@@ -1520,11 +1595,26 @@ isOneToOne: false
 "script_number_next":
 { Args: { "p_exam": string }; Returns: string
                            },
+"script_page_bookings":
+{ Args: { "p_page": string }; Returns: (string)[]
+                           },
 "script_page_is_answer":
 { Args: { "p_copy": string,"p_page": number }; Returns: boolean
                            },
+"script_page_json":
+{ Args: { "p_page": string }; Returns: Json
+                           },
 "script_page_poor":
 { Args: { "p_answer": boolean,"p_marking": string,"p_quality": Json }; Returns: boolean
+                           },
+"script_page_remask":
+{ Args: { "p_page": string }; Returns: undefined
+                           },
+"script_page_set_aside":
+{ Args: { "p_actor": string,"p_now": string,"p_page": string }; Returns: undefined
+                           },
+"script_page_set_hidden_areas":
+{ Args: { "p_areas": Json,"p_page": string,"p_reason": string }; Returns: Json
                            },
 "script_pages_record":
 { Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_sha256": string,"p_worker": string }; Returns: Json
@@ -1534,6 +1624,12 @@ isOneToOne: false
                            },
 "script_raise_mixed":
 { Args: { "p_script": string,"p_upload": string }; Returns: undefined
+                           },
+"script_resolution_reason":
+{ Args: { "p_reason": string }; Returns: string
+                           },
+"script_resolution_settle":
+{ Args: { "p_actor": string,"p_booking": string }; Returns: undefined
                            },
 "script_upload_begin":
 { Args: { "p_bytes": number,"p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string,"p_now"?: string,"p_submission": string }; Returns: Json

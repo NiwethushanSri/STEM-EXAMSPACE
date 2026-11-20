@@ -24,6 +24,8 @@ export type HomeUploadStatus = {
     submitted_at: string | null;
     checked_at: string | null;
     replaces_all: boolean;
+    /** Why staff rejected it (shown with "Rejected"); only for a rejected submission. */
+    rejected_reason?: string | null;
   } | null;
   pages: { page_id: string; copy_page: number | null; state: string; flags: string[]; upload_id: string; source_index: number; file_number: number }[];
   missing: number[];
@@ -79,6 +81,7 @@ export const UPLOAD_TEXT = {
   attentionNone: "The institution is checking your pages and will be in touch if anything is needed.",
   lateNote: "These answers were handed in after the on-time deadline. The institution decides whether they are marked.",
   rejectedNote: "Your answers were not accepted. Please upload them again.",
+  rejectedReason: "Reason from the institution:",
   closed: "Uploads for this exam have closed. If you could not hand in your answers, please contact the institution.",
   print: "Print",
   loadFailure: "Your upload could not be loaded. Please try again.",

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { downloadPaperCopy } from "@stem/shared";
 import { Badge } from "@/components/AppShell";
+import { AreaDrawSurface } from "@/components/papers/AreaDrawSurface";
 import { savePageLayoutAction } from "@/app/admin/exams/[id]/actions";
 import { createClient, functionsEndpoint } from "@/lib/supabase/client";
-import { areaFromDrag, MAX_AREAS_PER_PAGE, type Area } from "@/lib/hidden-areas";
+import { MAX_AREAS_PER_PAGE, type Area } from "@/lib/hidden-areas";
 import type { PageRole, PaperLayout, PaperVersion } from "@/lib/exam-admin";
 
 const ROLE_LABELS: Record<PageRole, string> = { answer: "Answer page", cover: "Cover", blank: "Blank page", information: "Information" };
@@ -49,42 +50,10 @@ function PageCanvas({ doc, page, width }: { doc: PdfDoc; page: number; width: nu
 
 /** One page, large, with the hidden areas over it and a surface to draw new ones with a mouse, finger or Pencil. */
 function DrawSurface({ doc, page, areas, onAdd }: { doc: PdfDoc; page: number; areas: Area[]; onAdd: (a: Area) => void }) {
-  const box = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState<{ start: { x: number; y: number }; end: { x: number; y: number }; width: number; height: number } | null>(null);
-  const local = (e: ReactPointerEvent) => {
-    const r = box.current!.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top, width: r.width, height: r.height };
-  };
-  const live = drag ? areaFromDrag(drag.start, drag.end, drag) : null;
-  const shown = (a: Area, key: string, tone: string) => (
-    <div key={key} className={`pointer-events-none absolute ${tone}`} style={{ left: `${a.x * 100}%`, top: `${a.y * 100}%`, width: `${a.w * 100}%`, height: `${a.h * 100}%` }} />
-  );
   return (
-    <div
-      ref={box}
-      data-testid="draw-surface"
-      className="relative mx-auto w-full max-w-[560px] touch-none select-none overflow-hidden border border-slate-300 bg-white"
-      onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        const p = local(e);
-        setDrag({ start: p, end: p, width: p.width, height: p.height });
-      }}
-      onPointerMove={(e) => {
-        if (drag) setDrag({ ...drag, end: { x: local(e).x, y: local(e).y } });
-      }}
-      onPointerUp={(e) => {
-        if (!drag) return;
-        const p = local(e);
-        const a = areaFromDrag(drag.start, p, drag);
-        setDrag(null);
-        if (a) onAdd(a);
-      }}
-      onPointerCancel={() => setDrag(null)}
-    >
+    <AreaDrawSurface areas={areas} onAdd={onAdd} className="mx-auto w-full max-w-[560px]">
       <PageCanvas doc={doc} page={page} width={560} />
-      {areas.map((a, i) => shown(a, `a${i}`, "bg-slate-900/85 ring-1 ring-slate-900"))}
-      {live && shown(live, "live", "border-2 border-dashed border-blue-600 bg-blue-500/20")}
-    </div>
+    </AreaDrawSurface>
   );
 }
 

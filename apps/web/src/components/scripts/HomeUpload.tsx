@@ -470,6 +470,11 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
           )}
           {sub.state === "checking" && <p className="text-slate-600">{UPLOAD_TEXT.checkingHint}</p>}
           {sub.state === "rejected" && <p className="text-slate-700">{UPLOAD_TEXT.rejectedNote}</p>}
+          {sub.state === "rejected" && sub.rejected_reason && (
+            <p data-testid="upload-rejected-reason" className="text-slate-700">
+              {UPLOAD_TEXT.rejectedReason} {sub.rejected_reason}
+            </p>
+          )}
           {sub.late && sub.state !== "received" && <p className="text-amber-900">{UPLOAD_TEXT.lateNote}</p>}
 
           {sub.state === "needs_attention" && (

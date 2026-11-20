@@ -275,3 +275,28 @@ export function scanMessageFor(code: string | null | undefined, context: ScanCon
   const table = scanMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
 }
+
+/** Failure codes of the exception queue (script_exception_* and script_late_decide, script_page_set_hidden_areas). A
+ * conflict answer also names who resolved it and when; the screen adds that. */
+const exceptionMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  reason_required: "Give a reason of 3 to 300 characters.",
+  invalid_input: "Check the details: choose a page within the candidate's copy, or pages listed as missing, and areas inside the page.",
+  not_found: "This could not be found. Refresh the page.",
+  conflict: "This has already been resolved. Refresh the page to see how.",
+  wrong_kind: "That action does not fit this kind of problem.",
+  other_exam: "That candidate is booked for another exam.",
+  booking_not_active: "That candidate's booking is not paid, or has been cancelled.",
+  wrong_sitting: "That candidate sits this exam elsewhere: a scanned page goes to a candidate at the centre, a page handed in from home to a candidate at home.",
+  not_present: "That candidate is not marked present or late on the register. Correct the register first.",
+  in_other_script: "This page is already in another candidate's script.",
+  script_locked: "That candidate's script is already being marked, so its pages cannot change here.",
+  page_replaced: "This file has been processed again. Refresh the page.",
+  still_mixed: "The script still shows pages from two versions of the paper. Make its pages one version first.",
+  not_late: "This script was not handed in late.",
+};
+
+/** Message for an exception queue RPC failure code; unknown codes get the generic message. */
+export function exceptionMessageFor(code: string | null | undefined): string {
+  return code && Object.hasOwn(exceptionMessages, code) ? exceptionMessages[code] : messages.internal;
+}

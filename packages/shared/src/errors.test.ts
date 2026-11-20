@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, messageFor, scanMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, messageFor, scanMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -165,5 +165,29 @@ describe("scanMessageFor", () => {
     expect(scanMessageFor("still_processing", "create")).toBe("Something went wrong. Please try again.");
     expect(scanMessageFor("__proto__", "upload")).toBe("Something went wrong. Please try again.");
     expect(scanMessageFor(undefined, "submit")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("exceptionMessageFor", () => {
+  it("maps each code of the exception queue", () => {
+    expect(exceptionMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(exceptionMessageFor("other_exam")).toContain("another exam");
+    expect(exceptionMessageFor("not_present")).toContain("present or late");
+    expect(exceptionMessageFor("wrong_sitting")).toContain("at home");
+    expect(exceptionMessageFor("booking_not_active")).toContain("not paid");
+    expect(exceptionMessageFor("in_other_script")).toContain("another candidate");
+    expect(exceptionMessageFor("script_locked")).toContain("marked");
+    expect(exceptionMessageFor("page_replaced")).toContain("processed again");
+    expect(exceptionMessageFor("still_mixed")).toContain("two versions");
+    expect(exceptionMessageFor("not_late")).toContain("late");
+    expect(exceptionMessageFor("wrong_kind")).toContain("does not fit");
+    expect(exceptionMessageFor("invalid_input")).toContain("copy");
+    expect(exceptionMessageFor("conflict")).toContain("already been resolved");
+    expect(exceptionMessageFor("forbidden")).toBe("You do not have permission to do that.");
+  });
+  it("falls back to the generic message", () => {
+    expect(exceptionMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(exceptionMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(exceptionMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });
