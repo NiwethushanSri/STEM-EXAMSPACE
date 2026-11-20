@@ -430,8 +430,11 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- Records the prepared pages of a claimed prepare job (the processing server, with the service role). Acts only
--- for the worker and attempt that hold the job (else {ok:false, code:'conflict'}, nothing changed). Returns
--- {ok:true, pages, matched, exceptions} (the upload's current pages, how many matched, its open exceptions).
+-- for the worker and attempt that hold the job (else {ok:false, code:'conflict'}, nothing changed). p_sha256 is
+-- the SHA-256 of the original as downloaded (64 lowercase hex characters, else invalid_input): the first record
+-- stores it on the upload; a later record must bring the same hash, else {ok:false, code:'conflict', reason:
+-- 'sha256_mismatch'} and nothing changes (an original is never changed). Returns {ok:true, pages, matched,
+-- exceptions} (the upload's current pages, how many matched, its open exceptions).
 --
 -- What each page is:
 --   blank sheet (no code)                      -> blank, no exception;
@@ -455,6 +458,7 @@ create function public.script_pages_record(
   p_job bigint,
   p_worker text,
   p_attempt int,
+  p_sha256 text,
   p_pages jsonb,
   p_now timestamptz default null
 )
@@ -492,8 +496,12 @@ begin
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end if;
   select * into v_up from public.script_uploads u where u.id = v_job.upload_id for update;
-  if v_job.kind <> 'prepare' or not public.script_pages_valid(p_pages, v_up.exam_id::text || '/' || v_up.id::text || '/') then
+  if v_job.kind <> 'prepare' or p_sha256 is null or p_sha256 !~ '^[0-9a-f]{64}$'
+     or not public.script_pages_valid(p_pages, v_up.exam_id::text || '/' || v_up.id::text || '/') then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  if v_up.sha256 is not null and v_up.sha256 <> p_sha256 then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'sha256_mismatch');
   end if;
   v_home := v_up.submission_id is not null;
 
@@ -727,7 +735,7 @@ begin
   from public.scripts s
   where e.upload_id = v_up.id and e.script_id is null and s.booking_id = e.booking_id;
 
-  update public.script_uploads set state = 'processed' where id = v_up.id;
+  update public.script_uploads set state = 'processed', sha256 = coalesce(sha256, p_sha256) where id = v_up.id;
 
   if v_home then
     perform public.home_submission_evaluate(v_sub.id, v_now);
@@ -796,8 +804,8 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- Access: script_pages_record is for the processing server; everything else here is internal.
 -- ---------------------------------------------------------------------------------------------
-revoke execute on function public.script_pages_record(bigint, text, int, jsonb, timestamptz) from public, anon, authenticated;
-grant execute on function public.script_pages_record(bigint, text, int, jsonb, timestamptz) to service_role;
+revoke execute on function public.script_pages_record(bigint, text, int, text, jsonb, timestamptz) from public, anon, authenticated;
+grant execute on function public.script_pages_record(bigint, text, int, text, jsonb, timestamptz) to service_role;
 revoke execute on function public.script_page_is_answer(uuid, int) from public, anon, authenticated, service_role;
 revoke execute on function public.script_page_poor(jsonb, text, boolean) from public, anon, authenticated, service_role;
 revoke execute on function public.script_links(uuid) from public, anon, authenticated, service_role;

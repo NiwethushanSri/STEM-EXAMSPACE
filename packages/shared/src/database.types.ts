@@ -1187,7 +1187,7 @@ isOneToOne: false
 { Args: { "p_answer": boolean,"p_marking": string,"p_quality": Json }; Returns: boolean
                            },
 "script_pages_record":
-{ Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_worker": string }; Returns: Json
+{ Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_sha256": string,"p_worker": string }; Returns: Json
                            },
 "script_pages_valid":
 { Args: { "p_pages": Json,"p_prefix": string }; Returns: boolean

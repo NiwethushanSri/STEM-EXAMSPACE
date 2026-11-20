@@ -48,10 +48,12 @@ class Client:
         """Keeps the job's lock; False when this worker and attempt no longer hold it."""
         return bool(self.rpc("processing_job_heartbeat", {"p_job": job_id, "p_worker": worker, "p_attempt": attempt}))
 
-    def record_pages(self, job_id: int, pages: list[dict], *, worker: str, attempt: int) -> dict:
-        """Hands the prepared pages to script_pages_record; {ok:false, code:'conflict'} when the job was lost."""
-        return self.rpc("script_pages_record",
-                        {"p_job": job_id, "p_worker": worker, "p_attempt": attempt, "p_pages": pages})
+    def record_pages(self, job_id: int, pages: list[dict], *, worker: str, attempt: int, sha256: str) -> dict:
+        """Hands the prepared pages and the original's SHA-256 (lowercase hex) to script_pages_record.
+        {ok:false, code:'conflict'} when the job was lost; with reason 'sha256_mismatch' when the original's hash
+        differs from the one recorded before."""
+        return self.rpc("script_pages_record", {"p_job": job_id, "p_worker": worker, "p_attempt": attempt,
+                                                "p_sha256": sha256, "p_pages": pages})
 
     def finish(self, job_id: int, ok: bool, error: str | None = None, *, worker: str, attempt: int) -> dict:
         return self.rpc("processing_job_finish",

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(90);
+select plan(97);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -19,7 +19,9 @@ grant all on res to public;
 create function pg_temp.uid(p text) returns uuid language sql stable as $$ select id from c where name = p $$;
 create function pg_temp.k(p text) returns uuid language sql stable as $$ select id from kv where name = p $$;
 create function pg_temp.r(p text) returns jsonb language sql stable as $$ select j from res where name = p $$;
-grant execute on function pg_temp.uid(text), pg_temp.k(text), pg_temp.r(text) to public;
+-- A stand-in SHA-256 of an upload's original (64 lowercase hex characters, one per upload).
+create function pg_temp.h(p text) returns text language sql stable as $$ select encode(sha256(convert_to(pg_temp.k(p)::text, 'UTF8')), 'hex') $$;
+grant execute on function pg_temp.uid(text), pg_temp.k(text), pg_temp.r(text), pg_temp.h(text) to public;
 
 insert into public.subjects (name, kind) values ('ZZ Matching', 'school');
 insert into public.venues (name, rooms) values ('ZZ Matching hall', array['R1', 'R2']);
@@ -100,7 +102,7 @@ begin
   if v is null or v -> 'upload' ->> 'id' <> pg_temp.k(p_up)::text then
     raise exception 'claimed another job';
   end if;
-  r := public.script_pages_record((v -> 'job' ->> 'id')::bigint, 't-worker', (v -> 'job' ->> 'attempts')::int, p_pages);
+  r := public.script_pages_record((v -> 'job' ->> 'id')::bigint, 't-worker', (v -> 'job' ->> 'attempts')::int, pg_temp.h(p_up), p_pages);
   perform public.processing_job_finish((v -> 'job' ->> 'id')::bigint, 't-worker', (v -> 'job' ->> 'attempts')::int, true);
   return r;
 end;
@@ -139,9 +141,9 @@ update public.processing_jobs set state = 'done' where state in ('queued', 'runn
 -- ---------------------------------------------------------------------------------------------
 -- record_not_granted_to_authenticated
 -- ---------------------------------------------------------------------------------------------
-select ok(not has_function_privilege('authenticated', 'public.script_pages_record(bigint,text,int,jsonb,timestamptz)', 'execute')
-  and not has_function_privilege('anon', 'public.script_pages_record(bigint,text,int,jsonb,timestamptz)', 'execute')
-  and has_function_privilege('service_role', 'public.script_pages_record(bigint,text,int,jsonb,timestamptz)', 'execute'),
+select ok(not has_function_privilege('authenticated', 'public.script_pages_record(bigint,text,int,text,jsonb,timestamptz)', 'execute')
+  and not has_function_privilege('anon', 'public.script_pages_record(bigint,text,int,text,jsonb,timestamptz)', 'execute')
+  and has_function_privilege('service_role', 'public.script_pages_record(bigint,text,int,text,jsonb,timestamptz)', 'execute'),
   'record_not_granted_to_authenticated: recording pages is for the service role only');
 select ok(not exists (select 1 from unnest(array['public.script_evaluate(uuid)', 'public.script_evaluate_at(uuid,timestamptz)',
     'public.home_submission_evaluate(uuid,timestamptz)', 'public.home_submission_assemble(uuid,uuid,timestamptz)',
@@ -151,7 +153,7 @@ select ok(not exists (select 1 from unnest(array['public.script_evaluate(uuid)',
   unnest(array['anon', 'authenticated', 'service_role']) r
   where has_function_privilege(r, f, 'execute')), 'script_evaluate, the submission checks and the helpers are internal');
 select tests.as_user(pg_temp.uid('s1'));
-select throws_ok($$select public.script_pages_record(1, 'w', 1, '[]'::jsonb)$$, '42501', null, 'a signed-in user cannot record pages');
+select throws_ok($$select public.script_pages_record(1, 'w', 1, repeat('0', 64), '[]'::jsonb)$$, '42501', null, 'a signed-in user cannot record pages');
 select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
@@ -369,18 +371,18 @@ select pg_temp.mk_sub('h10', 'b10', 1);
 select pg_temp.mk_upload('u10', 'h10');
 insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u10'), 'prepare');
 insert into res select 'claimA', public.processing_job_claim('A');
-insert into res select 'recA', public.script_pages_record((pg_temp.r('claimA') -> 'job' ->> 'id')::bigint, 'A', 1,
+insert into res select 'recA', public.script_pages_record((pg_temp.r('claimA') -> 'job' ->> 'id')::bigint, 'A', 1, pg_temp.h('u10'),
   jsonb_build_array(pg_temp.pg('u10', 0, 'c10', 2), pg_temp.pg('u10', 1, 'c10', 3), pg_temp.pg('u10', 2, 'c2', 2)));
 select is(pg_temp.r('recA') ->> 'ok', 'true', 'rerun_job_replaces_pages: the first run records its pages');
 create temp table old_ids as select id from public.script_pages where upload_id = pg_temp.k('u10');
 insert into res select 'claimB', public.processing_job_claim('B', now() + interval '16 minutes');
 select is(pg_temp.r('claimB') -> 'job' ->> 'attempts', '2', 'the quiet job is claimed again');
-select is(public.script_pages_record((pg_temp.r('claimA') -> 'job' ->> 'id')::bigint, 'A', 1,
+select is(public.script_pages_record((pg_temp.r('claimA') -> 'job' ->> 'id')::bigint, 'A', 1, pg_temp.h('u10'),
   jsonb_build_array(pg_temp.pg('u10', 0, 'c10', 2)), now() + interval '17 minutes') ->> 'code', 'conflict',
   'the old worker can no longer record');
 select is((select count(*)::int from public.script_pages where upload_id = pg_temp.k('u10') and id in (select id from old_ids)), 3,
   'and changed nothing');
-select is(public.script_pages_record((pg_temp.r('claimB') -> 'job' ->> 'id')::bigint, 'B', 2,
+select is(public.script_pages_record((pg_temp.r('claimB') -> 'job' ->> 'id')::bigint, 'B', 2, pg_temp.h('u10'),
   jsonb_build_array(pg_temp.pg('u10', 0, 'c10', 2, 250), pg_temp.pg('u10', 1, 'c10', 3, 250), pg_temp.pg('u10', 2, 'c2', 2)),
   now() + interval '17 minutes') ->> 'ok', 'true', 'the new worker records the same upload again');
 select is((select count(*)::int || '/' || count(*) filter (where id in (select id from old_ids))::int from public.script_pages where upload_id = pg_temp.k('u10')),
@@ -400,10 +402,10 @@ select pg_temp.mk_scan('us5', 'bt1');
 select pg_temp.mk_scan('us6', 'bt1');
 insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('us5'), 'prepare');
 insert into res select 'claim5', public.processing_job_claim('A5');
-select public.script_pages_record((pg_temp.r('claim5') -> 'job' ->> 'id')::bigint, 'A5', 1, jsonb_build_array(pg_temp.pg('us5', 0, 'c13', 3)));
+select public.script_pages_record((pg_temp.r('claim5') -> 'job' ->> 'id')::bigint, 'A5', 1, pg_temp.h('us5'), jsonb_build_array(pg_temp.pg('us5', 0, 'c13', 3)));
 select pg_temp.run('us6', jsonb_build_array(pg_temp.pg('us6', 0, 'c13', 5)));
 insert into res select 'claim5b', public.processing_job_claim('B5', now() + interval '16 minutes');
-select public.script_pages_record((pg_temp.r('claim5b') -> 'job' ->> 'id')::bigint, 'B5', 2, jsonb_build_array(pg_temp.pg('us5', 0, 'c13', 3, 250)),
+select public.script_pages_record((pg_temp.r('claim5b') -> 'job' ->> 'id')::bigint, 'B5', 2, pg_temp.h('us5'), jsonb_build_array(pg_temp.pg('us5', 0, 'c13', 3, 250)),
   now() + interval '16 minutes');
 select is((select count(*) filter (where replaced_at is null)::int || '/' || count(*) filter (where replaced_at is not null)::int
   from public.script_pages where upload_id = pg_temp.k('us5')), '1/1', 'a rerun after a later version keeps the earlier page, marked replaced');
@@ -414,6 +416,33 @@ select ok(exists (select 1 from public.script_page_links l join public.script_pa
   where l.script_id = pg_temp.script('b13') and l.version = (select version - 1 from public.scripts where booking_id = pg_temp.k('b13'))
     and p.upload_id = pg_temp.k('us5') and p.replaced_at is not null), 'the earlier version still shows the earlier page');
 select public.processing_job_finish((pg_temp.r('claim5b') -> 'job' ->> 'id')::bigint, 'B5', 2, true, null, now() + interval '16 minutes');
+
+-- ---------------------------------------------------------------------------------------------
+-- sha256_recorded_once: the original's SHA-256 is kept from the first record; it can never change.
+-- ---------------------------------------------------------------------------------------------
+select is((select sha256 from public.script_uploads where id = pg_temp.k('u10')), pg_temp.h('u10'), 'sha256_recorded_once: a record keeps the original''s SHA-256');
+select pg_temp.mk_scan('us8', 'bt1');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('us8'), 'prepare');
+insert into res select 'claim8', public.processing_job_claim('H');
+select is((select string_agg(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, t.h,
+    jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6))) ->> 'code', '/' order by t.n)
+  from (values (1, 'abc'), (2, upper(pg_temp.h('us8'))), (3, null)) t(n, h)), 'invalid_input/invalid_input/invalid_input',
+  'a SHA-256 that is not 64 lowercase hex characters is refused');
+select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, pg_temp.h('us8'),
+  jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6))) ->> 'ok', 'true', 'the first record is accepted');
+select is((select sha256 from public.script_uploads where id = pg_temp.k('us8')), pg_temp.h('us8'), 'and sets the upload''s SHA-256');
+create temp table us8_ids as select id from public.script_pages where upload_id = pg_temp.k('us8');
+select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, pg_temp.h('us8'),
+  jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6, 300))) ->> 'ok', 'true', 'a rerun with the same SHA-256 is accepted');
+delete from us8_ids;
+insert into us8_ids select id from public.script_pages where upload_id = pg_temp.k('us8');
+select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, pg_temp.h('us1'),
+  jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6, 400), pg_temp.pg('us8', 1, 'c13', 5))),
+  '{"ok": false, "code": "conflict", "reason": "sha256_mismatch"}'::jsonb, 'a different SHA-256 is a conflict: the original must never change');
+select is((select u.sha256 = pg_temp.h('us8') and u.state = 'processed'
+    and (select array_agg(id order by id) from public.script_pages where upload_id = u.id) = (select array_agg(id order by id) from us8_ids)
+  from public.script_uploads u where u.id = pg_temp.k('us8')), true, 'and nothing changed');
+select public.processing_job_finish((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, true);
 
 -- ---------------------------------------------------------------------------------------------
 -- script_number_assigned_once: b1 retakes page 3 in a second submission that replaces some pages.
@@ -456,7 +485,7 @@ insert into res select 'g1', public.processing_job_claim('w', now() + interval '
 select public.processing_job_finish((pg_temp.r('g1') -> 'job' ->> 'id')::bigint, 'w', 1, false, 'unreadable', now() + interval '2 days');
 insert into public.processing_jobs (upload_id, kind, run_after) values (pg_temp.k('u18'), 'prepare', now() + interval '2 days');
 insert into res select 'g2', public.processing_job_claim('w', now() + interval '2 days');
-select is(public.script_pages_record((pg_temp.r('g2') -> 'job' ->> 'id')::bigint, 'w', 1,
+select is(public.script_pages_record((pg_temp.r('g2') -> 'job' ->> 'id')::bigint, 'w', 1, pg_temp.h('u18'),
   jsonb_build_array(pg_temp.pg('u18', 0, 'c18', 2), pg_temp.pg('u18', 1, 'c18', 3)), now() + interval '2 days') ->> 'ok', 'true',
   'the good file is recorded while the other waits for a retry');
 select public.processing_job_finish((pg_temp.r('g2') -> 'job' ->> 'id')::bigint, 'w', 1, true, null, now() + interval '2 days');
@@ -475,15 +504,15 @@ select is((select s.state::text || '/' || x.version || '/' || pg_temp.links('b18
 select pg_temp.mk_upload('u17b', 'h17', 2);
 insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u17b'), 'prepare');
 insert into res select 'inv', public.processing_job_claim('w', now() + interval '1 day');
-select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1, '{}'::jsonb, now() + interval '1 day') ->> 'code',
+select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1, pg_temp.h('u17b'), '{}'::jsonb, now() + interval '1 day') ->> 'code',
   'invalid_input', 'a page list that is not a list is refused');
-select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1,
+select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1, pg_temp.h('u17b'),
   jsonb_build_array(pg_temp.pg('u17b', 0, 'c17', 2) || jsonb_build_object('full_path', 'elsewhere/0-full.jpg')), now() + interval '1 day') ->> 'code',
   'invalid_input', 'a picture outside the upload''s folder is refused');
-select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1,
+select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1, pg_temp.h('u17b'),
   jsonb_build_array(pg_temp.pg('u17b', 0, 'c17', 2), pg_temp.pg('u17b', 0, 'c17', 3)), now() + interval '1 day') ->> 'code',
   'invalid_input', 'two pages at one position are refused');
-select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1,
+select is(public.script_pages_record((pg_temp.r('inv') -> 'job' ->> 'id')::bigint, 'w', 1, pg_temp.h('u17b'),
   jsonb_build_array(pg_temp.pg('u17b', 0, 'c17', 2) #- '{quality,flags}'), now() + interval '1 day') ->> 'code',
   'invalid_input', 'a page without its quality flags is refused');
 select is((select count(*)::int from public.script_pages where upload_id = pg_temp.k('u17b')), 0, 'nothing was recorded');

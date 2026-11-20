@@ -7,6 +7,7 @@ the pictures in script-pages, the script and the submission. Skipped when SUPABA
 is removed afterwards, and rows left by an interrupted run (its exams are titled TITLE) are removed first, so it
 can run again and again. Its job is due in the year 2000, so it is claimed before any job left by other work.
 """
+import hashlib
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,12 @@ class Rest:
         r = self.http.delete(f"/rest/v1/{table}", params=filters)
         assert r.status_code in (200, 204), f"delete {table}: HTTP {r.status_code}"
 
+    def listed(self, bucket, folder):
+        """The paths of the objects directly inside a folder of a bucket."""
+        r = self.http.post(f"/storage/v1/object/list/{bucket}", json={"prefix": folder, "limit": 1000})
+        assert r.status_code == 200, f"list {bucket}: HTTP {r.status_code}"
+        return [f"{folder}{o['name']}" for o in r.json() if o.get("id")]
+
     def remove(self, bucket, paths):
         if paths:
             r = self.http.request("DELETE", f"/storage/v1/object/{bucket}", json={"prefixes": list(paths)})
@@ -55,11 +62,12 @@ def in_(ids):
 
 
 def cleanup(rest: Rest, exam_id: str) -> None:
-    """Removes an exam made by this test and everything hanging off it, pictures included."""
+    """Removes an exam made by this test and everything hanging off it, pictures included (also those stored by a
+    run whose pages were never recorded)."""
     bookings = [b["id"] for b in rest.select("bookings", exam_id=f"eq.{exam_id}")]
     scripts = [s["id"] for s in rest.select("scripts", exam_id=f"eq.{exam_id}")]
     uploads = rest.select("script_uploads", exam_id=f"eq.{exam_id}")
-    pages = rest.select("script_pages", exam_id=f"eq.{exam_id}")
+    pictures = [p for u in uploads for p in rest.listed("script-pages", f"{exam_id}/{u['id']}/")]
     rest.delete("script_exceptions", exam_id=f"eq.{exam_id}")
     if scripts:
         rest.delete("script_page_links", script_id=in_(scripts))
@@ -79,7 +87,7 @@ def cleanup(rest: Rest, exam_id: str) -> None:
     if subject:
         rest.delete("subjects", id=f"eq.{subject[0]['subject_id']}")
     rest.remove("script-uploads", [u["storage_path"] for u in uploads])
-    rest.remove("script-pages", [p for row in pages for p in (row["full_path"], row["marking_path"]) if p])
+    rest.remove("script-pages", pictures)
 
 
 @pytest.fixture
@@ -127,7 +135,9 @@ def test_home_pdf_is_prepared_matched_and_received(rest):
             assert main.run(client, f"itest-{tag}", once=True) == 1
 
         assert rest.select("processing_jobs", id=f"eq.{job['id']}")[0]["state"] == "done"
-        assert rest.select("script_uploads", id=f"eq.{upload_id}")[0]["state"] == "processed"
+        recorded = rest.select("script_uploads", id=f"eq.{upload_id}")[0]
+        assert recorded["state"] == "processed"
+        assert recorded["sha256"] == hashlib.sha256(data).hexdigest()
         pages = sorted(rest.select("script_pages", upload_id=f"eq.{upload_id}"), key=lambda p: p["source_index"])
         assert [(p["state"], p["copy_page"], p["copy_id"], p["booking_id"]) for p in pages] == [
             ("matched", i + 1, copy["id"], booking["id"]) for i in range(5)]

@@ -1,4 +1,5 @@
 """main.run and main.process against a fake Supabase client: what is stored, recorded and finished for a job."""
+import hashlib
 import logging
 import signal
 import threading
@@ -61,8 +62,8 @@ class FakeClient:
         self._log("upload", bucket, path, content_type)
         self.stored[path] = data
 
-    def record_pages(self, job_id, pages, *, worker, attempt):
-        self._log("record_pages", job_id, pages, worker, attempt)
+    def record_pages(self, job_id, pages, *, worker, attempt, sha256):
+        self._log("record_pages", job_id, pages, worker, attempt, sha256)
         return self.record
 
     def finish(self, job_id, ok, error=None, *, worker, attempt):
@@ -95,8 +96,9 @@ def test_prepare_job_stores_pictures_and_records_pages():
     assert main.process(client, "w-1", claimed(attempts=2)) == "done"
 
     assert client.named("download") == [("download", "script-uploads", PATH)]
-    (_, job_id, pages, worker, attempt), = client.named("record_pages")
+    (_, job_id, pages, worker, attempt, sha256), = client.named("record_pages")
     assert (job_id, worker, attempt) == (7, "w-1", 2)
+    assert sha256 == hashlib.sha256(synth.fixture_bytes("copy-a.pdf")).hexdigest()
     assert [(p["source_index"], p["code"], p["copy_page"]) for p in pages] == [(i, synth.CODE_A, i + 1) for i in range(5)]
     for p in pages:
         assert p["full_path"] == f"{EXAM}/{UPLOAD}/{p['source_index']}-full.jpg"
@@ -141,6 +143,15 @@ def test_conflict_on_record_does_not_finish(monkeypatch):
     assert client.named("finish") == []
 
 
+def test_changed_original_is_a_failure_not_a_lost_job(monkeypatch):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    client = FakeClient(data=b"other bytes", record={"ok": False, "code": "conflict", "reason": "sha256_mismatch"})
+    assert main.process(client, "w-1", claimed()) == "queued"
+    (_, _, _, _, _, sha256), = client.named("record_pages")
+    assert sha256 == hashlib.sha256(b"other bytes").hexdigest()
+    assert client.named("finish") == [("finish", 7, False, "OriginalChanged", "w-1", 1)]
+
+
 def test_lost_lock_stops_before_recording(monkeypatch):
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages(3))
     client = FakeClient(beats=False, on_download=lambda c: time.sleep(0.3))
@@ -162,7 +173,7 @@ def test_page_without_marking_picture_records_null(monkeypatch):
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient()
     main.process(client, "w-1", claimed())
-    (_, _, pages, _, _), = client.named("record_pages")
+    (_, _, pages, _, _, _), = client.named("record_pages")
     assert [p["marking_path"] for p in pages] == [f"{EXAM}/{UPLOAD}/0-marking.jpg", None]
     assert f"{EXAM}/{UPLOAD}/1-marking.jpg" not in client.stored
 

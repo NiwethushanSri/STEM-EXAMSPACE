@@ -6,6 +6,7 @@ and outcome words only: never file names, storage paths, codes or page contents.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import signal
@@ -31,6 +32,10 @@ class LostJob(Exception):
 
 class RecordRefused(Exception):
     """The database refused the page list."""
+
+
+class OriginalChanged(Exception):
+    """The original's SHA-256 differs from the one recorded on an earlier run: it must never change."""
 
 
 class UnsupportedJob(Exception):
@@ -109,7 +114,9 @@ class _Heartbeat:
 
 
 def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: float = HEARTBEAT_SECONDS) -> str:
-    """Runs one claimed job to its end. Returns the outcome: the job's state after finishing ('done', 'queued'
+    """Runs one claimed job to its end: downloads the original and hashes it (SHA-256, recorded with the pages; a
+    hash that differs from an earlier run's fails the job), prepares and stores the pages, records them and
+    finishes the job. Returns the outcome: the job's state after finishing ('done', 'queued'
     for a retry, 'failed'), 'lost' when another worker took the job over, or 'unfinished' when finishing failed
     (the job is then claimed again after 15 minutes)."""
     job, upload = claimed["job"], claimed["upload"]
@@ -122,6 +129,7 @@ def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: fl
             if job["kind"] != "prepare":
                 raise UnsupportedJob()
             data = client.download(UPLOADS, upload["storage_path"])
+            sha256 = hashlib.sha256(data).hexdigest()
             beat.check()
             pages = []
             for page in pipeline.iter_prepare(data, upload["kind"], upload["mime"], job_context(claimed)):
@@ -133,9 +141,11 @@ def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: fl
                 pages.append(page_record(page, full_path, marking_path if page.marking is not None else None))
             count = len(pages)
             beat.check()
-            result = client.record_pages(job_id, pages, worker=worker_id, attempt=attempt)
+            result = client.record_pages(job_id, pages, worker=worker_id, attempt=attempt, sha256=sha256)
             if not result or not result.get("ok"):
                 if result and result.get("code") == "conflict":
+                    if result.get("reason") == "sha256_mismatch":
+                        raise OriginalChanged()
                     raise LostJob()
                 raise RecordRefused()
     except LostJob:
