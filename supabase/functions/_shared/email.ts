@@ -1,4 +1,5 @@
-export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm" | "confirm_signup" | "paper_released" | "paper_corrected";
+export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm" | "confirm_signup" | "paper_released" | "paper_corrected"
+  | "script_receipt" | "script_attention" | "script_rejected" | "script_staff_alert";
 
 /** Templates that carry a one-time sign-in link. */
 const LINK_TEMPLATES: readonly EmailTemplate[] = ["invite", "child_confirm", "confirm_signup"];
@@ -11,6 +12,10 @@ const SUBJECTS: Record<EmailTemplate, string> = {
   confirm_signup: "Confirm your Stem Examspace registration",
   paper_released: "Your paper is ready to download",
   paper_corrected: "A corrected paper is available",
+  script_receipt: "We have received your answers",
+  script_attention: "Your answers need a little attention",
+  script_rejected: "Your answers could not be accepted",
+  script_staff_alert: "A script needs staff attention",
 };
 
 /** One line, no markup characters that could break a header. */
@@ -35,6 +40,68 @@ function expiryNote(extra = ""): string {
   const site = (Deno.env.get("SITE_URL") ?? "").replace(/\/+$/, "");
   const where = site ? `${site}/reset-password` : "the sign-in page";
   return `<p>This link works for 1 hour. After that, use Forgot password at ${esc(where)} with this email address${extra}.</p>`;
+}
+
+export interface Mail {
+  subject: string;
+  html: string;
+}
+
+/** What a staff alert says about each kind of exception (never a candidate's name). */
+const ALERT_KINDS: Record<string, string> = {
+  late: "Handed in late",
+  processing_failed: "Processing failed",
+  uncoded_family_page: "A page without a code in a family upload",
+  not_expected: "A script that was not expected",
+  other_exam: "A page from another exam",
+};
+
+/** "We have received your answers": to the student and linked parents when a home submission is received. */
+export function scriptReceiptEmail(data: Record<string, string>): Mail {
+  const row = (label: string, v: string | undefined) => (plain(v) ? `<li>${label}: ${esc(plain(v))}</li>` : "");
+  return {
+    subject: SUBJECTS.script_receipt,
+    html: `<p>Hi ${esc(data.name ?? "there")},</p><h2>We have received your answers</h2><ul>${
+      row("Exam", data.exam)
+    }${row("Script number", data.script_number)}${row("Submission", data.seq)}${row("Received", data.time)}${
+      row("Pages", data.page_count)
+    }${
+      row("Page list", data.pages)
+    }</ul><p>Keep this email as your receipt. If anything is missing, sign in to Stem Examspace to see what to do.</p>`,
+  };
+}
+
+/** Some pages need retaking or placing. */
+export function scriptAttentionEmail(data: Record<string, string>): Mail {
+  const exam = esc(plain(data.exam) || "your exam");
+  const number = plain(data.script_number);
+  return {
+    subject: SUBJECTS.script_attention,
+    html: `<p>Hi ${esc(data.name ?? "there")},</p><p>We checked the pages you handed in for ${exam}${
+      number ? ` (script ${esc(number)})` : ""
+    } and some need your attention, for example a page to retake or to put in place. Sign in to Stem Examspace and open your booking to see which.</p>`,
+  };
+}
+
+/** The submission was not accepted. */
+export function scriptRejectedEmail(data: Record<string, string>): Mail {
+  const exam = esc(plain(data.exam) || "your exam");
+  return {
+    subject: SUBJECTS.script_rejected,
+    html: `<p>Hi ${esc(data.name ?? "there")},</p><p>The pages you handed in for ${exam} could not be accepted. Sign in to Stem Examspace to see why, or contact us if you think this is a mistake.</p>`,
+  };
+}
+
+/** To owner and admin accounts. Exam, kind and script number only: no candidate name. */
+export function scriptStaffAlertEmail(data: Record<string, string>): Mail {
+  const kind = esc(ALERT_KINDS[data.kind ?? ""] ?? "Needs attention");
+  const number = plain(data.script_number);
+  return {
+    subject: `${SUBJECTS.script_staff_alert}: ${plain(data.exam) || "exam"}`,
+    html: `<p>A script needs staff attention.</p><ul><li>Exam: ${esc(plain(data.exam) || "unknown")}</li><li>Kind: ${kind}</li><li>Script: ${
+      number ? esc(number) : "none yet"
+    }</li></ul><p>Sign in to Stem Examspace and open the exceptions list.</p>`,
+  };
 }
 
 function render(template: EmailTemplate, data: Record<string, string>): { subject: string; html: string } {
@@ -82,6 +149,14 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
       html = `<p>Hi ${name},</p><p>The ${exam} has been corrected. Please download it again and use the new copy. Sign in to Stem Examspace and open your booking.</p>`;
       break;
     }
+    case "script_receipt":
+      return scriptReceiptEmail(data);
+    case "script_attention":
+      return scriptAttentionEmail(data);
+    case "script_rejected":
+      return scriptRejectedEmail(data);
+    case "script_staff_alert":
+      return scriptStaffAlertEmail(data);
   }
   const exam = plain(data.exam);
   let subject = SUBJECTS[template];

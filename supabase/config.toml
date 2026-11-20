@@ -435,3 +435,6 @@ verify_jwt = true
 
 [functions.paper-release-notify]
 verify_jwt = false
+
+[functions.script-notify]
+verify_jwt = false
