@@ -1,0 +1,10 @@
+# Not deployed yet. Background worker: accepts no requests, so no services or ports.
+app = "stem-processor"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2048mb"

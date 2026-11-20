@@ -1,0 +1,8 @@
+pypdfium2
+zxing-cpp
+opencv-python-headless
+pillow
+pillow-heif
+numpy
+httpx
+pytest

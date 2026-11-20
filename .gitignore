@@ -56,3 +56,8 @@ supabase/functions/.env.test.local
 
 # e2e:local production build
 .next-e2e/
+
+# processor real-world samples
+services/processor/tests/real/
+__pycache__/
+.pytest_cache/
