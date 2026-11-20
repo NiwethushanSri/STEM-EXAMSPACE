@@ -1,10 +1,12 @@
 """Image operations, on scans and photos made from the 1A fixture copies by tests/synth.py."""
+import io
 import math
 
 import cv2
 import numpy as np
 import pytest
 import zxingcpp
+from PIL import Image
 
 import synth
 from processor import imaging
@@ -141,8 +143,10 @@ def test_marking_image_blanks_top_band_and_areas():
     read = imaging.read_code(page)
     qx0, qy0 = np.floor(read.corners.min(axis=0)).astype(int) - 2
     qx1, qy1 = np.ceil(read.corners.max(axis=0)).astype(int) + 2
+    fit = imaging.fit_page(page, read)
+    assert fit.expected
 
-    out = imaging.marking_image(page, [area], read)
+    out = imaging.marking_image(page, [area], fit)
 
     assert out.shape == page.shape
     for x, y in ((5, 5), (W // 2, 40), (W - 5, band - 1), (x0 + 3, y0 + 3), ((x0 + x1) // 2, (y0 + y1) // 2), (x1 - 1, y1 - 1)):
@@ -150,9 +154,25 @@ def test_marking_image_blanks_top_band_and_areas():
     assert (out[:band] == 255).all()
     assert (out[y0:y1, x0:x1] == 255).all()
     assert np.array_equal(out[qy0:qy1, qx0:qx1], page[qy0:qy1, qx0:qx1])  # the code is untouched
-    assert np.array_equal(out[band + 1:y0 - 1], page[band + 1:y0 - 1])
-    assert np.array_equal(out[y1 + 1:], page[y1 + 1:])
+    margin = math.ceil(imaging.PREDICTED_MARGIN_PT * W / imaging.PAGE_PT[0]) + 1  # placed through the fit, 3 pt larger
+    assert imaging.PREDICTED_MARGIN_PT >= 3  # ruling R19
+    assert np.array_equal(out[band + margin:y0 - margin], page[band + margin:y0 - margin])
+    assert np.array_equal(out[y1 + margin:], page[y1 + margin:])
     assert page[:band].min() < 100  # the input is not changed
+    with pytest.raises(ValueError):
+        imaging.marking_image(page, [area], imaging.PageFit(None, None, (0.0, 0.0), math.inf, 1.0, 0.0))
+
+
+def test_fit_page_finds_both_rules_on_a_clean_copy():
+    px_per_pt = W / imaging.PAGE_PT[0]
+    for i in range(5):
+        page = synth.render("copy-a.pdf", i)
+        fit = imaging.fit_page(page, imaging.read_code(page))
+        assert fit.expected and fit.coverage == (1.0, 1.0) and fit.error_mm < 0.3
+        slope, intercept = fit.top_rule
+        assert abs(slope) < 0.001 and abs(intercept - imaging.TOP_RULE_PT * px_per_pt) < 1.5  # 30 pt down
+        placed = cv2.perspectiveTransform(np.array([[[18.0, 750.39], [577.28, 750.39]]]), fit.homography)[0]
+        assert np.allclose(placed, np.array([[18.0, 750.39], [577.28, 750.39]]) * px_per_pt, atol=2)
 
 
 def test_print_fit_on_a_copy_at_actual_size():
@@ -184,7 +204,7 @@ def test_hidden_area_follows_scale():
     outside[math.floor(y0 * H):math.ceil(y1 * H), math.floor(x0 * W):math.ceil(x1 * W)] = False
     assert outside.sum() > 500  # the area as a fraction of the picture alone would miss much of the text
 
-    out = imaging.marking_image(sheet, [area], read)
+    out = imaging.marking_image(sheet, [area], imaging.fit_page(sheet, read))
 
     assert (out[text] == 255).all()
     assert np.array_equal(out[-300:], sheet[-300:])  # the code band is untouched
@@ -222,11 +242,31 @@ def test_photo_exif_orientation_applied():
 
 
 def test_heic_photo_loads():
-    pic = np.full((96, 64, 3), 230, np.uint8)
-    pic[:48] = (40, 40, 40)
-    img = imaging.load_photo(synth.heic(pic))
+    # pi-heif only decodes, so the HEIC is a committed 583-byte fixture: 64 x 96, dark top half (see README).
+    img = imaging.load_photo(synth.fixture_bytes("two-tone.heic"))
     assert img.shape == (96, 64, 3)
     assert img[10, 32].max() < 90 and img[80, 32].min() > 190
+    with pytest.raises(KeyError):  # no HEIF encoder is installed (ruling R20)
+        Image.fromarray(img).save(io.BytesIO(), format="HEIF")
+
+
+def test_huge_picture_refused_before_decoding():
+    big = synth.png_header_only(10_000, 6_000)  # says 60 megapixels; holds no picture data at all
+    with pytest.raises(UnreadableFile):
+        imaging.load_photo(big)
+    assert imaging.MAX_DECODE_PIXELS < 10_000 * 6_000
+
+
+def test_to_a4_never_stretches_unevenly():
+    page = synth.render("copy-a.pdf", 0)
+    taller = cv2.copyMakeBorder(page, 30, 0, 0, 0, cv2.BORDER_CONSTANT, value=(255, 255, 255))  # +1.3%
+    out = imaging.to_a4(taller)
+    assert out.shape == (H, W, 3)
+    s = H / taller.shape[0]  # one scale both ways, centred on white
+    margin = (W - round(W * s)) // 2
+    assert margin > 5 and out[:, :margin - 1].min() == 255 and out[:, W - margin + 1:].min() == 255
+    nearly = cv2.resize(page, (W + 4, H + 4))  # 0.07% off A4's shape: just resized
+    assert imaging.to_a4(nearly).shape == (H, W, 3) and imaging.A4_RATIO_TOLERANCE <= 0.005
 
 
 def test_encode_jpeg_round_trips():

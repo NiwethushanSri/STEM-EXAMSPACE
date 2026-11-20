@@ -2,7 +2,7 @@ pypdfium2
 zxing-cpp
 opencv-python-headless
 pillow
-pillow-heif
+pi-heif
 numpy
 httpx
 pytest

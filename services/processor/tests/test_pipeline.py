@@ -59,9 +59,34 @@ def printed_centre() -> np.ndarray:
     return read.corners.mean(axis=0)
 
 
+# Copy page 2 with its identity line printed red and its question text printed blue (synth.tagged), and a
+# hidden area drawn 1 mm round that question text, as an admin would draw it on the 100% page.
+TAGGED = synth.tagged(synth.render("copy-a.pdf", 1))
+_qy, _qx = np.nonzero(synth.blue(TAGGED))
+_MM = synth.DPI / 25.4
+QUESTION_AREA = Area(page=2, x=(_qx.min() - _MM) / W, y=(_qy.min() - _MM) / H,
+                     w=(_qx.max() - _qx.min() + 2 * _MM) / W, h=(_qy.max() - _qy.min() + 2 * _MM) / H)
+
+
+def tag_ctx(**kw) -> JobContext:
+    return make_ctx(areas=[QUESTION_AREA], **kw)
+
+
+def assert_hidden(p: pipeline.PreparedPage) -> None:
+    """The page has a marking picture, and every pixel of the identity line (red) and of the hidden area's
+    question text (blue) that the full picture shows is white in it."""
+    assert p.marking is not None
+    full, marking = decode(p.full), decode(p.marking)
+    name, question = synth.red(full), synth.blue(full)
+    assert name.sum() > 1000 and question.sum() > 1000  # both are printed and visible in the full picture
+    white = marking.min(axis=2) > 225  # give or take JPEG
+    assert not (name & ~white).any(), f"{int((name & ~white).sum())} name pixels show in the marking picture"
+    assert not (question & ~white).any(), f"{int((question & ~white).sum())} hidden-area pixels show"
+
+
 @pytest.mark.parametrize("turn,angle,seed", [(180, 7.0, 4), (90, -6.0, 5), (270, 9.0, 6), (0, -8.0, 8)])
 def test_photo_rotated_skewed_dark_background_reads(turn, angle, seed, printed_centre):
-    page = synth.render("copy-a.pdf", 1)
+    page = TAGGED
     img, corners = synth.photo(page, turn=turn, angle=angle, skew=0.06, seed=seed)
 
     found = imaging.find_page(img)
@@ -69,7 +94,7 @@ def test_photo_rotated_skewed_dark_background_reads(turn, angle, seed, printed_c
     for corner in corners:  # every corner of the page is found, within 1% of the photo's height
         assert np.linalg.norm(found - corner, axis=1).min() < 24
 
-    [p] = pipeline.prepare(synth.jpeg(img), "home_photo", "image/jpeg", make_ctx())
+    [p] = pipeline.prepare(synth.jpeg(img), "home_photo", "image/jpeg", tag_ctx())
 
     assert (p.source_index, p.code, p.copy_page) == (0, A, 2)
     assert p.rotation == (360 - turn) % 360
@@ -81,7 +106,8 @@ def test_photo_rotated_skewed_dark_background_reads(turn, angle, seed, printed_c
     assert again is not None and abs(tilt_of(again)) < 1.0
     assert np.allclose(again.corners.mean(axis=0), printed_centre, atol=24)
     assert likeness(full, page) > 0.65
-    assert p.marking is not None and decode(p.marking).shape == (H, W, 3)
+    assert decode(p.marking).shape == (H, W, 3)
+    assert_hidden(p)
 
 
 def test_blurred_photo_flagged():
@@ -211,15 +237,20 @@ def test_fit_to_page_95_percent_name_still_hidden():
     assert name[band:].sum() > 1000  # the band as a fraction of the page alone would leave the name showing
 
     read = imaging.read_code(sheet)
-    fit = imaging.print_fit(read, sheet.shape)
+    fit = imaging.fit_page(sheet, read)
     assert abs(fit.scale - 0.95) < 0.01 and fit.expected
-    assert (imaging.marking_image(sheet, [], read)[name] == 255).all()
+    assert (imaging.marking_image(sheet, [], fit)[name] == 255).all()
 
     [p] = pipeline.prepare(synth.scan_pdf([synth.scan(sheet, seed=21)]), "scan_file", PDF, make_ctx())
     assert (p.code, p.copy_page, p.quality.flags) == (A, 2, [])
     assert p.marking is not None
     assert decode(p.marking)[name].min() > 225  # white, give or take JPEG
     assert decode(p.full)[name].min() < 100  # staff still see it
+
+    [q] = pipeline.prepare(synth.scan_pdf([synth.scan(synth.printed(TAGGED, scale=0.95), seed=21)]), "scan_file",
+                           PDF, tag_ctx())
+    assert q.quality.flags == []
+    assert_hidden(q)  # the hidden area moved with the print too
 
 
 def test_far_off_layout_flags_and_no_marking():
@@ -238,24 +269,25 @@ def test_far_off_layout_flags_and_no_marking():
 
 
 def test_home_pdf_of_uncropped_photo_is_found(printed_centre):
-    page = synth.render("copy-a.pdf", 1)
+    page = TAGGED
     shot, _ = synth.photo(page, turn=180, angle=5.0, skew=0.05, seed=23)
     pdf = synth.scan_pdf([shot])  # a phone photo saved as a PDF, table and all
 
-    [as_scan] = pipeline.prepare(pdf, "scan_file", PDF, make_ctx())
+    [as_scan] = pipeline.prepare(pdf, "scan_file", PDF, tag_ctx())
     assert as_scan.code == A and pipeline.LAYOUT_UNEXPECTED in as_scan.quality.flags and as_scan.marking is None
 
-    [p] = pipeline.prepare(pdf, "home_pdf", PDF, make_ctx())
+    [p] = pipeline.prepare(pdf, "home_pdf", PDF, tag_ctx())
     assert (p.code, p.copy_page, p.rotation) == (A, 2, 180)
-    assert p.quality.flags == [] and p.marking is not None
+    assert p.quality.flags == []
     full = decode(p.full)
     again = imaging.read_code(full)
     assert np.allclose(again.corners.mean(axis=0), printed_centre, atol=24)
     assert likeness(full, page) > 0.65
+    assert_hidden(p)
 
 
 def test_photo_on_light_background_reads(printed_centre):
-    page = synth.render("copy-a.pdf", 1)
+    page = TAGGED
 
     # A near-white table: the page's edges are faint, but found.
     light, corners = synth.photo(page, turn=90, angle=-7.0, skew=0.06, table_tone="light", seed=38)
@@ -263,10 +295,11 @@ def test_photo_on_light_background_reads(printed_centre):
     assert found is not None
     for corner in corners:
         assert np.linalg.norm(found - corner, axis=1).min() < 24
-    [p] = pipeline.prepare(synth.jpeg(light), "home_photo", "image/jpeg", make_ctx())
+    [p] = pipeline.prepare(synth.jpeg(light), "home_photo", "image/jpeg", tag_ctx())
     assert (p.code, p.copy_page, p.rotation) == (A, 2, 270)
-    assert p.quality.flags == [] and p.marking is not None
+    assert p.quality.flags == []
     assert likeness(decode(p.full), page) > 0.65
+    assert_hidden(p)
 
     # A table as white as the paper: no edges at all, so the page is placed by its code.
     white, _ = synth.photo(page, turn=180, angle=4.0, skew=0.03, table_tone="white", seed=39)
@@ -285,3 +318,73 @@ def test_photo_on_light_background_reads(printed_centre):
     cut, _ = synth.photo(page, turn=180, angle=4.0, skew=0.03, table_tone="white", seed=39, crop_top=0.12)
     [r] = pipeline.prepare(synth.jpeg(cut), "home_photo", "image/jpeg", make_ctx())
     assert r.code == A and r.quality.cut_off and "cut_off" in r.quality.flags
+
+
+# Fix round 1 (rulings R18, R19): the page fitted from its code and both printed rules, so a page that
+# reaches the picture through perspective or uneven stretching still has its name and hidden areas painted.
+
+
+@pytest.mark.parametrize("k", [0.03, 0.06])
+def test_keystone_home_pdf_name_hidden(k):
+    for tone in ("white", "dark"):  # a full-frame phone photo, top further away, saved straight into a PDF
+        pdf = synth.scan_pdf([synth.keystone(TAGGED, k, tone=tone)])
+        [p] = pipeline.prepare(pdf, "home_pdf", PDF, tag_ctx())
+        assert (p.code, p.copy_page, p.quality.flags) == (A, 2, [])
+        assert_hidden(p)
+        [s] = pipeline.prepare(pdf, "scan_file", PDF, tag_ctx())  # the same picture without page finding
+        assert s.code == A
+        if s.marking is None:
+            assert pipeline.LAYOUT_UNEXPECTED in s.quality.flags
+        else:
+            assert_hidden(s)  # the perspective fit follows the keystone
+
+
+@pytest.mark.parametrize("mm", [5, 10, 15])
+def test_photo_on_pile_name_hidden(mm):
+    # The page lies on the pile: the sheet below shows `mm` above it, so the paper outline found is the
+    # pile's, and flattening it stretches the page unevenly.
+    for turn, angle, seed in ((0, 3.0, 40), (180, -4.0, 41)):
+        img, _ = synth.photo(synth.on_pile(TAGGED, mm), turn=turn, angle=angle, skew=0.04, seed=seed)
+        [p] = pipeline.prepare(synth.jpeg(img), "home_photo", "image/jpeg", tag_ctx())
+        assert (p.code, p.copy_page) == (A, 2)
+        if p.marking is None:
+            assert pipeline.LAYOUT_UNEXPECTED in p.quality.flags
+        else:
+            assert_hidden(p)
+
+
+def test_scan_with_lead_in_name_hidden():
+    framed = synth.with_lead_in(TAGGED, 8.0)  # 8 mm of white above the page in the scanner's frame
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(framed, seed=1)]), "scan_file", PDF, tag_ctx())
+    assert (p.code, p.copy_page, p.quality.flags) == (A, 2, [])
+    assert_hidden(p)
+    full = decode(p.full)  # letterboxed, never stretched one way more than the other
+    assert full[:, :20].min() > 240 and full[:, -20:].min() > 240
+
+
+def test_missing_top_rule_flags_layout():
+    erased = TAGGED.copy()
+    erased[78:90] = 255  # the top rule is not printed (or not visible)
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(erased, seed=22)]), "scan_file", PDF, tag_ctx())
+    assert (p.code, p.copy_page) == (A, 2)
+    assert p.quality.flags == [pipeline.LAYOUT_UNEXPECTED]
+    assert p.marking is None
+    read = imaging.read_code(decode(p.full))
+    fit = imaging.fit_page(decode(p.full), read)
+    assert fit.coverage[0] < imaging.RULE_COVERAGE and fit.coverage[1] >= imaging.RULE_COVERAGE
+
+
+def test_shadow_above_page_not_taken_for_top_rule(monkeypatch):
+    # A full-frame photo on a white table, saved as a scan: a lifted sheet casts a thin shadow line just
+    # above its top edge, a straight dark line with bare paper-white beyond its ends, like a rule.
+    pdf = synth.scan_pdf([synth.keystone(TAGGED, 0.03, shadow=True)])
+    [p] = pipeline.prepare(pdf, "scan_file", PDF, tag_ctx())
+    assert p.quality.flags == []
+    assert_hidden(p)
+
+    # Without the identity-line check the shadow is taken for the top rule; the perspective fit absorbs it
+    # (within 1.5 mm) and the whole name shows. This is why the check exists.
+    monkeypatch.setattr(imaging, "RULE_TEXT_INK", 0.0)
+    [q] = pipeline.prepare(pdf, "scan_file", PDF, tag_ctx())
+    full, marking = decode(q.full), decode(q.marking)
+    assert q.quality.flags == [] and (synth.red(full) & (marking.min(axis=2) <= 225)).sum() > 1000

@@ -15,14 +15,14 @@ from typing import Iterator
 
 import cv2
 import numpy as np
-import pillow_heif
+import pi_heif
 import pypdfium2 as pdfium
 import zxingcpp
 from PIL import Image, ImageOps
 
 from processor.codes import code_valid, parse_payload
 
-pillow_heif.register_heif_opener()
+pi_heif.register_heif_opener()  # decode only: pi-heif bundles libheif and libde265 (LGPL-3.0), no encoder
 
 A4_PX = (1654, 2339)  # (width, height): A4 portrait, 595.28 x 841.89 pt, at 200 dpi
 TOP_BAND_FRACTION = 34 / 841.89  # the 1A name band (TOP_BAND) as a share of the page height
@@ -31,6 +31,7 @@ WHITE = (255, 255, 255)
 # Reading files.
 MAX_RENDER_SIDE = 5000  # px; a PDF page larger than this at the asked dpi is rendered smaller
 MAX_PHOTO_SIDE = 4000  # px; larger photos are scaled down when loaded (memory)
+MAX_DECODE_PIXELS = 50_000_000  # larger pictures are refused before decoding (after a JPEG's reduced decode)
 
 # Quality. Both measures are taken on a greyscale copy MEASURE_WIDTH px wide.
 MEASURE_WIDTH = 1000
@@ -58,8 +59,9 @@ BLANK_MARGIN = 0.04  # share of each side ignored (scanner edge shadows)
 INK_CONTRAST = 40
 BLANK_INK_FRACTION = 0.0002  # a page with less ink than this share of its area is blank
 
-# A picture whose height/width is within this share of A4's is resized to A4; others are letterboxed.
-A4_RATIO_TOLERANCE = 0.03
+# A picture whose height/width is within this share of A4's is resized to A4; others are letterboxed, so a
+# page is never stretched more one way than the other by more than this (ruling R19).
+A4_RATIO_TOLERANCE = 0.005
 
 # The 1A print layout (supabase/functions/_shared/paper/stamp.ts: A4, TOP_BAND, SIDE, QR_SIZE, qrLayout),
 # in points measured from the copy page's top-left.
@@ -70,10 +72,35 @@ QR_RIGHT_PT = 18.0  # SIDE: from the page's right edge to the quiet zone
 QR_BELOW_PT = 18.0  # CODE_TEXT_TOP: from the page's bottom edge to the quiet zone
 QR_QUIET_MODULES = 4
 
-# Checking where the copy was printed on the sheet, by its code (ruling R13).
-PRINT_SCALE_RANGE = (0.85, 1.05)  # printed size / actual size; "fit to page" prints at about 0.94 to 0.97
+# The two rules 1A draws across every copy page (stamp.ts drawLine, 0.5 pt, from SIDE to W - SIDE): one
+# 4 pt above the name band's foot, one along the top of the bottom band (91.5 pt from the page's bottom).
+RULE_X_PT = (18.0, PAGE_PT[0] - 18.0)
+TOP_RULE_PT = TOP_BAND_PT - 4.0
+BOTTOM_RULE_PT = PAGE_PT[1] - 91.5
+
+# Checking where the copy was printed on the sheet (rulings R13, R18).
+PRINT_SCALE_RANGE = (0.85, 1.05)  # printed size / actual size by the code; "fit to page" is about 0.94-0.97
 MAX_CODE_OFFSET_MM = 15.0  # the code further than this from its printed place: the layout is unexpected
-PREDICTED_MARGIN_PT = 1.0  # band and areas placed by the code are painted this much larger all round
+MAX_FIT_ERROR_MM = 1.5  # code corners and rule ends must all lie this close to the fitted perspective
+PREDICTED_MARGIN_PT = 3.0  # band and areas placed through the fit are painted this much larger all round
+BELOW_TOP_RULE_PT = 3.0  # everything above the measured top rule, and this much below it, is painted
+
+# Finding the rules on a normalised page.
+RULE_SEARCH_MM = (25.0, 12.0)  # top rule, bottom rule: searched this far above and below where the code says
+RULE_SAMPLES = 160  # columns sampled along a rule's printed length
+RULE_SIDE_PX = (2, 5)  # a rule is a thin line: somewhere this many px above it, and below it, is lighter
+RULE_DEPTH = 0.15  # a rule is darker than the paper either side by this share of the paper's brightness
+RULE_ON_PAPER = 0.6  # ... and lies on paper at least this share as bright as the page's paper
+RULE_TOLERANCE_PX = 2.0  # a column's dark line within this of the fitted line counts
+RULE_COVERAGE = 0.9  # a rule must be found along this share of its printed length (R18)
+RULE_SLOPES = 0.06  # rules are looked for at slopes up to this (about 3.4 degrees)
+RULE_GAP_PX = 6  # walking along a rule to its ends, gaps up to this are bridged
+RULE_CLEAR_PT = (2.0, 12.0)  # beyond each end of a rule, this stretch of its line is bare paper (1A's margin)
+RULE_CLEAR_SHARE = 0.8  # ... at least this share of it
+# The identity line (name and index at the left end, exam and date at the right) prints 2 to 13 pt above
+# the top rule: a line with no such ink above both its ends is not the top rule (a page edge, say).
+RULE_TEXT_PT = (3.0, 14.0, 80.0)  # from, to above the rule; how far in from each end
+RULE_TEXT_INK = 0.02  # share of each box that must be ink (darker than RULE_ON_PAPER of the paper)
 
 
 class UnreadableFile(Exception):
@@ -118,6 +145,34 @@ class PrintFit:
     @property
     def expected(self) -> bool:
         return PRINT_SCALE_RANGE[0] <= self.scale <= PRINT_SCALE_RANGE[1] and self.offset_mm <= MAX_CODE_OFFSET_MM
+
+
+@dataclass(frozen=True, eq=False)
+class PageFit:
+    """Where the copy page lies on a normalised page picture, from its code and its two printed rules
+    (ruling R18). `homography` (3 x 3) maps copy-page points (pt, from the top-left) to the picture's pixels,
+    fitted to the code's corners and both rules' ends; `top_rule` is the measured top rule, y = a * x + b in
+    the picture's pixels; `coverage` the share of each rule's printed length it was found along (top,
+    bottom); `error_mm` the largest distance of a fitted point from where it was measured. `scale` and
+    `offset_mm` are the code's own (PrintFit)."""
+
+    homography: np.ndarray | None
+    top_rule: tuple[float, float] | None
+    coverage: tuple[float, float]
+    error_mm: float
+    scale: float
+    offset_mm: float
+
+    @property
+    def expected(self) -> bool:
+        return (
+            self.homography is not None
+            and self.top_rule is not None
+            and min(self.coverage) >= RULE_COVERAGE
+            and self.error_mm <= MAX_FIT_ERROR_MM
+            and PRINT_SCALE_RANGE[0] <= self.scale <= PRINT_SCALE_RANGE[1]
+            and self.offset_mm <= MAX_CODE_OFFSET_MM
+        )
 
 
 @dataclass(frozen=True)
@@ -175,10 +230,13 @@ def _render_pages(doc: pdfium.PdfDocument, count: int, dpi: int) -> Iterator[np.
 
 def load_photo(data: bytes) -> np.ndarray:
     """A JPEG, PNG, HEIC or HEIF photo as an RGB picture, turned as its EXIF orientation says, and scaled
-    down to at most MAX_PHOTO_SIDE px on its longer side."""
+    down to at most MAX_PHOTO_SIDE px on its longer side. A picture of more than MAX_DECODE_PIXELS (as
+    its header says, after a JPEG's reduced decode) is refused before it is decoded."""
     try:
         with Image.open(io.BytesIO(data)) as im:
             im.draft("RGB", (MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))  # JPEG: decode a huge photo at a smaller scale
+            if im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
+                raise ValueError("too large")
             pic = ImageOps.exif_transpose(im).convert("RGB")
         if max(pic.size) > MAX_PHOTO_SIDE:
             pic.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE), Image.Resampling.LANCZOS)
@@ -470,6 +528,185 @@ def page_corners(read: CodeRead) -> np.ndarray:
     return _map(page_transform(read), np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float64)).astype(np.float32)
 
 
+# Where the copy was printed, by its code and its two rules (ruling R18) ----------------------------------
+
+
+@dataclass(frozen=True)
+class _Rule:
+    slope: float  # y = slope * x + intercept, in the picture's pixels
+    intercept: float
+    ends: np.ndarray  # left end, right end (2 x 2)
+    coverage: float
+
+
+def fit_page(page: np.ndarray, read: CodeRead) -> PageFit:
+    """How the copy page lies on a normalised page picture: the code's own fit (PrintFit) gives a first
+    guess, both printed rules are found near where it puts them, and a perspective (homography) is fitted
+    to the code's four corners and the rules' four ends. `read` is the code as read on this picture."""
+    first = print_fit(read, page.shape)
+    grey = cv2.blur(_grey(page), (3, 1)).astype(np.float32)  # a 3 px wide average along each row
+    paper = float(np.percentile(grey[::4, ::4], 95))
+    px_per_mm = page.shape[1] / (PAGE_PT[0] / 72 * 25.4)
+    top = _find_rule(grey, first, TOP_RULE_PT, RULE_SEARCH_MM[0] * px_per_mm, paper, topmost=True)
+    bottom = _find_rule(grey, first, BOTTOM_RULE_PT, RULE_SEARCH_MM[1] * px_per_mm, paper, topmost=False)
+    coverage = (top.coverage if top else 0.0, bottom.coverage if bottom else 0.0)
+    top_line = (top.slope, top.intercept) if top else None
+    if top is None or bottom is None:
+        return PageFit(None, top_line, coverage, math.inf, first.scale, first.offset_mm)
+    (x0, x1), (yt, yb) = RULE_X_PT, (TOP_RULE_PT, BOTTOM_RULE_PT)
+    printed = np.vstack([printed_code_corners(read.modules), [[x0, yt], [x1, yt], [x0, yb], [x1, yb]]])
+    found = np.vstack([read.corners.astype(np.float64), top.ends, bottom.ends])
+    homography, _ = cv2.findHomography(printed, found, 0)
+    if homography is None:
+        return PageFit(None, top_line, coverage, math.inf, first.scale, first.offset_mm)
+    placed = cv2.perspectiveTransform(printed[None], homography)[0]
+    error_mm = float(np.linalg.norm(placed - found, axis=1).max()) / px_per_mm
+    return PageFit(homography, top_line, coverage, error_mm, first.scale, first.offset_mm)
+
+
+def _line_depth(grey: np.ndarray, xs: np.ndarray, ys: np.ndarray, paper: float) -> np.ndarray:
+    """How strongly a thin dark line passes through each point (x, y): its darkness below the paper either
+    side (the lighter of what lies RULE_SIDE_PX above, compared with the same below; the darker side counts),
+    as a share of the paper's brightness; 0 where the point or its surroundings are off the picture or not
+    on paper. A step from paper to a darker table is not a line: one side of it is dark."""
+    h, w = grey.shape
+    k0, k1 = RULE_SIDE_PX
+    xi, yi = np.round(xs).astype(int), np.round(ys).astype(int)
+    ok = (xi >= 0) & (xi < w) & (yi >= k1) & (yi < h - k1)
+    xi, yi = np.clip(xi, 0, w - 1), np.clip(yi, k1, h - 1 - k1)
+    above = np.max([grey[yi - k, xi] for k in range(k0, k1 + 1)], axis=0)
+    below = np.max([grey[yi + k, xi] for k in range(k0, k1 + 1)], axis=0)
+    around = np.minimum(above, below)
+    depth = (around - grey[yi, xi]) / max(paper, 1.0)
+    return np.where(ok & (around >= RULE_ON_PAPER * paper), depth, 0.0)
+
+
+def _find_rule(grey: np.ndarray, first: PrintFit, y_pt: float, search: float, paper: float,
+               topmost: bool) -> _Rule | None:
+    """A printed rule near where `first` puts it: a straight thin dark line on paper, found along at least
+    RULE_COVERAGE of the rule's printed length, with bare paper beyond both its ends. The top rule is the
+    topmost such line with the identity line's ink above both its ends; the bottom rule the bottommost.
+    Picking wrongly can only pick a lower top rule, which paints more of the page, never less."""
+    h, w = grey.shape
+    x0, x1 = RULE_X_PT
+    inset = 0.05 * (x1 - x0)  # the measured span may differ a little from the code's guess (perspective)
+    xs_pt = np.linspace(x0 + inset, x1 - inset, RULE_SAMPLES)
+    guess = _map(first.matrix, np.column_stack([xs_pt, np.full(RULE_SAMPLES, y_pt)]))
+    cols = np.round(guess[:, 0]).astype(int)
+    inside = (cols >= 0) & (cols < w)
+    if inside.sum() < RULE_SAMPLES // 2:
+        return None
+    cols, guess = cols[inside], guess[inside]
+    centre_x = float(guess[:, 0].mean())
+    lo = max(RULE_SIDE_PX[1], int(guess[:, 1].min() - search))
+    hi = min(h - 1 - RULE_SIDE_PX[1], int(guess[:, 1].max() + search))
+    if hi <= lo:
+        return None
+    rows = np.arange(lo, hi + 1)
+    rr, cc = np.meshgrid(rows, cols, indexing="ij")
+    depth = _line_depth(grey, cc.astype(float), rr.astype(float), paper)
+    peak = (depth >= RULE_DEPTH) & (depth >= np.roll(depth, 1, axis=0)) & (depth >= np.roll(depth, -1, axis=0))
+    ri, ci = np.nonzero(peak)
+    if len(ri) == 0:
+        return None
+    py, px = rows[ri].astype(float), cols[ci].astype(float)
+
+    # Vote for straight lines: for each slope, which columns have a dark line within tolerance of each height.
+    n, best_cov, best_slope = len(cols), None, None
+    for slope in np.arange(-RULE_SLOPES, RULE_SLOPES + 1e-9, 0.002):
+        at_centre = py - slope * (px - centre_x)
+        hits = np.zeros((n, hi - lo + 1), bool)
+        for d in range(-int(RULE_TOLERANCE_PX), int(RULE_TOLERANCE_PX) + 1):
+            b = np.clip(np.round(at_centre).astype(int) - lo + d, 0, hi - lo)
+            hits[ci, b] = True
+        cov = hits.mean(axis=0)
+        if best_cov is None:
+            best_cov, best_slope = cov, np.full_like(cov, slope)
+        else:
+            better = cov > best_cov
+            best_cov, best_slope = np.where(better, cov, best_cov), np.where(better, slope, best_slope)
+
+    # Candidate lines, one per run of qualifying heights, from the preferred side.
+    good = np.nonzero(best_cov >= RULE_COVERAGE)[0]
+    runs = np.split(good, np.nonzero(np.diff(good) > 1)[0] + 1) if len(good) else []
+    for run in (runs if topmost else runs[::-1]):
+        tops = run[best_cov[run] == best_cov[run].max()]
+        b = tops[len(tops) // 2]  # the middle of the best heights
+        rule = _measure_rule(grey, px, py, centre_x, lo + b, best_slope[b], cols, first, paper, topmost)
+        if rule is not None:
+            return rule
+    return None
+
+
+def _measure_rule(grey: np.ndarray, px: np.ndarray, py: np.ndarray, centre_x: float, y_centre: float,
+                  slope: float, cols: np.ndarray, first: PrintFit, paper: float, identity_above: bool) -> _Rule | None:
+    """Refines a voted line by least squares on its dark points (one per column, the nearest), walks along
+    it to the rule's ends, checks the paper is bare just beyond both ends (the rule's 18 pt margins) and,
+    for the top rule, that the identity line's ink lies just above both ends."""
+    dist = np.abs(py - (y_centre + slope * (px - centre_x)))
+    order = np.lexsort((dist, px))
+    sx, sy, sd = px[order], py[order], dist[order]
+    firsts = np.r_[0, np.nonzero(np.diff(sx))[0] + 1]
+    pick = firsts[sd[firsts] <= RULE_TOLERANCE_PX + 3]
+    xs_fit, ys_fit = sx[pick], sy[pick]
+    for _ in range(2):  # fit, drop the points off the line, fit again
+        if len(xs_fit) < 2:
+            return None
+        a, b = np.polyfit(xs_fit, ys_fit, 1)
+        keep = np.abs(ys_fit - (a * xs_fit + b)) <= RULE_TOLERANCE_PX
+        xs_fit, ys_fit = xs_fit[keep], ys_fit[keep]
+    if len(xs_fit) < 2:
+        return None
+    a, b = np.polyfit(xs_fit, ys_fit, 1)
+    coverage = len(xs_fit) / len(cols)
+    h, w = grey.shape
+    line_y = lambda x: a * x + b  # noqa: E731
+    xs = np.arange(0, w, dtype=float)
+    on = np.zeros(w, bool)
+    for dy in (-1, 0, 1):
+        on |= _line_depth(grey, xs, line_y(xs) + dy, paper) >= RULE_DEPTH
+    # The rule is the run of line pixels (gaps up to RULE_GAP_PX bridged) that passes the middle.
+    idx = np.nonzero(on)[0]
+    if len(idx) == 0:
+        return None
+    breaks = np.nonzero(np.diff(idx) > RULE_GAP_PX + 1)[0]
+    starts, stops = np.r_[idx[0], idx[breaks + 1]], np.r_[idx[breaks], idx[-1]]
+    mid = centre_x
+    through = np.nonzero((starts - RULE_GAP_PX <= mid) & (mid <= stops + RULE_GAP_PX))[0]
+    if len(through) == 0:
+        return None
+    left, right = int(starts[through[0]]), int(stops[through[0]])
+    px_per_pt = first.scale * w / PAGE_PT[0]
+    near_pt, far_pt = RULE_CLEAR_PT
+    for start, sign in ((left, -1), (right, 1)):
+        beyond = start + sign * np.arange(round(near_pt * px_per_pt), round(far_pt * px_per_pt) + 1)
+        if beyond.min() < 0 or beyond.max() >= w:
+            return None
+        bare = ~on[beyond] & (_paper_at(grey, beyond.astype(float), line_y(beyond)) >= RULE_ON_PAPER * paper)
+        if bare.mean() < RULE_CLEAR_SHARE:
+            return None
+    if identity_above:
+        up0, up1, across = (round(v * px_per_pt) for v in RULE_TEXT_PT)
+        for x_lo, x_hi in ((left, left + across), (right - across, right)):
+            xs_box = np.arange(max(0, x_lo), min(w, x_hi + 1))
+            ys_box = np.arange(up0, up1 + 1)
+            bx, by = np.meshgrid(xs_box, ys_box)
+            values = _paper_at(grey, bx.astype(float), line_y(bx) - by)
+            if (values < RULE_ON_PAPER * paper).mean() < RULE_TEXT_INK:
+                return None
+    ends = np.array([[left, line_y(left)], [right, line_y(right)]], np.float64)
+    return _Rule(slope=float(a), intercept=float(b), ends=ends, coverage=float(coverage))
+
+
+def _paper_at(grey: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """Grey values at (x, y); NaN off the picture, so a point there is neither paper nor ink."""
+    h, w = grey.shape
+    xi, yi = np.round(xs).astype(int), np.round(ys).astype(int)
+    off = (xi < 0) | (xi >= w) | (yi < 0) | (yi >= h)
+    values = grey[np.clip(yi, 0, h - 1), np.clip(xi, 0, w - 1)].astype(np.float64)
+    return np.where(off, np.nan, values)
+
+
 # Checks --------------------------------------------------------------------------------------------------
 
 
@@ -504,12 +741,16 @@ def quality(img: np.ndarray, cut_off: bool = False) -> Quality:
 # The marking picture -------------------------------------------------------------------------------------
 
 
-def marking_image(page: np.ndarray, areas: list[Area], read: CodeRead) -> np.ndarray:
-    """A copy of a normalised page with the 1A name band and every given hidden area painted white twice
-    over (ruling R13): (a) as fractions of the picture (the band is its top TOP_BAND_FRACTION), rounded
-    outwards to whole pixels; and (b) where the code `read` on this picture says the copy was printed
-    (print scale and offset, so a copy printed "fit to page" is still covered), PREDICTED_MARGIN_PT larger
-    all round. The caller checks print_fit(read, page.shape).expected first."""
+def marking_image(page: np.ndarray, areas: list[Area], fit: PageFit) -> np.ndarray:
+    """A copy of a normalised page with the 1A name band and every given hidden area painted white, as the
+    union of (ruling R18):
+    (a) the band as the picture's top TOP_BAND_FRACTION and the areas as fractions of the picture;
+    (b) everything above the measured top rule, and BELOW_TOP_RULE_PT below it, following the rule's line;
+    (c) the band and the areas mapped through the fitted perspective, PREDICTED_MARGIN_PT larger all round.
+    `fit` is fit_page's result for this picture; the caller makes a marking picture only when it is
+    expected. Raises ValueError for a fit without a perspective or a top rule."""
+    if fit.homography is None or fit.top_rule is None:
+        raise ValueError("no page fit")
     out = page.copy()
     h, w = out.shape[:2]
     out[: math.ceil(TOP_BAND_FRACTION * h)] = 255
@@ -518,12 +759,18 @@ def marking_image(page: np.ndarray, areas: list[Area], read: CodeRead) -> np.nda
         x1, y1 = min(w, math.ceil((a.x + a.w) * w)), min(h, math.ceil((a.y + a.h) * h))
         if x1 > x0 and y1 > y0:
             out[y0:y1, x0:x1] = 255
+    slope, intercept = fit.top_rule
+    below = BELOW_TOP_RULE_PT * fit.scale * w / PAGE_PT[0]
+    _fill(out, np.array([[0, 0], [w, 0], [w, slope * w + intercept + below], [0, intercept + below]]))
     pw, ph = PAGE_PT
-    boxes = [(0.0, 0.0, pw, TOP_BAND_PT)] + [(a.x * pw, a.y * ph, a.w * pw, a.h * ph) for a in areas]
-    m = page_transform(read)
     e = PREDICTED_MARGIN_PT
+    boxes = [(0.0, 0.0, pw, TOP_BAND_PT)] + [(a.x * pw, a.y * ph, a.w * pw, a.h * ph) for a in areas]
     for x, y, bw, bh in boxes:
         corners = np.array([[x - e, y - e], [x + bw + e, y - e], [x + bw + e, y + bh + e], [x - e, y + bh + e]])
-        polygon = np.round(_map(m, corners) * 16).astype(np.int32)  # 4 bits of sub-pixel precision
-        cv2.fillConvexPoly(out, polygon, WHITE, lineType=cv2.LINE_8, shift=4)
+        _fill(out, cv2.perspectiveTransform(corners[None].astype(np.float64), fit.homography)[0])
     return out
+
+
+def _fill(out: np.ndarray, polygon: np.ndarray) -> None:
+    """Paints a convex polygon (picture pixels, any float) white, with 4 bits of sub-pixel precision."""
+    cv2.fillConvexPoly(out, np.round(polygon * 16).astype(np.int32), WHITE, lineType=cv2.LINE_8, shift=4)

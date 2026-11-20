@@ -10,6 +10,7 @@ import io
 import json
 import math
 import struct
+import zlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -88,6 +89,78 @@ def with_writing(page: np.ndarray, text: str = "see next page") -> np.ndarray:
     h, w = out.shape[:2]
     cv2.putText(out, text, (w // 3, h // 2), cv2.FONT_HERSHEY_SCRIPT_SIMPLEX, 1.6, (40, 40, 60), 3, cv2.LINE_AA)
     return out
+
+
+# Where tagged() puts its colours on a clean 200 dpi copy page: the identity line ends 2 pt above the top
+# rule (row 83); "Question page n" sits in this box (rows, columns) on the master's question pages.
+IDENTITY_ROWS = slice(0, 80)
+QUESTION_BOX = (slice(330, 460), slice(80, 760))
+RED, BLUE = (255, 0, 0), (0, 0, 255)
+
+
+def tagged(page: np.ndarray) -> np.ndarray:
+    """A copy of a clean copy page with the candidate's identity line printed red and the question text
+    printed blue, so tests can find exactly those pixels after any turn, warp or crop (red()/blue())."""
+    out = page.copy()
+    for rows_cols, colour in (((IDENTITY_ROWS, slice(None)), RED), (QUESTION_BOX, BLUE)):
+        part = out[rows_cols]
+        part[cv2.cvtColor(part, cv2.COLOR_RGB2GRAY) < 160] = colour
+    return out
+
+
+def _channels(img: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The picture's channels scaled so its paper is white, so a dim photo's tags still show."""
+    paper = max(float(np.percentile(img[::4, ::4].max(axis=2), 95)), 1.0)
+    scaled = img.astype(np.float32) * (255.0 / paper)
+    return scaled[:, :, 0], scaled[:, :, 1], scaled[:, :, 2]
+
+
+def red(img: np.ndarray) -> np.ndarray:
+    """Where a picture shows the red tag (the identity line), as a mask."""
+    r, g, b = _channels(img)
+    return (r > 120) & (r - g > 60) & (r - b > 60)
+
+
+def blue(img: np.ndarray) -> np.ndarray:
+    """Where a picture shows the blue tag (the question text), as a mask."""
+    r, g, b = _channels(img)
+    return (b > 120) & (b - r > 60) & (b - g > 60)
+
+
+def keystone(page: np.ndarray, k: float, *, fill: float = 0.95, tone: str = "white", seed: int = 0,
+             shadow: bool = False) -> np.ndarray:
+    """A phone photo filling an A4-shaped frame (fill = share of it), taken from below the page so its top
+    is `k` narrower and lower (keystone), on a table of `tone`, as saved straight into a home PDF. `shadow`
+    draws a thin grey line just above the paper's top edge, the shadow a lifted sheet casts."""
+    ph, pw = page.shape[:2]
+    w, h = 1654, 2339
+    out = table(w, h, tone=tone, seed=seed)
+    s = fill * min(w / pw, h / ph)
+    cx, cy, hw, hh = w / 2, h / 2, pw * s / 2, ph * s / 2
+    drop = hh * k
+    dst = np.float32([[cx - hw * (1 - k), cy - hh + drop], [cx + hw * (1 - k), cy - hh + drop],
+                      [cx + hw, cy + hh], [cx - hw, cy + hh]])
+    m = cv2.getPerspectiveTransform(np.float32([[0, 0], [pw, 0], [pw, ph], [0, ph]]), dst)
+    cv2.warpPerspective(page, m, (w, h), dst=out, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_TRANSPARENT)
+    if shadow:
+        y = int(dst[0, 1]) - 5
+        cv2.line(out, (int(dst[0, 0]) - 6, y), (int(dst[1, 0]) + 6, y), (200, 200, 200), 3, cv2.LINE_AA)
+    return _noise(np.random.default_rng(seed), out, 3.0)
+
+
+def on_pile(page: np.ndarray, mm: float) -> np.ndarray:
+    """The page lying on the rest of the pile: the sheet below shows `mm` above it, and the top sheet's
+    edge casts a faint shadow line across it."""
+    lead = round(mm * DPI / 25.4)
+    stack = cv2.copyMakeBorder(page, lead, 0, 0, 0, cv2.BORDER_CONSTANT, value=(250, 250, 250))
+    stack[lead - 2:lead + 1] = 215
+    return stack
+
+
+def with_lead_in(page: np.ndarray, mm: float) -> np.ndarray:
+    """A sheet-fed scan frame with `mm` of white lead-in above the page."""
+    lead = round(mm * DPI / 25.4)
+    return cv2.copyMakeBorder(page, lead, 0, 0, 0, cv2.BORDER_CONSTANT, value=WHITE)
 
 
 def table(width: int, height: int, *, tone: str = "dark", seed: int = 0) -> np.ndarray:
@@ -189,10 +262,15 @@ def jpeg(img: np.ndarray, *, quality: int = 90, orientation: int | None = None) 
     return buf.getvalue()
 
 
-def heic(img: np.ndarray) -> bytes:
-    buf = io.BytesIO()
-    Image.fromarray(img).save(buf, format="HEIF", quality=90)
-    return buf.getvalue()
+def png_header_only(width: int, height: int) -> bytes:
+    """A PNG whose header claims width x height pixels but which holds no picture data: opening it reads
+    the size; decoding it would fail (or, were it real, take width x height x 3 bytes)."""
+
+    def chunk(kind: bytes, body: bytes) -> bytes:
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(b"")) + chunk(b"IEND", b"")
 
 
 def scan_pdf(pages: list[np.ndarray]) -> bytes:

@@ -19,8 +19,9 @@ __all__ = [
 ]
 
 KINDS = ("home_photo", "home_pdf", "scan_file")
-# Quality flag: the page's geometry is not confirmed, so no marking picture is made. Its code is not where
-# 1A prints it or not the printed size (rulings R13, R14), or the page was placed by its code alone (R15).
+# Quality flag: the page's geometry is not confirmed, so no marking picture is made (rulings R13 to R19): a
+# printed rule not found, the code and rules not agreeing with one perspective, the code off its printed
+# place or size, or the page placed by its code alone.
 LAYOUT_UNEXPECTED = "layout_unexpected"
 
 
@@ -85,15 +86,15 @@ def prepare(data: bytes, kind: str, mime: str, ctx: JobContext) -> list[Prepared
     undecodable picture.
 
     Scanner files and home PDFs: each PDF page or picture is one page, turned upright by its code. A home
-    PDF page whose code is not where 1A prints it (a photo saved as a PDF, say) is looked at again as a photo.
+    PDF page is also looked at as a photo when the paper's edges can be found (a photo saved as a PDF).
 
     Home photos: the page's edges are found and the page flattened. When no edges are found the page is
     placed by its code: `cut_off` only if that placed page runs off the photo, and `layout_unexpected` (no
     marking picture) because the code alone cannot confirm where the name band lies. A photo with neither
     edges nor a code is kept as it is, `cut_off`.
 
-    Every page with a code is then checked against the 1A print layout by its code (print_fit). A page whose
-    code is off its printed place or the wrong size gets the flag `layout_unexpected` and no marking picture."""
+    Every page with a code is then fitted to the 1A print layout by its code and its two printed rules
+    (fit_page). A page whose fit is not confirmed gets the flag `layout_unexpected` and no marking picture."""
     return list(iter_prepare(data, kind, mime, ctx))
 
 
@@ -109,37 +110,33 @@ def iter_prepare(data: bytes, kind: str, mime: str, ctx: JobContext) -> Iterator
 @dataclass(frozen=True)
 class _Shot:
     """One way of making a normalised page from a picture. `read` is the code as first read (it names the
-    page); `final` is the same code read again on the normalised page, which print_fit judges."""
+    page); `fit` is fit_page's result from the same code read again on the normalised page."""
 
     page: np.ndarray
     read: imaging.CodeRead | None
-    final: imaging.CodeRead | None
+    fit: imaging.PageFit | None
     turn: int
     cut_off: bool
     placed_by_code: bool = False
 
     @property
     def layout_ok(self) -> bool:
-        """The page's geometry is confirmed: its code sits where 1A prints it, at about its printed size.
-        A page placed by its code alone always sits there, so nothing is confirmed: the code cannot see
-        perspective, and on the synthetic photos the name landed 70 to 220 px below the band."""
-        return (
-            not self.placed_by_code
-            and self.final is not None
-            and imaging.print_fit(self.final, self.page.shape).expected
-        )
+        """The page's geometry is confirmed (ruling R18): both rules found, the code and the rules' ends
+        agreeing with one perspective, and the code at about its printed size and place. A page placed by
+        its code alone is never confirmed (ruling R15 follow-up)."""
+        return not self.placed_by_code and self.fit is not None and self.fit.expected
 
 
 def _finish(
     page: np.ndarray, read: imaging.CodeRead | None, turn: int, cut_off: bool, placed_by_code: bool = False
 ) -> _Shot:
     page = imaging.to_a4(page)
-    final = None
+    fit = None
     if read is not None:
         again = imaging.read_code(page)
         if again is not None and (again.code, again.page) == (read.code, read.page):
-            final = again
-    return _Shot(page=page, read=read, final=final, turn=turn, cut_off=cut_off, placed_by_code=placed_by_code)
+            fit = imaging.fit_page(page, again)
+    return _Shot(page=page, read=read, fit=fit, turn=turn, cut_off=cut_off, placed_by_code=placed_by_code)
 
 
 def _as_scanned(img: np.ndarray) -> _Shot:
@@ -149,8 +146,9 @@ def _as_scanned(img: np.ndarray) -> _Shot:
     return _finish(imaging.upright(img, read), read, imaging.rotation(read), False)
 
 
-def _as_photographed(img: np.ndarray, place_by_code: bool) -> _Shot:
-    quad = imaging.find_page(img)
+def _as_photographed(img: np.ndarray, place_by_code: bool, quad: np.ndarray | None = None) -> _Shot:
+    if quad is None:
+        quad = imaging.find_page(img)
     if quad is not None:
         cut_off = imaging.touches_edge(quad, img.shape)
         page = imaging.warp_to_a4(img, quad)
@@ -182,15 +180,27 @@ def _as_photographed(img: np.ndarray, place_by_code: bool) -> _Shot:
     return _finish(imaging.upright(img, read), read, imaging.rotation(read), True)
 
 
+def _home_pdf_page(img: np.ndarray) -> _Shot:
+    """A home PDF page: as scanned, and also as a photo when the paper's edges can be found (rulings R14,
+    R19). Paper edges inside the frame mean a photo saved as a PDF, so that candidate comes first; the first
+    candidate whose layout is confirmed is kept, else the first candidate."""
+    scanned = _as_scanned(img)
+    quad = imaging.find_page(img)
+    if quad is None:
+        return scanned
+    photographed = _as_photographed(img, place_by_code=False, quad=quad)
+    inside = not imaging.touches_edge(quad, img.shape)
+    shots = [photographed, scanned] if inside else [scanned, photographed]
+    return next((s for s in shots if s.layout_ok), shots[0])
+
+
 def _prepare_page(index: int, img: np.ndarray, kind: str, ctx: JobContext) -> PreparedPage:
     if kind == "home_photo":
         shot = _as_photographed(img, place_by_code=True)
+    elif kind == "home_pdf":
+        shot = _home_pdf_page(img)
     else:
         shot = _as_scanned(img)
-        if kind == "home_pdf" and not shot.layout_ok:  # a photo saved as a PDF, say (ruling R14)
-            found = _as_photographed(img, place_by_code=False)
-            if found.layout_ok:
-                shot = found
     page, read = shot.page, shot.read
 
     blank = read is None and imaging.is_blank(page)
@@ -204,7 +214,7 @@ def _prepare_page(index: int, img: np.ndarray, kind: str, ctx: JobContext) -> Pr
     if read is not None and shot.layout_ok and is_answer_page(ctx, read.code, read.page):
         layout = ctx.papers[ctx.copies[read.code].paper_id]
         areas = [a for a in layout.areas if a.page == read.page]
-        marking = imaging.encode_jpeg(imaging.marking_image(page, areas, shot.final))
+        marking = imaging.encode_jpeg(imaging.marking_image(page, areas, shot.fit))
     return PreparedPage(
         source_index=index,
         code=read.code if read else None,
