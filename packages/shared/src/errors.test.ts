@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, messageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, messageFor, scanMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -135,9 +135,35 @@ describe("collectionMessageFor", () => {
     expect(collectionMessageFor("invalid_staff", "custody")).toContain("active account");
     expect(collectionMessageFor("conflict", "manifest")).toContain("99");
   });
+  it("says a removed centre takes nothing more", () => {
+    expect(collectionMessageFor("conflict", "manifest")).toContain("no longer part of this exam");
+    expect(collectionMessageFor("conflict", "record")).toContain("no longer part of this exam");
+    expect(collectionMessageFor("conflict", "custody")).toContain("no longer part of this exam");
+  });
   it("falls back to the generic message", () => {
     expect(collectionMessageFor("nope", "record")).toBe("Something went wrong. Please try again.");
     expect(collectionMessageFor("not_present", "custody")).toBe("Something went wrong. Please try again.");
     expect(collectionMessageFor("__proto__", "custody")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("scanMessageFor", () => {
+  it("maps each code per context", () => {
+    expect(scanMessageFor("unknown_manifest", "create")).toContain("No manifest has that number");
+    expect(scanMessageFor("other_manifest", "create")).toContain("another centre or exam");
+    expect(scanMessageFor("conflict", "create")).toContain("no longer part of this exam");
+    expect(scanMessageFor("wrong_file_type", "upload")).toContain("PDF, JPEG or PNG");
+    expect(scanMessageFor("file_too_large", "upload")).toContain("1 GB");
+    expect(scanMessageFor("conflict", "upload")).toContain("new scan batch");
+    expect(scanMessageFor("not_found", "upload")).toContain("did not arrive");
+    expect(scanMessageFor("nothing_to_submit", "submit")).toContain("at least one file");
+    expect(scanMessageFor("still_processing", "complete")).toContain("still uploading or being processed");
+    expect(scanMessageFor("forbidden", "complete")).toBe("You do not have permission to do that.");
+  });
+  it("falls back to the generic message", () => {
+    expect(scanMessageFor("nope", "create")).toBe("Something went wrong. Please try again.");
+    expect(scanMessageFor("still_processing", "create")).toBe("Something went wrong. Please try again.");
+    expect(scanMessageFor("__proto__", "upload")).toBe("Something went wrong. Please try again.");
+    expect(scanMessageFor(undefined, "submit")).toBe("Something went wrong. Please try again.");
   });
 });

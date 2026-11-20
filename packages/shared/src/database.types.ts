@@ -196,6 +196,12 @@ isOneToOne: false
                   }
                   Relationships: [
                     {
+      foreignKeyName: "custody_events_batch_id_fkey"
+      columns: ["batch_id"]
+isOneToOne: false
+      referencedRelation: "scan_batches"
+      referencedColumns: ["id"]
+    },{
       foreignKeyName: "custody_events_centre_id_fkey"
       columns: ["centre_id"]
 isOneToOne: false
@@ -664,6 +670,12 @@ isOneToOne: false
       columns: ["centre_id"]
 isOneToOne: false
       referencedRelation: "exam_centres"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "scan_batches_manifest_id_fkey"
+      columns: ["manifest_id"]
+isOneToOne: false
+      referencedRelation: "collection_manifests"
       referencedColumns: ["id"]
     }
                   ]
@@ -1421,6 +1433,27 @@ isOneToOne: false
                            },
 "save_venue":
 { Args: { "p_active": boolean,"p_id": string,"p_name": string,"p_rooms": (string)[] }; Returns: Json
+                           },
+"scan_batch_create":
+{ Args: { "p_centre": string,"p_exam": string,"p_manifest_number"?: string }; Returns: Json
+                           },
+"scan_batch_status":
+{ Args: { "p_batch": string }; Returns: Json
+                           },
+"scan_batch_submit":
+{ Args: { "p_batch": string }; Returns: Json
+                           },
+"scan_centre_complete":
+{ Args: { "p_centre": string,"p_exam": string }; Returns: Json
+                           },
+"scan_upload_begin":
+{ Args: { "p_batch": string,"p_bytes": number,"p_mime": string }; Returns: Json
+                           },
+"scan_upload_max_bytes":
+{ Args: Record<PropertyKey, never>; Returns: number
+                           },
+"scan_upload_type_ok":
+{ Args: { "p_mime": string }; Returns: boolean
                            },
 "script_create":
 { Args: { "p_booking": string,"p_now": string,"p_source": Database["public"]['Enums']["script_source"] }; Returns: {

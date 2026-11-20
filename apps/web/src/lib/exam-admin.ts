@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireStaff } from "@/lib/staff-gate";
 import { isUuid } from "@/lib/uuid";
 import { centresOf } from "@/lib/exams-staff";
+import { parseScanStatus, type ScanBatchStatus } from "@/lib/scan-batch";
 
 type Embedded<T> = T | T[] | null;
 const one = <T,>(v: Embedded<T>): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
@@ -239,6 +240,26 @@ export async function loadExamAdmin(examId: string): Promise<ExamAdminView> {
     downloads,
     downloadsCapped: rawLog.length > LOG_CAP,
   };
+}
+
+const SCAN_BATCH_CAP = 200;
+
+/** The exam's scan batches with their status, oldest first. Staff admins only (scan_batches is readable by them
+ * alone, and scan_batch_status checks again). */
+export async function loadScanBatches(examId: string): Promise<ScanBatchStatus[]> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId)) return [];
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("scan_batches")
+    .select("id")
+    .eq("exam_id", examId)
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(SCAN_BATCH_CAP);
+  if (error) throw new Error("scan batches could not be loaded");
+  const answers = await Promise.all((data ?? []).map((b) => supabase.rpc("scan_batch_status", { p_batch: b.id })));
+  return answers.map((r) => (r.error ? null : parseScanStatus(r.data))).filter((s): s is ScanBatchStatus => s !== null);
 }
 
 /** The paid and cancel-requested centre bookings of the exam, a page at a time. */

@@ -206,15 +206,18 @@ export function uploadMessageFor(code: string | null | undefined): string {
 /** Which collection or custody RPC a failure code came from. */
 export type CollectionContext = "record" | "manifest" | "custody";
 
+const CENTRE_REMOVED = "This centre is no longer part of this exam. Refresh the page.";
+
 const collectionMessages: Record<CollectionContext, Record<string, string>> = {
   record: {
     not_present: "Only a candidate marked present or late has sheets to count.",
     invalid_input: "Enter a whole number of extra sheets from 0 to 50.",
     not_found: "Not found",
     forbidden: "You do not have permission to use this register.",
+    conflict: CENTRE_REMOVED,
   },
   manifest: {
-    conflict: "This exam already has 99 manifests.",
+    conflict: "This exam already has 99 manifests, or this centre is no longer part of this exam.",
     not_found: "Not found",
     forbidden: "You do not have permission to use this register.",
   },
@@ -223,11 +226,52 @@ const collectionMessages: Record<CollectionContext, Record<string, string>> = {
     invalid_staff: "Choose staff members with an active account.",
     not_found: "Not found",
     forbidden: "You do not have permission to use this register.",
+    conflict: CENTRE_REMOVED,
   },
 };
 
 /** Message for a collection, manifest or custody RPC failure code; unknown codes get the generic message. */
 export function collectionMessageFor(code: string | null | undefined, context: CollectionContext): string {
   const table = collectionMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}
+
+/** Which scan batch RPC a failure code came from. */
+export type ScanContext = "create" | "upload" | "submit" | "complete";
+
+const scanMessages: Record<ScanContext, Record<string, string>> = {
+  create: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Check the manifest number and try again.",
+    not_found: "This centre is not part of this exam. Refresh the page.",
+    conflict: "This centre is no longer part of this exam, or the exam already has 999 scan batches.",
+    unknown_manifest: "No manifest has that number. Check the number printed on the manifest.",
+    other_manifest: "That manifest belongs to another centre or exam.",
+  },
+  upload: {
+    forbidden: FORBIDDEN,
+    invalid_input: "That file could not be added. Please try again.",
+    not_found: "The file did not arrive. Please try again.",
+    conflict: "Processing has already started for this batch. Make a new scan batch for more files.",
+    wrong_file_type: "This file cannot be used. Upload scans as PDF, JPEG or PNG.",
+    file_too_large: "This file is larger than 1 GB. Split the scan into smaller files.",
+  },
+  submit: {
+    forbidden: FORBIDDEN,
+    not_found: "This batch no longer exists. Refresh the page.",
+    nothing_to_submit: "Upload at least one file before you start processing.",
+  },
+  complete: {
+    forbidden: FORBIDDEN,
+    not_found: "This centre is not part of this exam. Refresh the page.",
+    conflict: "This centre is no longer part of this exam. Refresh the page.",
+    still_processing:
+      "Some scans of this centre are still uploading or being processed. Start processing every batch and wait until it has finished.",
+  },
+};
+
+/** Message for a scan batch RPC failure code; unknown codes get the generic message. */
+export function scanMessageFor(code: string | null | undefined, context: ScanContext): string {
+  const table = scanMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
 }
