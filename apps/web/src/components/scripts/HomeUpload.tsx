@@ -4,19 +4,24 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Dr
 import { uploadMessageFor } from "@stem/shared";
 import { CameraCapture } from "@/components/scripts/CameraCapture";
 import { UploadReceipt } from "@/components/scripts/UploadReceipt";
-import { isBlurred, measureFileBlur } from "@/lib/blur-check";
+import { inspectPhoto, isBlurred } from "@/lib/blur-check";
 import {
   MAX_FILES,
   POLL_MS,
   UPLOAD_TEXT,
+  afterSubmit,
   attentionItems,
   blankPrompt,
   canSubmit,
   fileProblem,
+  isStale,
   retakePrompt,
   statusWord,
+  storeFile,
   uploadFileType,
+  uploadView,
   type HomeUploadStatus,
+  type SubmitResult,
   type UploadKind,
 } from "@/lib/home-upload";
 import { uploadResumable } from "@/lib/resumable-upload";
@@ -27,6 +32,8 @@ const BUTTON =
   "rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60";
 const QUIET =
   "rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60";
+/** A label around a visually hidden file input shows the input's focus. */
+const FOCUS_WITHIN = "focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-blue-600";
 const SMALL = "rounded border border-slate-300 bg-white px-2 py-0.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50";
 const ACCEPT = ".pdf,.jpg,.jpeg,.png,.heic,.heif,application/pdf,image/jpeg,image/png,image/heic,image/heif";
 
@@ -38,8 +45,9 @@ type LocalFile = {
   kind: UploadKind;
   mime: string;
   size: number;
-  /** The file itself, while this page has it (gone after a reload). */
+  /** The file itself, until it is uploaded (gone after a reload). */
   file: File | null;
+  /** A small thumbnail made here (object URL), for photos the browser can decode. */
   preview: string | null;
   /** elsewhere: being uploaded by another family member on their device. */
   state: "waiting" | "uploading" | "stored" | "failed" | "elsewhere";
@@ -49,6 +57,11 @@ type LocalFile = {
 };
 
 type Rpc = { ok?: boolean; code?: string } & Record<string, unknown>;
+
+/** The signed-in person's current access token. */
+async function currentToken(): Promise<string | null> {
+  return (await createClient().auth.getSession()).data.session?.access_token ?? null;
+}
 
 /** The family's answer to an RPC: the object, or a failure code ("internal" when the call itself failed). */
 async function call(name: string, args: Record<string, unknown>): Promise<Rpc> {
@@ -104,7 +117,15 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     [setFiles],
   );
   const draftRef = useRef<string | null>(null);
+  /** Uploads, one at a time. */
   const queue = useRef<Promise<void>>(Promise.resolve());
+  /** Photo checks (blur and thumbnail), one decode at a time, apart from the uploads so feedback is quick. */
+  const inspecting = useRef<Promise<void>>(Promise.resolve());
+  /** The number of the submission this screen handed in: older statuses (replies sent before) are ignored. */
+  const submittedSeq = useRef<number | null>(null);
+  const statusHeading = useRef<HTMLHeadingElement>(null);
+  const photographButton = useRef<HTMLButtonElement>(null);
+  const focusNext = useRef<"status" | "photograph" | null>(null);
   const replaceInput = useRef<HTMLInputElement>(null);
   const replaceKey = useRef<string | null>(null);
 
@@ -119,7 +140,7 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
   const take = useCallback(
     (s: HomeUploadStatus | null) => {
       setLoadFailed(!s);
-      if (!s) return;
+      if (!s || isStale(s, submittedSeq.current)) return;
       setStatus(s);
       draftRef.current = s.draft?.id ?? null;
       if (s.draft) setReplaceAll(s.draft.replaces_all);
@@ -185,6 +206,17 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [load]);
 
+  // After a submit the focus goes to where the answers stand; after the camera, back to "Photograph pages".
+  useEffect(() => {
+    if (focusNext.current === "status" && statusHeading.current) {
+      statusHeading.current.focus();
+      focusNext.current = null;
+    } else if (focusNext.current === "photograph" && !camera && photographButton.current) {
+      photographButton.current.focus();
+      focusNext.current = null;
+    }
+  });
+
   // Local previews are let go when the screen closes.
   useEffect(
     () => () => {
@@ -203,42 +235,49 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     return draftRef.current;
   }
 
-  /** Begins (once), uploads and stores one file. A file deleted meanwhile is discarded on the server. */
+  /** Begins (once), uploads and stores one file (storeFile: a retry asks the server before sending again). A file
+   * deleted meanwhile is discarded on the server. Once stored, the file itself is let go (a phone keeps no copy). */
   async function uploadOne(key: string) {
     const f = filesRef.current.find((x) => x.key === key);
     if (!f || !f.file || f.state === "stored") return;
+    const file = f.file;
     patch(key, { state: "uploading", progress: 0, error: null });
     let uploadId = f.uploadId;
     try {
-      let path = f.path;
-      if (!uploadId || !path) {
-        const draft = await ensureDraft();
-        const r = await call("script_upload_begin", { p_submission: draft, p_kind: f.kind, p_mime: f.mime, p_bytes: f.size });
-        if (r.ok !== true) throw new Error(String(r.code ?? "internal"));
-        uploadId = String(r.upload_id);
-        path = String(r.storage_path);
-        if (!present(key)) {
-          await call("script_upload_discard", { p_upload: uploadId });
-          return;
-        }
-        patch(key, { uploadId, path });
-      }
-      const token = (await createClient().auth.getSession()).data.session?.access_token;
-      if (!token) throw new Error("unauthenticated");
-      await uploadResumable(f.file, {
-        bucket: "script-uploads",
-        path,
-        accessToken: token,
-        contentType: f.mime,
-        onProgress: (sent, total) => patch(key, { progress: total ? sent / total : 0 }),
+      const done = await storeFile({ uploadId: f.uploadId, path: f.path }, {
+        begin: async () => {
+          const draft = await ensureDraft();
+          const r = await call("script_upload_begin", { p_submission: draft, p_kind: f.kind, p_mime: f.mime, p_bytes: f.size });
+          if (r.ok !== true) throw new Error(String(r.code ?? "internal"));
+          return { uploadId: String(r.upload_id), path: String(r.storage_path) };
+        },
+        upload: async (path) => {
+          const token = await currentToken();
+          if (!token) throw new Error("unauthenticated");
+          await uploadResumable(file, {
+            bucket: "script-uploads",
+            path,
+            accessToken: token,
+            getAccessToken: currentToken,
+            contentType: f.mime,
+            onProgress: (sent, total) => patch(key, { progress: total ? sent / total : 0 }),
+          });
+        },
+        stored: async (id) => {
+          const r = await call("script_upload_stored", { p_upload: id });
+          return { ok: r.ok === true, code: r.code };
+        },
+      }, (id, path) => {
+        uploadId = id;
+        if (!present(key)) return false;
+        patch(key, { uploadId: id, path });
+        return true;
       });
-      const r = await call("script_upload_stored", { p_upload: uploadId });
-      if (r.ok !== true) throw new Error(String(r.code ?? "internal"));
-      if (!present(key)) {
-        await call("script_upload_discard", { p_upload: uploadId });
+      if (!done || !present(key)) {
+        if (uploadId) await call("script_upload_discard", { p_upload: uploadId });
         return;
       }
-      patch(key, { state: "stored", progress: 1 });
+      patch(key, { state: "stored", progress: 1, file: null });
     } catch (e) {
       const code = e instanceof Error ? e.message : "internal";
       patch(key, { state: "failed", error: code === "unauthenticated" ? "Please sign in again." : uploadMessageFor(code) });
@@ -266,10 +305,9 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
         problems.push(uploadMessageFor("too_many_files"));
         break;
       }
-      const viewable = type.mime === "image/jpeg" || type.mime === "image/png";
       added.push({
         key: newKey(), uploadId: null, path: null, kind: type.kind, mime: type.mime, size: file.size, file,
-        preview: viewable ? URL.createObjectURL(file) : null, state: "waiting", progress: 0, error: null, blurred: false,
+        preview: null, state: "waiting", progress: 0, error: null, blurred: false,
       });
     }
     if (problems.length) setNotice(problems.join(" "));
@@ -281,13 +319,24 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     });
     if (opts.replace) void remove(opts.replace);
     for (const a of added) {
-      if (!opts.checked && a.kind === "home_photo") {
-        void measureFileBlur(a.file!).then((score) => {
-          if (score !== null && isBlurred(score)) patch(a.key, { blurred: true });
-        });
-      }
+      if (a.kind === "home_photo") inspect(a.key, a.file!, !opts.checked);
       enqueue(a.key);
     }
+  }
+
+  /** The photo's thumbnail and (unless the camera already asked) its blur check, one photo at a time. */
+  function inspect(key: string, file: File, checkBlur: boolean) {
+    inspecting.current = inspecting.current
+      .then(async () => {
+        if (!present(key)) return;
+        const { score, thumbnail } = await inspectPhoto(file);
+        if (!present(key)) return;
+        patch(key, {
+          preview: thumbnail ? URL.createObjectURL(thumbnail) : null,
+          ...(checkBlur && score !== null && isBlurred(score) ? { blurred: true } : {}),
+        });
+      })
+      .catch(() => undefined);
   }
 
   async function remove(key: string) {
@@ -336,10 +385,15 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     await syncOrder();
     const r = await call("home_submission_submit", { p_submission: draftRef.current });
     if (r.ok === true) {
+      // The server's own answer shows at once ("Checking your pages", and the polling); never the earlier status.
+      const result = r as unknown as SubmitResult;
+      submittedSeq.current = result.seq;
+      setStatus((s) => (s ? afterSubmit(s, result) : s));
       for (const f of filesRef.current) if (f.preview) URL.revokeObjectURL(f.preview);
       setFiles(() => []);
       draftRef.current = null;
       setEditing(false);
+      focusNext.current = "status";
     } else setNotice(uploadMessageFor(r.code));
     await load();
     setBusy(null);
@@ -382,14 +436,20 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     return (
       <div data-testid="home-upload" className="space-y-2">
         <p data-testid="upload-live" role="status" aria-live="polite" className="sr-only" />
-        {loadFailed && <p role="alert" className="text-sm text-red-700">{UPLOAD_TEXT.loadFailure}</p>}
+        {loadFailed && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-700">
+            <span>{UPLOAD_TEXT.loadFailure}</span>
+            <button type="button" className={SMALL} onClick={() => void load()}>{UPLOAD_TEXT.tryAgain}</button>
+          </div>
+        )}
       </div>
     );
   }
 
   const sub = status.submission;
   const word = statusWord(sub);
-  const showEditor = canUpload && (editing || !sub);
+  const view = uploadView(status, { canUpload, editing });
+  const showEditor = view.editor;
   const items = attentionItems(status);
   const uploadingCount = files.filter((f) => f.state === "waiting" || f.state === "uploading").length;
   const settled = sub && sub.state !== "checking";
@@ -403,7 +463,11 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
 
       {!showEditor && sub && (
         <div data-testid="upload-status" className="space-y-2 rounded-lg border border-slate-200 p-3">
-          {word && <p data-testid="upload-status-word" className="font-semibold text-slate-800">{word}</p>}
+          {word && (
+            <h3 ref={statusHeading} tabIndex={-1} data-testid="upload-status-word" className="font-semibold text-slate-800 focus:outline-none">
+              {word}
+            </h3>
+          )}
           {sub.state === "checking" && <p className="text-slate-600">{UPLOAD_TEXT.checkingHint}</p>}
           {sub.state === "rejected" && <p className="text-slate-700">{UPLOAD_TEXT.rejectedNote}</p>}
           {sub.late && sub.state !== "received" && <p className="text-amber-900">{UPLOAD_TEXT.lateNote}</p>}
@@ -483,7 +547,7 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
             )
           )}
 
-          {sub.state === "received" && (
+          {view.receipt && sub.state === "received" && (
             <UploadReceipt label={label} scriptNumber={status.script?.number ?? null} seq={sub.seq} submittedAt={sub.submitted_at}
               pages={status.script?.pages ?? []} blank={status.blank} late={sub.late} />
           )}
@@ -522,11 +586,14 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
           {camera ? (
             <CameraCapture label={label} single={camera.replace !== null}
               onCapture={(file) => addFiles([file], { replace: camera.replace, checked: true })}
-              onClose={() => setCamera(null)} />
+              onClose={() => {
+                setCamera(null);
+                focusNext.current = "photograph";
+              }} />
           ) : (
             <div className="space-y-2">
               {phone && (
-                <button type="button" className={BUTTON} onClick={() => setCamera({ replace: null })}>
+                <button ref={photographButton} type="button" className={BUTTON} onClick={() => setCamera({ replace: null })}>
                   {UPLOAD_TEXT.photograph}<span className="sr-only"> for {label}</span>
                 </button>
               )}
@@ -540,7 +607,7 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
                 className={`rounded-lg border-2 border-dashed p-4 text-center ${dragOver ? "border-blue-500 bg-blue-50" : "border-slate-300"}`}>
                 <p className="font-semibold text-slate-800">{UPLOAD_TEXT.dropZone}</p>
                 {!phone && <p className="text-sm text-slate-600">{UPLOAD_TEXT.dropHint}</p>}
-                <label className={`${QUIET} mt-2 inline-block cursor-pointer`}>
+                <label className={`${QUIET} ${FOCUS_WITHIN} mt-2 inline-block cursor-pointer`}>
                   {UPLOAD_TEXT.chooseFiles}<span className="sr-only"> for {label}</span>
                   <input type="file" multiple accept={ACCEPT} className="sr-only"
                     onChange={(e) => {
@@ -636,6 +703,12 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
       )}
 
       {notice && <p role="alert" className="text-sm text-red-700">{notice}</p>}
+      {loadFailed && (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-red-700">
+          <span>{UPLOAD_TEXT.loadFailure}</span>
+          <button type="button" className={SMALL} onClick={() => void load()}>{UPLOAD_TEXT.tryAgain}</button>
+        </div>
+      )}
     </div>
   );
 }

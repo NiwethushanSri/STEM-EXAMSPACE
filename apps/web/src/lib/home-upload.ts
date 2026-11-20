@@ -166,6 +166,84 @@ export function fileProblem(kind: UploadKind, bytes: number): "file_too_large" |
   return bytes > (kind === "home_pdf" ? MAX_PDF_BYTES : MAX_PHOTO_BYTES) ? "file_too_large" : null;
 }
 
+/** What home_submission_submit answers. */
+export type SubmitResult = { submission_id: string; seq: number; state: string; late: boolean; submitted_at: string | null };
+
+/**
+ * The status to show once home_submission_submit has answered: the submission it names (checking, its number) in
+ * place of the earlier one, nothing left of the earlier check, and no draft. The earlier "Received" and its receipt
+ * cannot show while the screen waits for the server's next status.
+ */
+export function afterSubmit(status: HomeUploadStatus, result: SubmitResult): HomeUploadStatus {
+  return {
+    ...status,
+    submission: {
+      id: result.submission_id,
+      seq: result.seq,
+      state: result.state,
+      late: result.late,
+      submitted_at: result.submitted_at,
+      checked_at: null,
+      replaces_all: status.draft?.id === result.submission_id ? status.draft.replaces_all : true,
+    },
+    pages: [],
+    missing: [],
+    retake: [],
+    unplaced: [],
+    failed: [],
+    blank: [],
+    draft: null,
+  };
+}
+
+/** A status older than the submission this screen handed in (a reply to a request sent before the submit). */
+export function isStale(status: HomeUploadStatus, submittedSeq: number | null): boolean {
+  return submittedSeq !== null && (status.submission?.seq ?? 0) < submittedSeq;
+}
+
+/** Which parts of the upload area show: the editor (first upload, or replacing, while uploads are open) or the
+ * status; the receipt only for a submission the server says is received. */
+export function uploadView(status: HomeUploadStatus, opts: { canUpload: boolean; editing: boolean }): { editor: boolean; receipt: boolean } {
+  const editor = opts.canUpload && (opts.editing || !status.submission);
+  return { editor, receipt: !editor && status.submission?.state === "received" };
+}
+
+export type StoreSteps = {
+  /** Makes the upload row (script_upload_begin); throws an Error named by the failure code. */
+  begin: () => Promise<{ uploadId: string; path: string }>;
+  /** Sends the file to that path (resumable). */
+  upload: (path: string) => Promise<void>;
+  /** script_upload_stored's answer. */
+  stored: (uploadId: string) => Promise<{ ok: boolean; code?: string }>;
+};
+
+/**
+ * Puts one file in storage and has it accepted. A new file is begun, uploaded and stored. A file whose upload row
+ * exists (a retry) is asked about first: when its upload went through but the answer to the stored call was lost,
+ * that call now succeeds and nothing is sent again (storage would refuse it: no overwrite); the file is sent again
+ * only when storage does not have it (not_found). `onBegun` returning false (the file was deleted meanwhile) stops
+ * after the row is made, answering null. Throws an Error named by the failure code.
+ */
+export async function storeFile(
+  known: { uploadId: string | null; path: string | null },
+  steps: StoreSteps,
+  onBegun: (uploadId: string, path: string) => boolean = () => true,
+): Promise<{ uploadId: string; path: string } | null> {
+  let { uploadId, path } = known;
+  if (uploadId && path) {
+    const again = await steps.stored(uploadId);
+    if (again.ok) return { uploadId, path };
+    if (again.code !== "not_found") throw new Error(again.code ?? "internal");
+  } else {
+    ({ uploadId, path } = await steps.begin());
+    if (!onBegun(uploadId, path)) return null;
+  }
+  await steps.upload(path);
+  const r = await steps.stored(uploadId);
+  if (!r.ok) throw new Error(r.code ?? "internal");
+  return { uploadId, path };
+}
+
 /** Submit is offered once there is a file and every file is uploaded. */
 export function canSubmit(files: { state: string }[]): boolean {
   return files.length > 0 && files.every((f) => f.state === "stored");

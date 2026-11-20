@@ -11,6 +11,9 @@ export type ResumableOptions = {
   path: string;
   /** The signed-in user's access token (the anon key alone may add nothing). */
   accessToken: string;
+  /** Reads the session's current token before every request (an upload can outlive a token); `accessToken` is
+   * used when it gives none. */
+  getAccessToken?: () => Promise<string | null | undefined>;
   /** The content type declared for the upload row (a HEIC photo often has none in the browser). */
   contentType?: string;
   onProgress?: (sent: number, total: number) => void;
@@ -21,7 +24,8 @@ export type ResumableOptions = {
  * chunks, never overwriting (`x-upsert: false`). A lost connection is retried from where it stopped; an upload
  * started again for the same file and path (after it failed, or a reload with the file chosen again) resumes from
  * the fingerprint tus keeps in the browser, so nothing is sent twice. The fingerprint includes the path, so a
- * file chosen again for a new upload row never continues an old one. Resolves once the whole file is stored.
+ * file chosen again for a new upload row never continues an old one. Every request carries the session's current
+ * token. Resolves once the whole file is stored.
  */
 export function uploadResumable(file: File | Blob, opts: ResumableOptions): Promise<void> {
   const base = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
@@ -40,6 +44,10 @@ export function uploadResumable(file: File | Blob, opts: ResumableOptions): Prom
       removeFingerprintOnSuccess: true,
       chunkSize: CHUNK_SIZE,
       metadata: { bucketName: opts.bucket, objectName: opts.path, contentType, cacheControl: "3600" },
+      onBeforeRequest: async (req) => {
+        const fresh = opts.getAccessToken ? await opts.getAccessToken().catch(() => null) : null;
+        req.setHeader("authorization", `Bearer ${fresh || opts.accessToken}`);
+      },
       fingerprint: async (f: File) =>
         ["stem-upload", opts.bucket, opts.path, f.size, (f as Partial<File>).lastModified ?? 0].join("|"),
       onProgress: (sent, total) => opts.onProgress?.(sent, total),

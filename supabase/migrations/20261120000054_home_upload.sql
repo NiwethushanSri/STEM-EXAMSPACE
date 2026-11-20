@@ -12,8 +12,10 @@
 -- only for direct database sessions (paper_clock); an API call always uses the database clock. Confirming blank
 -- pages, placing a page and "Send as it is" describe what was already handed in, so they have no time rule.
 --
--- Discarded draft files were never handed in: the processing server removes their objects an hour after the discard
--- (script_discarded_take, script_upload_purged). A file that was submitted is never deleted.
+-- Files a family never handed in are removed by the processing server (script_discarded_take, script_upload_purged):
+-- a file discarded from a draft an hour after the discard; a file still in a draft, or left pending (its upload
+-- refused or never finished), a day after the booking's last chance to hand in (finish + 48 hours). A file that was
+-- submitted is never deleted.
 --
 -- Lock order (as 052): upload, booking (advisory lock), home submission, script. Family functions that change a
 -- draft read the upload without a lock, then take the booking, the submission and only then the upload; the
@@ -846,10 +848,31 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- Discarded draft files, for the processing server (service role): up to p_limit (1 to 1000) discarded more than an
--- hour ago and not yet purged, oldest first, as [{id, storage_path}]; and marking them purged once their objects are
--- deleted. Only discarded uploads are ever listed or marked; they were never handed in.
+-- Files a family never handed in, for the processing server (service role) to delete. A home upload qualifies at
+-- p_now when it is discarded (an hour after the discard), or, from a day after the booking's last chance to hand in
+-- (finish + 48 hours), when it is pending (its upload refused by script_upload_stored, or never finished) or stored in
+-- a submission that is still a draft. A file that was submitted (queued and after) never qualifies (internal).
 -- ---------------------------------------------------------------------------------------------
+create function public.script_upload_never_handed_in(p_upload uuid, p_now timestamptz)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.script_uploads u
+    join public.home_submissions s on s.id = u.submission_id
+    join public.bookings b on b.id = s.booking_id
+    join public.exams e on e.id = b.exam_id
+    where u.id = p_upload
+      and ((u.state = 'discarded' and u.discarded_at < p_now - interval '1 hour')
+           or ((u.state = 'pending' or (u.state = 'stored' and s.state = 'draft'))
+               and p_now >= e.starts_at + e.duration_minutes * interval '1 minute' + interval '48 hours')))
+$$;
+
+-- Up to p_limit (1 to 1000) of those files not yet purged, oldest first, as [{id, storage_path}].
 create function public.script_discarded_take(p_limit int, p_now timestamptz default null)
 returns jsonb
 language sql
@@ -857,25 +880,29 @@ stable
 security definer
 set search_path = ''
 as $$
-  select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'storage_path', t.storage_path) order by t.discarded_at, t.id), '[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'storage_path', t.storage_path) order by t.at, t.id), '[]'::jsonb)
   from (
-    select u.id, u.storage_path, u.discarded_at
+    select u.id, u.storage_path, coalesce(u.discarded_at, u.created_at) as at
     from public.script_uploads u
-    where u.state = 'discarded' and u.purged_at is null
-      and u.discarded_at < public.paper_clock(p_now) - interval '1 hour'
-    order by u.discarded_at, u.id
+    where u.purged_at is null and u.submission_id is not null and u.state in ('discarded', 'pending', 'stored')
+      and public.script_upload_never_handed_in(u.id, public.paper_clock(p_now))
+    order by coalesce(u.discarded_at, u.created_at), u.id
     limit least(greatest(coalesce(p_limit, 100), 1), 1000)
   ) t
 $$;
 
-create function public.script_upload_purged(p_ids uuid[])
+-- Marks those files purged once their objects are deleted: each becomes discarded (if it was not) with purged_at.
+-- An id that does not qualify at p_now is left as it is.
+create function public.script_upload_purged(p_ids uuid[], p_now timestamptz default null)
 returns void
 language sql
 security definer
 set search_path = ''
 as $$
-  update public.script_uploads set purged_at = now()
-  where id = any (coalesce(p_ids, '{}')) and state = 'discarded' and purged_at is null
+  update public.script_uploads u
+  set purged_at = now(), state = 'discarded', discarded_at = coalesce(u.discarded_at, now())
+  where u.id = any (coalesce(p_ids, '{}')) and u.purged_at is null
+    and public.script_upload_never_handed_in(u.id, public.paper_clock(p_now))
 $$;
 
 -- ---------------------------------------------------------------------------------------------
@@ -912,6 +939,7 @@ grant execute on function public.home_page_place(uuid, int) to authenticated;
 grant execute on function public.home_page_send_as_is(uuid) to authenticated;
 
 revoke execute on function public.script_discarded_take(int, timestamptz) from public, anon, authenticated;
-revoke execute on function public.script_upload_purged(uuid[]) from public, anon, authenticated;
+revoke execute on function public.script_upload_purged(uuid[], timestamptz) from public, anon, authenticated;
+revoke execute on function public.script_upload_never_handed_in(uuid, timestamptz) from public, anon, authenticated, service_role;
 grant execute on function public.script_discarded_take(int, timestamptz) to service_role;
-grant execute on function public.script_upload_purged(uuid[]) to service_role;
+grant execute on function public.script_upload_purged(uuid[], timestamptz) to service_role;

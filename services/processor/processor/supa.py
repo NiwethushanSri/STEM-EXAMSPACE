@@ -60,8 +60,9 @@ class Client:
                         {"p_job": job_id, "p_worker": worker, "p_attempt": attempt, "p_ok": ok, "p_error": error})
 
     def discarded_take(self, limit: int) -> list[dict]:
-        """Up to `limit` uploads a family discarded from a draft more than an hour ago and not yet purged, as
-        [{id, storage_path}] (script_discarded_take). They were never handed in."""
+        """Up to `limit` uploads a family never handed in and not yet purged, as [{id, storage_path}]
+        (script_discarded_take): discarded from a draft over an hour ago, or still in a draft or pending once the
+        booking's late window has been closed a day."""
         return self.rpc("script_discarded_take", {"p_limit": limit}) or []
 
     def mark_purged(self, upload_ids: list[str]) -> None:

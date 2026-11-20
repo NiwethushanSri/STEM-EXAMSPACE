@@ -1,5 +1,6 @@
 """The processing server: claim a job, prepare its upload, store the pictures, record the pages, finish the job.
-Between jobs, at most once a minute, it also deletes the files families discarded from drafts (never handed in).
+Between jobs, at most once a minute, it also deletes the files families never handed in (discarded from a draft, or
+left in a draft or unfinished after the booking's late window).
 
 Run with `python -m processor.main` (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the environment). It only
 calls out to Supabase and listens to nothing. Logs carry job and upload ids, the attempt, page counts, timings
@@ -188,15 +189,16 @@ def _abandon(client: Any, worker_id: str, claimed: Any, exc: Exception) -> None:
 
 
 def cleanup(client: Any) -> int:
-    """Deletes from script-uploads the objects of files a family discarded from a draft more than an hour ago (the
-    database lists only those: a file that was handed in is never listed), then marks them purged. Nothing is
-    marked when the deletion fails, so they are listed again next time. Returns how many were deleted."""
+    """Deletes from script-uploads the objects of files a family never handed in, as script_discarded_take lists
+    them (discarded from a draft over an hour ago; still in a draft, or pending, from finish + 48 hours; a file that
+    was handed in is never listed), then marks them purged. Nothing is marked when the deletion fails, so they are
+    listed again next time. Returns how many were deleted."""
     items = client.discarded_take(CLEANUP_BATCH)
     if not items:
         return 0
     client.remove(UPLOADS, [item["storage_path"] for item in items])
     client.mark_purged([item["id"] for item in items])
-    log.info("cleanup: %d discarded files deleted", len(items))
+    log.info("cleanup: %d files never handed in deleted", len(items))
     return len(items)
 
 

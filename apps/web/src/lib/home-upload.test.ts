@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_FILES,
   UPLOAD_TEXT,
+  afterSubmit,
   attentionItems,
   blankPrompt,
   canSubmit,
   fileProblem,
+  isStale,
   retakePrompt,
   statusWord,
+  storeFile,
   uploadFileType,
+  uploadView,
   type HomeUploadStatus,
 } from "./home-upload";
 
@@ -119,5 +123,96 @@ describe("files", () => {
     expect(canSubmit([{ state: "stored" }, { state: "uploading" }])).toBe(false);
     expect(canSubmit([{ state: "stored" }, { state: "failed" }])).toBe(false);
     expect(canSubmit([{ state: "waiting" }])).toBe(false);
+  });
+});
+
+describe("after a replacement submit", () => {
+  const received = status({
+    submission: sub("received"),
+    script: { number: "S-X-0001", state: "verified", pages: [2, 3, 4] },
+    blank: [5],
+    draft: { id: "d-2", seq: 2, replaces_all: false, uploads: [] },
+  });
+  const result = { submission_id: "s-2", seq: 2, state: "checking", late: false, submitted_at: "2031-06-07T13:00:00Z" };
+
+  it("shows the server's answer to the submit, never the earlier Received", () => {
+    const next = afterSubmit(received, result);
+    expect(next.submission).toMatchObject({ id: "s-2", seq: 2, state: "checking", late: false, submitted_at: "2031-06-07T13:00:00Z" });
+    expect(statusWord(next.submission)).toBe("Checking your pages");
+    expect(uploadView(next, { canUpload: true, editing: false })).toEqual({ editor: false, receipt: false });
+    expect(next.draft).toBeNull();
+    expect([next.missing, next.retake, next.unplaced, next.failed, next.pages]).toEqual([[], [], [], [], []]);
+    // The view before the submit did show the receipt.
+    expect(uploadView(received, { canUpload: true, editing: false })).toEqual({ editor: false, receipt: true });
+  });
+
+  it("ignores a status older than the submission handed in (a reply to a request sent before the submit)", () => {
+    expect(isStale(received, 2)).toBe(true);
+    expect(isStale(afterSubmit(received, result), 2)).toBe(false);
+    expect(isStale(status({ submission: { ...sub("received")!, seq: 3 } }), 2)).toBe(false);
+    expect(isStale(status(), 2)).toBe(true);
+    expect(isStale(received, null)).toBe(false);
+  });
+
+  it("shows the editor for a first upload or while replacing, only when uploads are open", () => {
+    expect(uploadView(status(), { canUpload: true, editing: false })).toEqual({ editor: true, receipt: false });
+    expect(uploadView(status(), { canUpload: false, editing: false })).toEqual({ editor: false, receipt: false });
+    expect(uploadView(received, { canUpload: true, editing: true })).toEqual({ editor: true, receipt: false });
+  });
+});
+
+describe("storeFile", () => {
+  /** Fake steps that record what happened; `stored` answers in turn from `answers`. */
+  function steps(answers: { ok: boolean; code?: string }[]) {
+    const log: string[] = [];
+    return {
+      log,
+      begin: async () => {
+        log.push("begin");
+        return { uploadId: "u-new", path: "home/b/u-new.jpg" };
+      },
+      upload: async (path: string) => {
+        log.push("upload " + path);
+      },
+      stored: async (id: string) => {
+        log.push("stored " + id);
+        return answers.shift() ?? { ok: true };
+      },
+    };
+  }
+
+  it("begins, uploads and stores a new file", async () => {
+    const s = steps([{ ok: true }]);
+    expect(await storeFile({ uploadId: null, path: null }, s)).toEqual({ uploadId: "u-new", path: "home/b/u-new.jpg" });
+    expect(s.log).toEqual(["begin", "upload home/b/u-new.jpg", "stored u-new"]);
+  });
+
+  it("a retry after the upload went through only asks again (no second upload, which storage would refuse)", async () => {
+    const s = steps([{ ok: true }]);
+    await storeFile({ uploadId: "u-1", path: "home/b/u-1.jpg" }, s);
+    expect(s.log).toEqual(["stored u-1"]);
+  });
+
+  it("a retry uploads again only when storage does not have the file", async () => {
+    const s = steps([{ ok: false, code: "not_found" }, { ok: true }]);
+    await storeFile({ uploadId: "u-1", path: "home/b/u-1.jpg" }, s);
+    expect(s.log).toEqual(["stored u-1", "upload home/b/u-1.jpg", "stored u-1"]);
+  });
+
+  it("a file storage has with the wrong size is not sent again", async () => {
+    const s = steps([{ ok: false, code: "invalid_input" }]);
+    await expect(storeFile({ uploadId: "u-1", path: "home/b/u-1.jpg" }, s)).rejects.toThrow("invalid_input");
+    expect(s.log).toEqual(["stored u-1"]);
+  });
+
+  it("stops after begin when the file was deleted meanwhile", async () => {
+    const s = steps([]);
+    expect(await storeFile({ uploadId: null, path: null }, s, () => false)).toBeNull();
+    expect(s.log).toEqual(["begin"]);
+  });
+
+  it("a refused stored call fails with its code", async () => {
+    const s = steps([{ ok: false, code: "invalid_input" }]);
+    await expect(storeFile({ uploadId: null, path: null }, s)).rejects.toThrow("invalid_input");
   });
 });

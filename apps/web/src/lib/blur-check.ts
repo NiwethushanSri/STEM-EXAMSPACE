@@ -49,6 +49,9 @@ export function isBlurred(score: number): boolean {
   return score < BLURRED_BELOW;
 }
 
+/** One canvas for every measure (a phone keeps one 1000 px picture in memory, not one per photo). */
+let measuring: HTMLCanvasElement | null = null;
+
 /**
  * The blur score of part of a picture (by default all of it) in the browser: drawn MEASURE_WIDTH px wide on a
  * canvas, then measured. Null when the browser cannot draw it (a HEIC photo outside Safari, or no canvas).
@@ -60,7 +63,8 @@ export function measureBlur(
   crop: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: sourceWidth, h: sourceHeight },
 ): number | null {
   if (typeof document === "undefined" || crop.w <= 0 || crop.h <= 0) return null;
-  const canvas = document.createElement("canvas");
+  measuring ??= document.createElement("canvas");
+  const canvas = measuring;
   canvas.width = MEASURE_WIDTH;
   canvas.height = Math.max(1, Math.round((crop.h * MEASURE_WIDTH) / crop.w));
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -72,20 +76,51 @@ export function measureBlur(
     return blurScore(ctx.getImageData(0, 0, canvas.width, canvas.height));
   } catch {
     return null;
+  } finally {
+    canvas.width = 1; // lets the picture go
+    canvas.height = 1;
+  }
+}
+
+/** A photo file decoded straight to MEASURE_WIDTH px wide where the browser can (no full-size picture in memory),
+ * else at full size. Null when the browser cannot decode it. */
+async function decodeSmall(file: Blob): Promise<ImageBitmap | null> {
+  if (typeof createImageBitmap !== "function") return null;
+  try {
+    return await createImageBitmap(file, { resizeWidth: MEASURE_WIDTH, resizeQuality: "medium" });
+  } catch {
+    try {
+      return await createImageBitmap(file);
+    } catch {
+      return null;
+    }
   }
 }
 
 /** The blur score of a photo file, or null when the browser cannot decode it. */
 export async function measureFileBlur(file: Blob): Promise<number | null> {
-  if (typeof createImageBitmap !== "function") return null;
+  return (await inspectPhoto(file, 0)).score;
+}
+
+/**
+ * Looks at a photo once, decoded small: its blur score and a small JPEG thumbnail `thumbWidth` px wide (none for 0),
+ * each null when the browser cannot decode the photo. Callers run these one at a time.
+ */
+export async function inspectPhoto(file: Blob, thumbWidth = 240): Promise<{ score: number | null; thumbnail: Blob | null }> {
+  const bitmap = await decodeSmall(file);
+  if (!bitmap) return { score: null, thumbnail: null };
   try {
-    const bitmap = await createImageBitmap(file);
-    try {
-      return measureBlur(bitmap, bitmap.width, bitmap.height);
-    } finally {
-      bitmap.close();
+    const score = measureBlur(bitmap, bitmap.width, bitmap.height);
+    let thumbnail: Blob | null = null;
+    if (thumbWidth > 0 && bitmap.width > 0) {
+      const canvas = document.createElement("canvas");
+      canvas.width = thumbWidth;
+      canvas.height = Math.max(1, Math.round((bitmap.height * thumbWidth) / bitmap.width));
+      canvas.getContext("2d")?.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      thumbnail = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.7));
     }
-  } catch {
-    return null;
+    return { score, thumbnail };
+  } finally {
+    bitmap.close();
   }
 }

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(128);
+select plan(140);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -8,13 +8,13 @@ select tests.assert_no_owner();
 -- until 12:30 UTC, late until 2031-06-08 10:30 UTC. Paper: 4 pages (1 cover, 2-4 answer); every copy has 6 pages
 -- (2 spare). Family 1: parent p1 with students s1 (home b1) and s4 (centre b4). s2 has no parent (home b2). Family
 -- 2: parent p2 with student s3 (home b3). s5: unpaid home booking b5. s6 (b6): the 60-file limit. s7 (b7): "Send as
--- it is".
+-- it is". s8 (b8): submitting at the end of the late window. s9 (b9): a booking whose cancellation is requested.
 -- ---------------------------------------------------------------------------------------------
 create temp table c (name text primary key, id uuid not null);
 grant select on c to public;
 insert into c values ('admin', tests.create_user('admin', 'active')), ('p1', tests.create_user('parent', 'active')),
   ('p2', tests.create_user('parent', 'active'));
-insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 7) i;
+insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 9) i;
 create temp table kv (name text primary key, id uuid);
 grant all on kv to public;
 create temp table res (name text primary key, j jsonb);
@@ -42,7 +42,7 @@ update public.paper_page_roles set role = (case page when 1 then 'cover' else 'a
 where paper_id = pg_temp.k('pv');
 
 insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
-select pg_temp.k('e'), c.id, c.id, (case when c.name = 's5' then 'awaiting_payment' else 'paid' end)::public.booking_status, 0,
+select pg_temp.k('e'), c.id, c.id, (case c.name when 's5' then 'awaiting_payment' when 's9' then 'cancel_requested' else 'paid' end)::public.booking_status, 0,
   (case when c.name = 's4' then 'centre' else 'home' end)::public.sitting_mode, case when c.name = 's4' then pg_temp.k('ce') end
 from c where c.name like 's%';
 insert into kv select 'b' || right(s.name, 1), b.id from public.bookings b join c s on s.id = b.student_id
@@ -389,6 +389,23 @@ select is((select count(*)::text || '|' || max(e.details ->> 'from') || '|' || m
   '1|family|open', 'one poor_quality exception for staff, from the family');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('s7'));
 select is(pg_temp.status('b7') -> 'retake', '[]'::jsonb, 'nothing left to retake');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('p2'));
+select is(public.home_page_send_as_is(pg_temp.k('pg71')) ->> 'code', 'forbidden', 'another family cannot send a page as it is');
+
+-- ----- submitting at the end of the late window (b8) -----
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('s8'));
+select pg_temp.open('d8', 'b8', true, '2031-06-07 11:00:00Z');
+select pg_temp.bgn('u81', 'd8', 'home_photo', 'image/jpeg', 1000, '2031-06-07 11:00:00Z');
+select pg_temp.put('u81', 1000, 'image/jpeg');
+select pg_temp.stored('u81');
+select is(pg_temp.submit('d8', '2031-06-08 10:30:00Z') ->> 'code', 'uploads_closed', 'submitting at finish + 24 h: refused');
+select is((select format('%s|%s', j ->> 'state', j ->> 'late') from (select pg_temp.submit('d8', '2031-06-08 10:29:59Z') j) x),
+  'checking|true', 'at finish + 24 h - 1 s: accepted, late');
+
+-- ----- a booking whose cancellation is requested may still hand in (b9) -----
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('s9'));
+select is(pg_temp.open('d9', 'b9', true, '2031-06-07 11:00:00Z') ->> 'ok', 'true', 'a cancel-requested booking opens a submission');
+select is(pg_temp.bgn('u91', 'd9', 'home_photo', 'image/jpeg', 1000, '2031-06-07 11:00:00Z') ->> 'ok', 'true', 'and adds a file');
 
 -- ----- sixty_one_files_refused -----
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('s6'));
@@ -398,6 +415,10 @@ select is((select count(*)::int from generate_series(1, 60) i where pg_temp.bgn(
 select is(pg_temp.bgn(null, 'd6', 'home_photo', 'image/jpeg', 1000, '2031-06-07 11:00:00Z') ->> 'code', 'too_many_files', 'the 61st is refused');
 select pg_temp.discard('f7');
 select is(pg_temp.bgn(null, 'd6', 'home_photo', 'image/jpeg', 1000, '2031-06-07 11:00:00Z') ->> 'ok', 'true', 'after one is discarded another fits');
+select pg_temp.put('f8', 1000, 'image/jpeg');
+select pg_temp.put('f9', 999, 'image/jpeg');
+select is(array[pg_temp.stored('f8') ->> 'ok', pg_temp.stored('f9') ->> 'code'], array['true', 'invalid_input'],
+  'one draft file stored, one left pending after a refused stored');
 
 -- ----- the draft in the status -----
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('p1'));
@@ -420,15 +441,45 @@ select ok(exists (select 1 from jsonb_array_elements(public.script_discarded_tak
   'after an hour it is listed with its path');
 reset role;
 select is((select count(*)::int from jsonb_array_elements(public.script_discarded_take(1000, now() + interval '2 hours')) x
-           join public.script_uploads u on u.id = (x ->> 'id')::uuid where u.state <> 'discarded'), 0, 'only discarded files are ever listed');
+           join public.script_uploads u on u.id = (x ->> 'id')::uuid where u.state <> 'discarded'), 0,
+  'while the booking can still hand in, only discarded files are listed');
 set local role service_role;
-select public.script_upload_purged(array[pg_temp.k('u22'), pg_temp.k('u21')]);
+select public.script_upload_purged(array[pg_temp.k('u22'), pg_temp.k('u21')], now() + interval '2 hours');
 select ok(not exists (select 1 from jsonb_array_elements(public.script_discarded_take(1000, now() + interval '2 hours')) x
                       where (x ->> 'id')::uuid = pg_temp.k('u22')), 'once purged it is not listed again');
 reset role;
 select is((select format('%s|%s', (select purged_at is not null from public.script_uploads where id = pg_temp.k('u22')),
                          (select purged_at is null from public.script_uploads where id = pg_temp.k('u21')))),
   't|t', 'purged marks discarded files only, never a submitted one');
+
+-- ----- files never handed in are removed a day after the last chance to hand in (finish + 48 h) -----
+create function pg_temp.taken(p_now text) returns uuid[] language sql as $$
+  select coalesce(array_agg((x ->> 'id')::uuid), '{}') from jsonb_array_elements(public.script_discarded_take(1000, p_now::timestamptz)) x $$;
+grant execute on function pg_temp.taken(text) to public;
+set local role service_role;
+select ok(not (pg_temp.taken('2031-06-09 10:29:59Z') && array[pg_temp.k('v1'), pg_temp.k('f8'), pg_temp.k('f9')]),
+  'finish + 48 h - 1 s: draft files are kept');
+select ok(pg_temp.taken('2031-06-09 10:30:00Z') @> array[pg_temp.k('v1'), pg_temp.k('f8'), pg_temp.k('f9'), pg_temp.k('u91')],
+  'finish + 48 h: a pending draft file, a stored one never submitted and one left pending after a refused stored are listed');
+select ok(not (pg_temp.taken('2040-01-01 00:00:00Z') && array[pg_temp.k('u1'), pg_temp.k('u2'), pg_temp.k('u21'), pg_temp.k('u23'),
+  pg_temp.k('u31'), pg_temp.k('u71'), pg_temp.k('u81')]), 'a submitted file is never listed, however late');
+reset role;
+select is((select count(*)::int from unnest(pg_temp.taken('2040-01-01 00:00:00Z')) t(id) join public.script_uploads u on u.id = t.id
+           where u.state not in ('discarded', 'pending', 'stored')
+              or (u.state = 'stored' and (select s.state from public.home_submissions s where s.id = u.submission_id) <> 'draft')), 0,
+  'everything listed was discarded, never finished, or still in a draft');
+set local role service_role;
+select public.script_upload_purged(array[pg_temp.k('f8')], '2031-06-09 10:29:59Z');
+reset role;
+select is((select state::text || '|' || (purged_at is null) from public.script_uploads where id = pg_temp.k('f8')), 'stored|true',
+  'a draft file cannot be marked purged before finish + 48 h');
+set local role service_role;
+select public.script_upload_purged(array[pg_temp.k('v1'), pg_temp.k('f8'), pg_temp.k('f9'), pg_temp.k('u81')], '2031-06-09 10:30:00Z');
+reset role;
+select is((select string_agg(k.name || ':' || u.state || ':' || (u.purged_at is not null), ',' order by k.name)
+           from public.script_uploads u join kv k on k.id = u.id where k.name in ('v1', 'f8', 'f9', 'u81')),
+  'f8:discarded:true,f9:discarded:true,u81:queued:false,v1:discarded:true',
+  'purged files never handed in become discarded; a submitted file is untouched');
 
 select * from finish();
 rollback;

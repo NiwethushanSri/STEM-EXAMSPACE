@@ -101,6 +101,34 @@ describe("uploadResumable", () => {
     expect((tus.made[0].options.metadata as Record<string, string>).contentType).toBe("image/heic");
   });
 
+  it("sets the token on every request from a fresh session (a long upload outlives the first token)", async () => {
+    let token = "first";
+    await uploadResumable(file(), {
+      bucket: "script-uploads",
+      path: "home/b-1/u-1.jpg",
+      accessToken: "first",
+      getAccessToken: async () => token,
+    });
+    const before = tus.made[0].options.onBeforeRequest as (req: { setHeader: (k: string, v: string) => void }) => Promise<void>;
+    const headers: Record<string, string> = {};
+    const req = { setHeader: (k: string, v: string) => (headers[k] = v) };
+    token = "refreshed";
+    await before(req);
+    expect(headers.authorization).toBe("Bearer refreshed");
+    // No session to read: the token given at the start is used.
+    token = "";
+    await before(req);
+    expect(headers.authorization).toBe("Bearer first");
+  });
+
+  it("uses the given token on every request without a session to read", async () => {
+    await uploadResumable(file(), { bucket: "script-uploads", path: "home/b-1/u-1.jpg", accessToken: "only" });
+    const before = tus.made[0].options.onBeforeRequest as (req: { setHeader: (k: string, v: string) => void }) => Promise<void>;
+    const headers: Record<string, string> = {};
+    await before({ setHeader: (k, v) => (headers[k] = v) });
+    expect(headers.authorization).toBe("Bearer only");
+  });
+
   it("rejects when the upload fails for good", async () => {
     tus.failWith = new Error("tus: failed to upload chunk");
     await expect(uploadResumable(file(), { bucket: "script-uploads", path: "home/b-1/u-1.jpg", accessToken: "t" })).rejects.toThrow(

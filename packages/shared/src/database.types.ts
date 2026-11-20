@@ -1291,11 +1291,14 @@ isOneToOne: false
 "script_upload_discard":
 { Args: { "p_upload": string }; Returns: Json
                            },
+"script_upload_never_handed_in":
+{ Args: { "p_now": string,"p_upload": string }; Returns: boolean
+                           },
 "script_upload_path_allowed":
 { Args: { "p_add": boolean,"p_path": string }; Returns: boolean
                            },
 "script_upload_purged":
-{ Args: { "p_ids": (string)[] }; Returns: undefined
+{ Args: { "p_ids": (string)[],"p_now"?: string }; Returns: undefined
                            },
 "script_upload_reorder":
 { Args: { "p_submission": string,"p_uploads": (string)[] }; Returns: Json
