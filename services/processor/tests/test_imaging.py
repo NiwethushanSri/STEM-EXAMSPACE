@@ -142,7 +142,7 @@ def test_marking_image_blanks_top_band_and_areas():
     qx0, qy0 = np.floor(read.corners.min(axis=0)).astype(int) - 2
     qx1, qy1 = np.ceil(read.corners.max(axis=0)).astype(int) + 2
 
-    out = imaging.marking_image(page, [area])
+    out = imaging.marking_image(page, [area], read)
 
     assert out.shape == page.shape
     for x, y in ((5, 5), (W // 2, 40), (W - 5, band - 1), (x0 + 3, y0 + 3), ((x0 + x1) // 2, (y0 + y1) // 2), (x1 - 1, y1 - 1)):
@@ -153,6 +153,41 @@ def test_marking_image_blanks_top_band_and_areas():
     assert np.array_equal(out[band + 1:y0 - 1], page[band + 1:y0 - 1])
     assert np.array_equal(out[y1 + 1:], page[y1 + 1:])
     assert page[:band].min() < 100  # the input is not changed
+
+
+def test_print_fit_on_a_copy_at_actual_size():
+    for i in range(5):
+        read = imaging.read_code(synth.render("copy-a.pdf", i))
+        fit = imaging.print_fit(read, (H, W, 3))
+        assert read.modules == 21
+        assert abs(fit.scale - 1.0) < 0.01 and fit.offset_mm < 0.5 and fit.expected
+    corners = imaging.printed_code_corners(21) * (W / imaging.PAGE_PT[0])
+    assert np.allclose(corners, read.corners, atol=2)  # 1A's qrLayout, in this picture's pixels
+
+
+def test_hidden_area_follows_scale():
+    page = synth.render("copy-a.pdf", 1)
+    region = (slice(int(0.1 * H), int(0.3 * H)), slice(int(0.05 * W), int(0.6 * W)))
+    ys, xs = np.nonzero(cv2.cvtColor(page, cv2.COLOR_RGB2GRAY)[region] < 140)  # "Question page 2"
+    y0, y1 = (ys.min() + region[0].start - 2) / H, (ys.max() + region[0].start + 3) / H
+    x0, x1 = (xs.min() + region[1].start - 2) / W, (xs.max() + region[1].start + 3) / W
+    area = Area(page=2, x=x0, y=y0, w=x1 - x0, h=y1 - y0)  # drawn tightly round the text at 100%
+
+    sheet = synth.printed(page, scale=0.93)  # printed "fit to page" at 93%: the text moves down and right
+    read = imaging.read_code(sheet)
+    fit = imaging.print_fit(read, sheet.shape)
+    assert abs(fit.scale - 0.93) < 0.01 and fit.expected
+    grey = cv2.cvtColor(sheet, cv2.COLOR_RGB2GRAY)
+    text = np.zeros_like(grey, bool)
+    text[region] = grey[region] < 140
+    outside = text.copy()
+    outside[math.floor(y0 * H):math.ceil(y1 * H), math.floor(x0 * W):math.ceil(x1 * W)] = False
+    assert outside.sum() > 500  # the area as a fraction of the picture alone would miss much of the text
+
+    out = imaging.marking_image(sheet, [area], read)
+
+    assert (out[text] == 255).all()
+    assert np.array_equal(out[-300:], sheet[-300:])  # the code band is untouched
 
 
 def test_password_pdf_raises_unreadable():

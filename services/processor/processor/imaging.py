@@ -43,6 +43,10 @@ FIND_SIDE = 800  # px; the page is looked for on a copy whose longer side is thi
 PAGE_MIN_AREA = 0.15  # the page covers at least this share of the photo
 PAGE_FILL = 0.9  # the four-cornered shape covers at least this share of the bright shape's area
 PAGE_ASPECT = (1.1, 2.0)  # long side / short side of the found page (A4 is 1.41)
+CANNY = (15, 45)  # edge thresholds on the blurred copy: a white page on a near-white table still shows
+EDGE_DILATE = 2  # px on the copy: edges are thickened this much to close gaps, then the outline moved back in
+EDGE_STEP = 0.01  # share of the copy's longer side: how far inside and outside each side is sampled
+EDGE_CONTRAST = 8  # grey levels the paper must be brighter than what lies outside, along every side
 
 # Straightening by the code's corners.
 REFINE_SCALE = 3.0  # the code is read again this much enlarged for finer corners
@@ -56,6 +60,20 @@ BLANK_INK_FRACTION = 0.0002  # a page with less ink than this share of its area 
 
 # A picture whose height/width is within this share of A4's is resized to A4; others are letterboxed.
 A4_RATIO_TOLERANCE = 0.03
+
+# The 1A print layout (supabase/functions/_shared/paper/stamp.ts: A4, TOP_BAND, SIDE, QR_SIZE, qrLayout),
+# in points measured from the copy page's top-left.
+PAGE_PT = (595.28, 841.89)
+TOP_BAND_PT = 34.0
+QR_PT = 52.0  # the symbol without its quiet zone
+QR_RIGHT_PT = 18.0  # SIDE: from the page's right edge to the quiet zone
+QR_BELOW_PT = 18.0  # CODE_TEXT_TOP: from the page's bottom edge to the quiet zone
+QR_QUIET_MODULES = 4
+
+# Checking where the copy was printed on the sheet, by its code (ruling R13).
+PRINT_SCALE_RANGE = (0.85, 1.05)  # printed size / actual size; "fit to page" prints at about 0.94 to 0.97
+MAX_CODE_OFFSET_MM = 15.0  # the code further than this from its printed place: the layout is unexpected
+PREDICTED_MARGIN_PT = 1.0  # band and areas placed by the code are painted this much larger all round
 
 
 class UnreadableFile(Exception):
@@ -78,11 +96,28 @@ class Area:
 @dataclass(frozen=True, eq=False)
 class CodeRead:
     """A 1A code read from a picture. `corners` (4 x 2, float32, x then y, in the picture's pixels) are the
-    symbol's own top-left, top-right, bottom-right and bottom-left corners, wherever they lie in the picture."""
+    symbol's own top-left, top-right, bottom-right and bottom-left corners, wherever they lie in the picture.
+    `modules` is the symbol's width in modules (21 for version 1), which sets the printed quiet zone."""
 
     code: str
     page: int
     corners: np.ndarray
+    modules: int = 21
+
+
+@dataclass(frozen=True, eq=False)
+class PrintFit:
+    """Where a copy page lies in a picture, judged by its code. `matrix` (2 x 3) maps copy-page points (pt,
+    from the page's top-left) into the picture's pixels. On a normalised page, `scale` is the printed size
+    over the actual size (1 = printed at 100%) and `offset_mm` how far the code sits from its printed place."""
+
+    matrix: np.ndarray
+    scale: float
+    offset_mm: float
+
+    @property
+    def expected(self) -> bool:
+        return PRINT_SCALE_RANGE[0] <= self.scale <= PRINT_SCALE_RANGE[1] and self.offset_mm <= MAX_CODE_OFFSET_MM
 
 
 @dataclass(frozen=True)
@@ -162,24 +197,77 @@ def encode_jpeg(img: np.ndarray, quality: int = 85) -> bytes:
 
 
 def find_page(img: np.ndarray) -> np.ndarray | None:
-    """The corners (4 x 2, float32) of the largest paper-like quadrilateral in a photo: a bright four-sided
-    shape on a darker background. Ordered clockwise from the top-left as seen in the photo, starting on a
-    short side, so warp_to_a4 gives a portrait page (upright or upside down; the code decides). None when
-    there is no such shape."""
+    """The corners (4 x 2, float32) of the largest paper-like quadrilateral in a photo. Candidates come from
+    two masks: bright regions (Otsu; a page on a dark table) and closed edges (Canny; a page on a light
+    table). A candidate counts only if every side is a real paper edge: brighter just inside than just
+    outside (sides on the photo's border excepted). Ordered clockwise from the top-left as seen in the
+    photo, starting on a short side, so warp_to_a4 gives a portrait page (upright or upside down; the code
+    decides). None when there is no such shape."""
     h, w = img.shape[:2]
     f = FIND_SIDE / max(h, w)
     small = cv2.resize(_grey(img), (max(1, round(w * f)), max(1, round(h * f))), interpolation=cv2.INTER_AREA)
     small = cv2.GaussianBlur(small, (5, 5), 0)
-    _, mask = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    for contour in sorted(contours, key=cv2.contourArea, reverse=True):
-        if cv2.contourArea(contour) < PAGE_MIN_AREA * mask.size:
-            break
-        quad = _quadrilateral(contour)
-        if quad is not None:
-            return _portrait_order(quad / f)
-    return None
+    _, bright = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    bright = cv2.morphologyEx(bright, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    edges = cv2.dilate(cv2.Canny(small, *CANNY), np.ones((3, 3), np.uint8), iterations=EDGE_DILATE)
+    best, best_area = None, 0.0
+    for mask, inset in ((bright, 0.0), (edges, float(EDGE_DILATE))):
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True):
+            if cv2.contourArea(contour) < PAGE_MIN_AREA * mask.size:
+                break
+            quad = _quadrilateral(contour)
+            if quad is not None and inset:  # the outline of the thickened edges lies outside the paper's edge
+                quad = _inset(quad, inset)
+            if quad is not None and _paper_edges(small, quad):
+                area = cv2.contourArea(quad)
+                if area > best_area:
+                    best, best_area = quad, area
+                break
+    return None if best is None else _portrait_order(best / f)
+
+
+def _inset(quad: np.ndarray, d: float) -> np.ndarray:
+    """The convex quadrilateral with every side moved `d` px inwards."""
+    centre = quad.mean(axis=0)
+    normals = []
+    for i in range(4):
+        a, b = quad[i], quad[(i + 1) % 4]
+        n = np.array([b[1] - a[1], a[0] - b[0]], np.float64)
+        n /= max(float(np.linalg.norm(n)), 1e-6)
+        normals.append(n if np.dot(n, centre - (a + b) / 2) > 0 else -n)
+    out = quad.astype(np.float64).copy()
+    for i in range(4):  # corner i joins side i - 1 and side i
+        n1, n2 = normals[i - 1], normals[i]
+        out[i] += d * (n1 + n2) / max(1.0 + float(np.dot(n1, n2)), 1e-6)
+    return out.astype(np.float32)
+
+
+def _paper_edges(grey: np.ndarray, quad: np.ndarray) -> bool:
+    """True when along every side of `quad` the picture is brighter just inside than just outside, by at
+    least EDGE_CONTRAST (median over the side). A side whose outside lies off the picture is not judged."""
+    h, w = grey.shape
+    step = EDGE_STEP * max(h, w)
+    centre = quad.mean(axis=0)
+    t = np.linspace(0.1, 0.9, 25)[:, None]
+    for i in range(4):
+        a, b = quad[i], quad[(i + 1) % 4]
+        along = b - a
+        normal = np.array([along[1], -along[0]], np.float64) / max(float(np.linalg.norm(along)), 1e-6)
+        if np.dot(normal, (a + b) / 2 - centre) < 0:
+            normal = -normal
+        points = a + along * t
+        inside, outside = points - normal * step, points + normal * step
+        keep = (outside[:, 0] >= 0) & (outside[:, 0] <= w - 1) & (outside[:, 1] >= 0) & (outside[:, 1] <= h - 1)
+        if keep.sum() < 5:
+            continue
+        ix = np.clip(inside[keep, 0].round().astype(int), 0, w - 1)
+        iy = np.clip(inside[keep, 1].round().astype(int), 0, h - 1)
+        ins = grey[iy, ix]
+        out = grey[outside[keep, 1].round().astype(int), outside[keep, 0].round().astype(int)]
+        if float(np.median(ins.astype(np.int16) - out.astype(np.int16))) < EDGE_CONTRAST:
+            return False
+    return True
 
 
 def _quadrilateral(contour: np.ndarray) -> np.ndarray | None:
@@ -247,16 +335,23 @@ def to_a4(img: np.ndarray) -> np.ndarray:
 # Reading the code and turning the page -------------------------------------------------------------------
 
 
-def _codes(part: np.ndarray, x0: int, y0: int, scale: float) -> Iterator[tuple[str, int, str, np.ndarray]]:
+def _codes(part: np.ndarray, x0: int, y0: int, scale: float) -> Iterator[tuple[str, int, str, np.ndarray, int]]:
     """Valid 1A codes in `part`, a piece of a picture cut at (x0, y0) and enlarged by `scale`, with the
-    corners in the picture's pixels."""
+    corners in the picture's pixels and the symbol's width in modules."""
     for found in zxingcpp.read_barcodes(np.ascontiguousarray(part), formats=zxingcpp.BarcodeFormat.QRCode):
         parsed = parse_payload(found.text)
         if parsed is None or not code_valid(parsed[0]):
             continue
         p = found.position
         corners = np.array([[pt.x, pt.y] for pt in (p.top_left, p.top_right, p.bottom_right, p.bottom_left)], np.float32)
-        yield parsed[0], parsed[1], found.text, corners / scale + np.array([x0, y0], np.float32)
+        yield parsed[0], parsed[1], found.text, corners / scale + np.array([x0, y0], np.float32), _modules(found)
+
+
+def _modules(found: zxingcpp.Barcode) -> int:
+    try:
+        return 17 + 4 * int(found.extra["Version"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return 21
 
 
 def read_code(img: np.ndarray) -> CodeRead | None:
@@ -272,8 +367,8 @@ def read_code(img: np.ndarray) -> CodeRead | None:
         lambda: (_enlarge(grey[h // 2:, w // 2:], 2.0), w // 2, h // 2, 2.0),
     )
     for cut in tries:
-        for code, page, text, corners in _codes(*cut()):
-            return CodeRead(code=code, page=page, corners=_refine(grey, text, corners))
+        for code, page, text, corners, modules in _codes(*cut()):
+            return CodeRead(code=code, page=page, corners=_refine(grey, text, corners), modules=modules)
     return None
 
 
@@ -287,7 +382,7 @@ def _refine(grey: np.ndarray, text: str, corners: np.ndarray) -> np.ndarray:
     pad = float((hi - lo).max()) * 0.5
     x0, y0 = max(0, int(lo[0] - pad)), max(0, int(lo[1] - pad))
     x1, y1 = min(w, int(hi[0] + pad) + 1), min(h, int(hi[1] + pad) + 1)
-    for _, _, again, finer in _codes(_enlarge(grey[y0:y1, x0:x1], REFINE_SCALE), x0, y0, REFINE_SCALE):
+    for _, _, again, finer, _ in _codes(_enlarge(grey[y0:y1, x0:x1], REFINE_SCALE), x0, y0, REFINE_SCALE):
         if again == text:
             return finer
     return corners
@@ -327,6 +422,54 @@ def upright(img: np.ndarray, read: CodeRead) -> np.ndarray:
     return np.ascontiguousarray(out)
 
 
+# Where the copy was printed, by its code -----------------------------------------------------------------
+
+
+def printed_code_corners(modules: int = 21) -> np.ndarray:
+    """The code's corners (top-left, top-right, bottom-right, bottom-left; 4 x 2) where 1A prints them on the
+    copy page, in pt from the page's top-left (qrLayout: a 4-module quiet zone inside the bottom band)."""
+    quiet = QR_PT / modules * QR_QUIET_MODULES
+    x1 = PAGE_PT[0] - QR_RIGHT_PT - quiet
+    y1 = PAGE_PT[1] - QR_BELOW_PT - quiet
+    x0, y0 = x1 - QR_PT, y1 - QR_PT
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], np.float64)
+
+
+def page_transform(read: CodeRead) -> np.ndarray:
+    """The similarity (scale, turn and shift; 2 x 3) that maps copy-page points (pt, from the top-left) into
+    the picture, fitted by least squares to the code's four corners."""
+    p = printed_code_corners(read.modules)
+    q = read.corners.astype(np.float64)
+    mp, mq = p.mean(axis=0), q.mean(axis=0)
+    zp = (p[:, 0] - mp[0]) + 1j * (p[:, 1] - mp[1])
+    zq = (q[:, 0] - mq[0]) + 1j * (q[:, 1] - mq[1])
+    c = np.sum(np.conj(zp) * zq) / np.sum(np.abs(zp) ** 2)  # scale and turn as one complex number
+    a, b = float(c.real), float(c.imag)
+    return np.array([[a, -b, mq[0] - a * mp[0] + b * mp[1]], [b, a, mq[1] - b * mp[0] - a * mp[1]]])
+
+
+def _map(matrix: np.ndarray, points: np.ndarray) -> np.ndarray:
+    return points @ matrix[:, :2].T + matrix[:, 2]
+
+
+def print_fit(read: CodeRead, shape: tuple[int, ...]) -> PrintFit:
+    """How the copy page lies on a normalised page picture of this `shape` (A4 portrait, any size), judged
+    by a code read on that picture."""
+    m = page_transform(read)
+    px_per_pt = shape[1] / PAGE_PT[0]
+    printed = printed_code_corners(read.modules).mean(axis=0) * px_per_pt
+    offset_pt = float(np.linalg.norm(read.corners.mean(axis=0) - printed)) / px_per_pt
+    return PrintFit(matrix=m, scale=math.hypot(m[0, 0], m[1, 0]) / px_per_pt, offset_mm=offset_pt * 25.4 / 72)
+
+
+def page_corners(read: CodeRead) -> np.ndarray:
+    """Where the whole copy page lies in a picture, placed by its code alone (top-left, top-right,
+    bottom-right, bottom-left as printed; float32), for warp_to_a4 when the page's edges cannot be found.
+    A similarity cannot follow perspective, so far from the code this is approximate."""
+    w, h = PAGE_PT
+    return _map(page_transform(read), np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float64)).astype(np.float32)
+
+
 # Checks --------------------------------------------------------------------------------------------------
 
 
@@ -361,9 +504,12 @@ def quality(img: np.ndarray, cut_off: bool = False) -> Quality:
 # The marking picture -------------------------------------------------------------------------------------
 
 
-def marking_image(page: np.ndarray, areas: list[Area]) -> np.ndarray:
-    """A copy of a normalised page with the 1A name band (the top TOP_BAND_FRACTION) and every given hidden
-    area painted white. Areas are rounded outwards to whole pixels."""
+def marking_image(page: np.ndarray, areas: list[Area], read: CodeRead) -> np.ndarray:
+    """A copy of a normalised page with the 1A name band and every given hidden area painted white twice
+    over (ruling R13): (a) as fractions of the picture (the band is its top TOP_BAND_FRACTION), rounded
+    outwards to whole pixels; and (b) where the code `read` on this picture says the copy was printed
+    (print scale and offset, so a copy printed "fit to page" is still covered), PREDICTED_MARGIN_PT larger
+    all round. The caller checks print_fit(read, page.shape).expected first."""
     out = page.copy()
     h, w = out.shape[:2]
     out[: math.ceil(TOP_BAND_FRACTION * h)] = 255
@@ -372,4 +518,12 @@ def marking_image(page: np.ndarray, areas: list[Area]) -> np.ndarray:
         x1, y1 = min(w, math.ceil((a.x + a.w) * w)), min(h, math.ceil((a.y + a.h) * h))
         if x1 > x0 and y1 > y0:
             out[y0:y1, x0:x1] = 255
+    pw, ph = PAGE_PT
+    boxes = [(0.0, 0.0, pw, TOP_BAND_PT)] + [(a.x * pw, a.y * ph, a.w * pw, a.h * ph) for a in areas]
+    m = page_transform(read)
+    e = PREDICTED_MARGIN_PT
+    for x, y, bw, bh in boxes:
+        corners = np.array([[x - e, y - e], [x + bw + e, y - e], [x + bw + e, y + bh + e], [x - e, y + bh + e]])
+        polygon = np.round(_map(m, corners) * 16).astype(np.int32)  # 4 bits of sub-pixel precision
+        cv2.fillConvexPoly(out, polygon, WHITE, lineType=cv2.LINE_8, shift=4)
     return out

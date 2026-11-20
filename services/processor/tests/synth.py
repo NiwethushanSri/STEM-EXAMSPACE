@@ -90,16 +90,36 @@ def with_writing(page: np.ndarray, text: str = "see next page") -> np.ndarray:
     return out
 
 
-def table(width: int, height: int, *, seed: int = 0) -> np.ndarray:
-    """A dark wooden table top: low-frequency blotches, grain streaks and fine noise, brownish."""
+def table(width: int, height: int, *, tone: str = "dark", seed: int = 0) -> np.ndarray:
+    """A table top. "dark" (the default): wood with low-frequency blotches, grain streaks and fine noise,
+    brownish. "light": a near-white laminate, a little darker than paper. "white": as white as the paper,
+    so a page on it shows no edge at all."""
     rng = np.random.default_rng(seed)
     coarse = rng.uniform(0, 1, (height // 60 + 2, width // 60 + 2)).astype(np.float32)
     coarse = cv2.resize(coarse, (width, height), interpolation=cv2.INTER_CUBIC)
-    rows = np.arange(height, dtype=np.float32)[:, None]
-    grain = np.sin(rows / 7.0 + coarse * 6.0) * 10.0
-    v = 48.0 + coarse * 28.0 + grain + rng.standard_normal((height, width), dtype=np.float32) * 6.0
-    rgb = np.stack([v * 1.0, v * 0.78, v * 0.58], axis=2)
+    fine = rng.standard_normal((height, width), dtype=np.float32)
+    if tone == "white":
+        rgb = np.repeat((253.0 + fine * 2.0)[:, :, None], 3, axis=2)
+    elif tone == "light":
+        v = 228.0 + coarse * 10.0 + fine * 3.0
+        rgb = np.stack([v * 1.0, v * 0.985, v * 0.96], axis=2)
+    else:
+        rows = np.arange(height, dtype=np.float32)[:, None]
+        grain = np.sin(rows / 7.0 + coarse * 6.0) * 10.0
+        v = 48.0 + coarse * 28.0 + grain + fine * 6.0
+        rgb = np.stack([v * 1.0, v * 0.78, v * 0.58], axis=2)
     return np.clip(rgb, 0, 255).astype(np.uint8)
+
+
+def printed(page: np.ndarray, *, scale: float = 1.0, shift_mm: tuple[float, float] = (0.0, 0.0)) -> np.ndarray:
+    """The A4 sheet that comes out of a printer: the copy page printed at `scale` (0.95 is a typical "fit to
+    page"), centred on the sheet, then moved by `shift_mm` (right, down)."""
+    h, w = page.shape[:2]
+    sw, sh = round(w * scale), round(h * scale)
+    small = cv2.resize(page, (sw, sh), interpolation=cv2.INTER_AREA)
+    px_per_mm = DPI / 25.4
+    m = np.float32([[1, 0, (w - sw) / 2 + shift_mm[0] * px_per_mm], [0, 1, (h - sh) / 2 + shift_mm[1] * px_per_mm]])
+    return cv2.warpAffine(small, m, (w, h), flags=cv2.INTER_LINEAR, borderValue=WHITE)
 
 
 def photo(
@@ -113,9 +133,10 @@ def photo(
     light: float = 1.0,
     blur: float = 0.0,
     crop_top: float = 0.0,
+    table_tone: str = "dark",
     seed: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """A phone photo of a printed page lying on a dark table.
+    """A phone photo of a printed page lying on a table (`table_tone`: dark, light or white; see table()).
 
     The page is turned clockwise by `turn` + `angle` degrees, scaled so it fills `fill` of the frame, and
     its corners are pushed about by up to `skew` of its width (a camera held at an angle). Uneven light is
@@ -127,7 +148,7 @@ def photo(
     """
     rng = np.random.default_rng(seed)
     width, height = size
-    out = table(width, height, seed=seed + 1000)
+    out = table(width, height, tone=table_tone, seed=seed + 1000)
     ph, pw = page.shape[:2]
     theta = math.radians(turn + angle)
     c, s = math.cos(theta), math.sin(theta)

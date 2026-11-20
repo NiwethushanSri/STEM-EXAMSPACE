@@ -31,8 +31,11 @@ def decode(data: bytes) -> np.ndarray:
 
 
 def tilt_of(read) -> float:
-    tl, tr, br, bl = read.corners
-    v = (tr - tl) + (br - bl)
+    """The code's turn from upright in degrees, averaged over its four sides (as upright() measures it), so
+    perspective left in a photo, which makes opposite sides converge, does not count as tilt."""
+    tl, tr, br, bl = read.corners.astype(np.float64)
+    left, right = bl - tl, br - tr
+    v = (tr - tl) + (br - bl) + np.array([left[1], -left[0]]) + np.array([right[1], -right[0]])
     return math.degrees(math.atan2(v[1], v[0]))
 
 
@@ -189,3 +192,96 @@ def test_unreadable_files_raise():
         with pytest.raises(UnreadableFile) as caught:
             pipeline.prepare(data, kind, mime, make_ctx())
         assert "really" not in str(caught.value) and "secret" not in str(caught.value)
+
+
+# Rulings R13 to R15: the name band located from the code, home PDFs of photos, light tables.
+
+
+def name_pixels(sheet: np.ndarray) -> np.ndarray:
+    """Where the candidate's name and index number print on a sheet: dark pixels in the top 300 rows."""
+    mask = np.zeros(sheet.shape[:2], bool)
+    mask[:300] = cv2.cvtColor(sheet, cv2.COLOR_RGB2GRAY)[:300] < 140
+    return mask
+
+
+def test_fit_to_page_95_percent_name_still_hidden():
+    sheet = synth.printed(synth.render("copy-a.pdf", 1), scale=0.95)  # "fit to page", centred on A4
+    name = name_pixels(sheet)
+    band = math.ceil(imaging.TOP_BAND_FRACTION * H)
+    assert name[band:].sum() > 1000  # the band as a fraction of the page alone would leave the name showing
+
+    read = imaging.read_code(sheet)
+    fit = imaging.print_fit(read, sheet.shape)
+    assert abs(fit.scale - 0.95) < 0.01 and fit.expected
+    assert (imaging.marking_image(sheet, [], read)[name] == 255).all()
+
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(sheet, seed=21)]), "scan_file", PDF, make_ctx())
+    assert (p.code, p.copy_page, p.quality.flags) == (A, 2, [])
+    assert p.marking is not None
+    assert decode(p.marking)[name].min() > 225  # white, give or take JPEG
+    assert decode(p.full)[name].min() < 100  # staff still see it
+
+
+def test_far_off_layout_flags_and_no_marking():
+    page = synth.render("copy-a.pdf", 1)
+    for sheet, scale, offset in (
+        (synth.printed(page, scale=0.8), 0.8, 30.0),  # shrunk well past "fit to page"
+        (synth.printed(page, shift_mm=(-14.0, -12.0)), 1.0, 18.4),  # printed 18 mm off its place
+    ):
+        fit = imaging.print_fit(imaging.read_code(sheet), sheet.shape)
+        assert abs(fit.scale - scale) < 0.01 and abs(fit.offset_mm - offset) < 1.5 and not fit.expected
+        [p] = pipeline.prepare(synth.scan_pdf([synth.scan(sheet, seed=22)]), "scan_file", PDF, make_ctx())
+        assert (p.code, p.copy_page) == (A, 2)
+        assert p.quality.flags == [pipeline.LAYOUT_UNEXPECTED]
+        assert p.marking is None
+        assert decode(p.full).shape == (H, W, 3)
+
+
+def test_home_pdf_of_uncropped_photo_is_found(printed_centre):
+    page = synth.render("copy-a.pdf", 1)
+    shot, _ = synth.photo(page, turn=180, angle=5.0, skew=0.05, seed=23)
+    pdf = synth.scan_pdf([shot])  # a phone photo saved as a PDF, table and all
+
+    [as_scan] = pipeline.prepare(pdf, "scan_file", PDF, make_ctx())
+    assert as_scan.code == A and pipeline.LAYOUT_UNEXPECTED in as_scan.quality.flags and as_scan.marking is None
+
+    [p] = pipeline.prepare(pdf, "home_pdf", PDF, make_ctx())
+    assert (p.code, p.copy_page, p.rotation) == (A, 2, 180)
+    assert p.quality.flags == [] and p.marking is not None
+    full = decode(p.full)
+    again = imaging.read_code(full)
+    assert np.allclose(again.corners.mean(axis=0), printed_centre, atol=24)
+    assert likeness(full, page) > 0.65
+
+
+def test_photo_on_light_background_reads(printed_centre):
+    page = synth.render("copy-a.pdf", 1)
+
+    # A near-white table: the page's edges are faint, but found.
+    light, corners = synth.photo(page, turn=90, angle=-7.0, skew=0.06, table_tone="light", seed=38)
+    found = imaging.find_page(light)
+    assert found is not None
+    for corner in corners:
+        assert np.linalg.norm(found - corner, axis=1).min() < 24
+    [p] = pipeline.prepare(synth.jpeg(light), "home_photo", "image/jpeg", make_ctx())
+    assert (p.code, p.copy_page, p.rotation) == (A, 2, 270)
+    assert p.quality.flags == [] and p.marking is not None
+    assert likeness(decode(p.full), page) > 0.65
+
+    # A table as white as the paper: no edges at all, so the page is placed by its code.
+    white, _ = synth.photo(page, turn=180, angle=4.0, skew=0.03, table_tone="white", seed=39)
+    assert imaging.find_page(white) is None
+    [q] = pipeline.prepare(synth.jpeg(white), "home_photo", "image/jpeg", make_ctx())
+    assert (q.code, q.copy_page, q.rotation) == (A, 2, 180)
+    assert not q.quality.cut_off  # the placed page lies inside the photo
+    assert q.quality.flags == [pipeline.LAYOUT_UNEXPECTED]  # where the name band lies is not confirmed
+    assert q.marking is None
+    full = decode(q.full)
+    again = imaging.read_code(full)
+    assert again is not None and abs(tilt_of(again)) < 1.0
+    assert np.allclose(again.corners.mean(axis=0), printed_centre, atol=10)
+
+    # The same, with the page running off the top of the photo.
+    cut, _ = synth.photo(page, turn=180, angle=4.0, skew=0.03, table_tone="white", seed=39, crop_top=0.12)
+    [r] = pipeline.prepare(synth.jpeg(cut), "home_photo", "image/jpeg", make_ctx())
+    assert r.code == A and r.quality.cut_off and "cut_off" in r.quality.flags

@@ -19,6 +19,9 @@ __all__ = [
 ]
 
 KINDS = ("home_photo", "home_pdf", "scan_file")
+# Quality flag: the page's geometry is not confirmed, so no marking picture is made. Its code is not where
+# 1A prints it or not the printed size (rulings R13, R14), or the page was placed by its code alone (R15).
+LAYOUT_UNEXPECTED = "layout_unexpected"
 
 
 @dataclass(frozen=True)
@@ -78,9 +81,19 @@ def is_answer_page(ctx: JobContext, code: str, page: int) -> bool:
 
 
 def prepare(data: bytes, kind: str, mime: str, ctx: JobContext) -> list[PreparedPage]:
-    """Every page of an upload. Scanner files and home PDFs: each PDF page or picture is one page. Home
-    photos: the page is found in the photo and flattened first; a photo with no page found is kept, flagged
-    `cut_off`. Raises UnreadableFile for a broken or password-protected PDF or an undecodable picture."""
+    """Every page of an upload. Raises UnreadableFile for a broken or password-protected PDF or an
+    undecodable picture.
+
+    Scanner files and home PDFs: each PDF page or picture is one page, turned upright by its code. A home
+    PDF page whose code is not where 1A prints it (a photo saved as a PDF, say) is looked at again as a photo.
+
+    Home photos: the page's edges are found and the page flattened. When no edges are found the page is
+    placed by its code: `cut_off` only if that placed page runs off the photo, and `layout_unexpected` (no
+    marking picture) because the code alone cannot confirm where the name band lies. A photo with neither
+    edges nor a code is kept as it is, `cut_off`.
+
+    Every page with a code is then checked against the 1A print layout by its code (print_fit). A page whose
+    code is off its printed place or the wrong size gets the flag `layout_unexpected` and no marking picture."""
     return list(iter_prepare(data, kind, mime, ctx))
 
 
@@ -90,48 +103,115 @@ def iter_prepare(data: bytes, kind: str, mime: str, ctx: JobContext) -> Iterator
         raise ValueError("unknown upload kind")
     pictures = imaging.render_pdf(data) if mime == "application/pdf" else iter((imaging.load_photo(data),))
     for index, img in enumerate(pictures):
-        yield _prepare_page(index, img, kind == "home_photo", ctx)
+        yield _prepare_page(index, img, kind, ctx)
 
 
-def _prepare_page(index: int, img: np.ndarray, photo: bool, ctx: JobContext) -> PreparedPage:
-    quad = imaging.find_page(img) if photo else None
-    cut_off = photo and (quad is None or imaging.touches_edge(quad, img.shape))
-    page = img if quad is None else imaging.warp_to_a4(img, quad)
-    read = imaging.read_code(page)
-    turn = 0
-    if read is not None:
-        turn = imaging.rotation(read)
-        if quad is not None:
-            # The page's own corners, top-left first: its top side gives the turn as photographed, and
-            # flattening the photo again in this order gives an upright page with one resampling.
-            quad = np.roll(quad, turn // 90, axis=0)
-            if turn:
-                flat = imaging.warp_to_a4(img, quad)
-                again = imaging.read_code(flat)
-                if again is not None and imaging.rotation(again) == 0:
-                    page, read = flat, again
-            top = quad[1] - quad[0]
-            turn = imaging.quarter_turn(float(top[0]), float(top[1]))
-        page = imaging.upright(page, read)
+@dataclass(frozen=True)
+class _Shot:
+    """One way of making a normalised page from a picture. `read` is the code as first read (it names the
+    page); `final` is the same code read again on the normalised page, which print_fit judges."""
+
+    page: np.ndarray
+    read: imaging.CodeRead | None
+    final: imaging.CodeRead | None
+    turn: int
+    cut_off: bool
+    placed_by_code: bool = False
+
+    @property
+    def layout_ok(self) -> bool:
+        """The page's geometry is confirmed: its code sits where 1A prints it, at about its printed size.
+        A page placed by its code alone always sits there, so nothing is confirmed: the code cannot see
+        perspective, and on the synthetic photos the name landed 70 to 220 px below the band."""
+        return (
+            not self.placed_by_code
+            and self.final is not None
+            and imaging.print_fit(self.final, self.page.shape).expected
+        )
+
+
+def _finish(
+    page: np.ndarray, read: imaging.CodeRead | None, turn: int, cut_off: bool, placed_by_code: bool = False
+) -> _Shot:
     page = imaging.to_a4(page)
+    final = None
+    if read is not None:
+        again = imaging.read_code(page)
+        if again is not None and (again.code, again.page) == (read.code, read.page):
+            final = again
+    return _Shot(page=page, read=read, final=final, turn=turn, cut_off=cut_off, placed_by_code=placed_by_code)
+
+
+def _as_scanned(img: np.ndarray) -> _Shot:
+    read = imaging.read_code(img)
+    if read is None:
+        return _finish(img, None, 0, False)
+    return _finish(imaging.upright(img, read), read, imaging.rotation(read), False)
+
+
+def _as_photographed(img: np.ndarray, place_by_code: bool) -> _Shot:
+    quad = imaging.find_page(img)
+    if quad is not None:
+        cut_off = imaging.touches_edge(quad, img.shape)
+        page = imaging.warp_to_a4(img, quad)
+        read = imaging.read_code(page)
+        if read is None:
+            return _finish(page, None, 0, cut_off)
+        turn = imaging.rotation(read)
+        # The page's own corners, top-left first: its top side gives the turn as photographed, and
+        # flattening the photo again in this order gives an upright page with one resampling.
+        quad = np.roll(quad, turn // 90, axis=0)
+        if turn:
+            flat = imaging.warp_to_a4(img, quad)
+            again = imaging.read_code(flat)
+            if again is not None and imaging.rotation(again) == 0:
+                page, read = flat, again
+        top = quad[1] - quad[0]
+        turn = imaging.quarter_turn(float(top[0]), float(top[1]))
+        return _finish(imaging.upright(page, read), read, turn, cut_off)
+
+    read = imaging.read_code(img)
+    if read is None:
+        return _finish(img, None, 0, True)
+    if place_by_code:  # no edges found (a table as white as the paper): the code places the page (R15)
+        quad = imaging.page_corners(read)
+        top = quad[1] - quad[0]
+        turn = imaging.quarter_turn(float(top[0]), float(top[1]))
+        cut_off = imaging.touches_edge(quad, img.shape)  # only if the placed page runs off the photo
+        return _finish(imaging.warp_to_a4(img, quad), read, turn, cut_off, placed_by_code=True)
+    return _finish(imaging.upright(img, read), read, imaging.rotation(read), True)
+
+
+def _prepare_page(index: int, img: np.ndarray, kind: str, ctx: JobContext) -> PreparedPage:
+    if kind == "home_photo":
+        shot = _as_photographed(img, place_by_code=True)
+    else:
+        shot = _as_scanned(img)
+        if kind == "home_pdf" and not shot.layout_ok:  # a photo saved as a PDF, say (ruling R14)
+            found = _as_photographed(img, place_by_code=False)
+            if found.layout_ok:
+                shot = found
+    page, read = shot.page, shot.read
 
     blank = read is None and imaging.is_blank(page)
-    q = imaging.quality(page, cut_off=cut_off)
-    if blank:  # an empty page has no detail to judge sharpness by
-        q = replace(q, flags=[f for f in q.flags if f != "blurred"])
+    q = imaging.quality(page, cut_off=shot.cut_off)
+    flags = [f for f in q.flags if not (blank and f == "blurred")]  # an empty page has no detail to judge
+    if read is not None and not shot.layout_ok:
+        flags.append(LAYOUT_UNEXPECTED)
+    q = replace(q, flags=flags)
 
     marking = None
-    if read is not None and is_answer_page(ctx, read.code, read.page):
+    if read is not None and shot.layout_ok and is_answer_page(ctx, read.code, read.page):
         layout = ctx.papers[ctx.copies[read.code].paper_id]
         areas = [a for a in layout.areas if a.page == read.page]
-        marking = imaging.encode_jpeg(imaging.marking_image(page, areas))
+        marking = imaging.encode_jpeg(imaging.marking_image(page, areas, shot.final))
     return PreparedPage(
         source_index=index,
         code=read.code if read else None,
         copy_page=read.page if read else None,
         blank=blank,
         quality=q,
-        rotation=turn,
+        rotation=shot.turn,
         full=imaging.encode_jpeg(page),
         marking=marking,
     )
