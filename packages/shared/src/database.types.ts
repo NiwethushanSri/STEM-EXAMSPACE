@@ -595,14 +595,14 @@ isOneToOne: false
                   ]
                 },"script_pages": {
                   Row: {
-                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"id": string,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"id": string,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   Update: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
                   }
                   Relationships: [
                     {
@@ -653,14 +653,14 @@ isOneToOne: false
                   ]
                 },"script_versions": {
                   Row: {
-                    "created_at": string,"created_by": string | null,"reason": string | null,"script_id": string,"version": number
+                    "created_at": string,"created_by": string | null,"reason": string | null,"script_id": string,"submission_id": string | null,"upload_id": string | null,"version": number
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"created_by"?: string | null,"reason"?: string | null,"script_id": string,"version": number
+                    "created_at"?: string,"created_by"?: string | null,"reason"?: string | null,"script_id": string,"submission_id"?: string | null,"upload_id"?: string | null,"version": number
                   }
                   Update: {
-                    "created_at"?: string,"created_by"?: string | null,"reason"?: string | null,"script_id"?: string,"version"?: number
+                    "created_at"?: string,"created_by"?: string | null,"reason"?: string | null,"script_id"?: string,"submission_id"?: string | null,"upload_id"?: string | null,"version"?: number
                   }
                   Relationships: [
                     {
@@ -668,6 +668,18 @@ isOneToOne: false
       columns: ["script_id"]
 isOneToOne: false
       referencedRelation: "scripts"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_versions_submission_id_fkey"
+      columns: ["submission_id"]
+isOneToOne: false
+      referencedRelation: "home_submissions"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_versions_upload_id_fkey"
+      columns: ["upload_id"]
+isOneToOne: false
+      referencedRelation: "script_uploads"
       referencedColumns: ["id"]
     }
                   ]
@@ -947,6 +959,12 @@ isOneToOne: false
 "family_has_booking":
 { Args: { "p_exam": string }; Returns: boolean
                            },
+"home_submission_assemble":
+{ Args: { "p_now": string,"p_submission": string,"p_upload": string }; Returns: boolean
+                           },
+"home_submission_evaluate":
+{ Args: { "p_now": string,"p_submission": string }; Returns: Database["public"]['Enums']["submission_state"]
+                           },
 "is_staff_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
                            },
@@ -1127,11 +1145,61 @@ isOneToOne: false
 "save_venue":
 { Args: { "p_active": boolean,"p_id": string,"p_name": string,"p_rooms": (string)[] }; Returns: Json
                            },
+"script_create":
+{ Args: { "p_booking": string,"p_now": string,"p_source": Database["public"]['Enums']["script_source"] }; Returns: {
+              "booking_id": string,
+"complete": boolean,
+"created_at": string,
+"exam_id": string,
+"id": string,
+"late": boolean,
+"late_decision": string | null,
+"number": string,
+"received_at": string | null,
+"source": Database["public"]['Enums']["script_source"],
+"state": Database["public"]['Enums']["script_state"],
+"state_reason": string | null,
+"updated_at": string,
+"version": number
+            }
+                          SetofOptions: {
+        from: "*"
+        to: "scripts"
+        isOneToOne: true
+        isSetofReturn: false
+      } },
+"script_evaluate":
+{ Args: { "p_script": string }; Returns: undefined
+                           },
+"script_evaluate_at":
+{ Args: { "p_now": string,"p_script": string }; Returns: undefined
+                           },
+"script_links":
+{ Args: { "p_script": string }; Returns: Json
+                           },
 "script_number_next":
 { Args: { "p_exam": string }; Returns: string
                            },
+"script_page_is_answer":
+{ Args: { "p_copy": string,"p_page": number }; Returns: boolean
+                           },
+"script_page_poor":
+{ Args: { "p_answer": boolean,"p_marking": string,"p_quality": Json }; Returns: boolean
+                           },
+"script_pages_record":
+{ Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_worker": string }; Returns: Json
+                           },
+"script_pages_valid":
+{ Args: { "p_pages": Json,"p_prefix": string }; Returns: boolean
+                           },
+"script_raise_mixed":
+{ Args: { "p_script": string,"p_upload": string }; Returns: undefined
+                           },
 "script_upload_path_allowed":
 { Args: { "p_add": boolean,"p_path": string }; Returns: boolean
+                           },
+"script_version_write":
+{ Args: { "p_links": Json,"p_now": string,"p_reason": string,"p_script": string,"p_submission": string,"p_upload": string }; Returns: boolean
                            },
 "set_account_status_tx":
 { Args: { "p_action": string,"p_actor": string,"p_target": string }; Returns: string
