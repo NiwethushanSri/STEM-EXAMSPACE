@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(103);
+select plan(109);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -15,7 +15,7 @@ create temp table c (name text primary key, id uuid not null);
 grant select on c to public;
 insert into c values ('admin', tests.create_user('admin', 'active')), ('admin2', tests.create_user('admin', 'active')),
   ('admin3', tests.create_user('admin', 'suspended')), ('teacher', tests.create_user('teacher', 'active'));
-insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 10) i;
+insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 13) i;
 create temp table kv (name text primary key, id uuid);
 grant all on kv to public;
 create temp table res (name text primary key, j jsonb);
@@ -351,9 +351,16 @@ select tests.as_postgres();
 insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
 values (pg_temp.k('e'), pg_temp.uid('s10'), pg_temp.uid('s10'), 'paid', 0, 'centre', pg_temp.k('ce1'));
 insert into kv select 'b10', id from public.bookings where exam_id = pg_temp.k('e') and student_id = pg_temp.uid('s10');
+-- Not marked either, and none of them needs to be: an anonymised booking (its student's profile was deleted, its
+-- attendance with it), a cancelled and a refunded booking at ce1, and a home booking.
+insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
+values (pg_temp.k('e'), null, null, 'paid', 0, 'centre', pg_temp.k('ce1')),
+       (pg_temp.k('e'), pg_temp.uid('s11'), pg_temp.uid('s11'), 'cancelled', 0, 'centre', pg_temp.k('ce1')),
+       (pg_temp.k('e'), pg_temp.uid('s12'), pg_temp.uid('s12'), 'refunded', 0, 'centre', pg_temp.k('ce1')),
+       (pg_temp.k('e'), pg_temp.uid('s13'), pg_temp.uid('s13'), 'paid', 0, 'home', null);
 select tests.as_user(pg_temp.uid('admin'));
 select is((select concat_ws('/', j ->> 'code', j ->> 'not_marked') from (select pg_temp.complete('ce1') as j) x), 'register_incomplete/1',
-  'a centre with a candidate not marked on the register cannot be completed');
+  'a centre with a candidate not marked on the register cannot be completed (anonymised, cancelled, refunded and home bookings do not count)');
 select tests.as_postgres();
 insert into public.attendance (exam_id, student_id, status, marked_by, marked_at)
 values (pg_temp.k('e'), pg_temp.uid('s10'), 'absent', pg_temp.uid('admin'), '2031-06-07 09:05Z');
@@ -438,6 +445,34 @@ select is(pg_temp.counts(pg_temp.complete('ce1')), '3/3/0', 'b3 marked absent af
 select tests.as_postgres();
 select is((select count(*)::int from public.script_exceptions where booking_id = pg_temp.k('b3') and kind = 'missing_pages' and state = 'open'), 0,
   'and their open missing_pages exception is resolved');
+
+-- A file adds b8's spare page 5 (a new version), then is run again and reads nothing: the rerun rolls that version
+-- back and writes none.
+create temp table v8 as select version from public.scripts where booking_id = pg_temp.k('b8');
+select tests.as_user(pg_temp.uid('admin'));
+select pg_temp.batch('bt6', 'e', 'ce1');
+select pg_temp.bgn('u6', 'bt6', 'application/pdf', 900);
+select tests.as_postgres();
+select pg_temp.put('u6', 900, 'application/pdf');
+select tests.as_user(pg_temp.uid('admin'));
+select pg_temp.stored('u6');
+select pg_temp.submit('bt6');
+select tests.as_postgres();
+select pg_temp.run('u6', jsonb_build_array(pg_temp.page('u6', 0, 'c8', 5)));
+select is(pg_temp.script('b8'), 'false/needs_attention', 'a new version of b8''s script makes it incomplete');
+select public.scan_booking_complete(pg_temp.k('b8'));
+select is(pg_temp.script('b8'), 'true/needs_attention', 'checked again, it is complete');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u6'), 'prepare');
+select pg_temp.run('u6', '[]'::jsonb);
+select is((select s.version || '/' || (select count(*) from public.script_versions v where v.script_id = s.id) from public.scripts s where s.booking_id = pg_temp.k('b8')),
+  (select version || '/' || version from v8), 'the rerun rolled the version back without writing a new one');
+select is(pg_temp.script('b8'), 'false/needs_attention', 'and the script is incomplete again until it is checked');
+
+-- A script past verification is Phase 3's: a version change leaves complete as it is.
+update public.scripts set state = 'ready_to_mark' where booking_id = pg_temp.k('b1');
+select ok((select public.script_version_write(s.id, public.script_links(s.id) - '5', null, null, 'test', now()) from public.scripts s where s.booking_id = pg_temp.k('b1')),
+  'a new version is written for b1''s script, ready to mark');
+select is(pg_temp.script('b1'), 'true/ready_to_mark', 'and it stays complete');
 
 -- ---------------------------------------------------------------------------------------------
 -- No paper version known (exam g has none): never complete, one missing_pages exception says why.

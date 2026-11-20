@@ -91,6 +91,12 @@ export function isProcessing(s: ScanBatchStatus): boolean {
   return s.jobs.queued + s.jobs.running > 0;
 }
 
+/** The accessible name of a control repeated per centre, batch or file: its visible text first (WCAG 2.5.3, so voice
+ * control finds it by what it shows), then which one it is. */
+export function named(visible: string, which: string): string {
+  return `${visible}: ${which}`;
+}
+
 /** A file of these batches is still waiting or uploading in this browser. */
 export function hasUploadsInFlight(files: { batchId: string; state: string }[], batchIds: string[]): boolean {
   return files.some((f) => batchIds.includes(f.batchId) && (f.state === "waiting" || f.state === "uploading"));

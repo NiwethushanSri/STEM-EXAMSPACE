@@ -8,7 +8,7 @@
 -- records the scanned custody step. The processing server prepares the pages and script_pages_record (Task 4)
 -- matches them to candidates. scan_batch_status follows a batch; once every scan of a centre is in, staff say so
 -- (scan_centre_complete) and each candidate's script is complete, or a missing_pages exception says what is missing.
--- A centre script stays complete only until its next version (trigger on script_versions); scan_booking_complete
+-- A centre script stays complete only until its version changes (trigger on scripts); scan_booking_complete
 -- checks one booking again (Task 10 calls it after changing a centre script).
 --
 -- Every function here is for staff admins (per-action permissions come with Phase 1B). A removed centre takes no new
@@ -360,24 +360,28 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- A centre script is complete only for the pages it shows when it was checked: every new version (a later scan, a
--- rerun, a staff correction) makes it incomplete until scan_booking_complete checks it again. Home scripts keep
--- Task 4's rule (complete while the latest submission is received).
+-- A centre script is complete only for the pages it shows when it was checked: whenever its current version changes,
+-- either way (a later scan or a staff correction writes a new one; a rerun may roll one back and write none), it is
+-- incomplete until scan_booking_complete checks it again. Only scripts up to verified (receiving, checking,
+-- needs_attention, verified): later states are Phase 3's to decide. Home scripts keep Task 4's rule (complete while
+-- the latest submission is received).
 -- ---------------------------------------------------------------------------------------------
 create function public.script_version_uncomplete()
 returns trigger
 language plpgsql
-security definer
 set search_path = ''
 as $$
 begin
-  update public.scripts set complete = false where id = new.script_id and source = 'centre' and complete;
-  return null;
+  new.complete := false;
+  return new;
 end;
 $$;
 
-create trigger script_versions_uncomplete after insert on public.script_versions
-  for each row execute function public.script_version_uncomplete();
+create trigger scripts_version_uncomplete before update of version on public.scripts
+  for each row
+  when (old.version is distinct from new.version and new.source = 'centre' and new.complete
+        and old.state in ('receiving', 'checking', 'needs_attention', 'verified'))
+  execute function public.script_version_uncomplete();
 
 -- ---------------------------------------------------------------------------------------------
 -- scan_booking_complete (internal): whether one centre booking's script is complete, for scan_centre_complete and
@@ -520,7 +524,7 @@ $$;
 -- scan_centre_complete ("All scans for this centre are uploaded"). Refused while a file of the centre's batches is
 -- stored but not handed to processing, or queued or processing (still_processing), and while a paid or
 -- cancel-requested centre booking of the centre has no attendance mark (register_incomplete, with not_marked: how
--- many). Then every booking of the centre, in uuid order, is checked by scan_booking_complete. Safe to call again.
+-- many; an anonymised booking, whose student was deleted with their attendance, never needs one). Then every booking of the centre, in uuid order, is checked by scan_booking_complete. Safe to call again.
 -- Returns {candidates, complete, missing (missing pages or no paper known), mixed (pages of two paper versions)}.
 -- ---------------------------------------------------------------------------------------------
 create function public.scan_centre_complete(p_exam uuid, p_centre uuid)
@@ -564,6 +568,7 @@ begin
   select count(*) into v_unmarked
   from public.bookings b
   where b.exam_id = p_exam and b.centre_id = p_centre and b.sitting = 'centre' and b.status in ('paid', 'cancel_requested')
+    and b.student_id is not null
     and not exists (select 1 from public.attendance a where a.exam_id = b.exam_id and a.student_id = b.student_id);
   if v_unmarked > 0 then
     return jsonb_build_object('ok', false, 'code', 'register_incomplete', 'not_marked', v_unmarked);

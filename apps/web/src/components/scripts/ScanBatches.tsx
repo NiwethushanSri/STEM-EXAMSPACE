@@ -14,6 +14,7 @@ import {
   fileSize,
   hasUploadsInFlight,
   isProcessing,
+  named,
   parseCompleteResult,
   parseScanStatus,
   scanFileProblem,
@@ -260,6 +261,7 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
           const latest = mine[mine.length - 1];
           const label = `${c.venue} · ${c.room}`;
           const uploading = hasUploadsInFlight(files, mine.map((b) => b.id));
+          const completeText = busy === `complete:${c.id}` ? "Checking scripts..." : "All scans for this centre are uploaded";
           return (
             <section key={c.id} data-testid="scan-centre" aria-label={`Scans for ${label}`} className="rounded border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -281,11 +283,11 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
                       onChange={(e) => setManifest((m) => ({ ...m, [c.id]: e.target.value }))}
                       maxLength={60}
                       placeholder="M-..."
-                      aria-label={`Manifest number for ${label} (optional)`}
+                      aria-label={named("Manifest number (optional)", label)}
                       className="mt-1 block w-44 rounded border border-slate-300 bg-white px-2 py-1.5 text-sm"
                     />
                   </label>
-                  <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => createBatch(c.id)} aria-label={`New scan batch for ${label}`}>
+                  <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => createBatch(c.id)} aria-label={named("New scan batch", label)}>
                     New scan batch
                   </button>
                 </div>
@@ -316,9 +318,9 @@ export function ScanBatches({ examId, centres, batches: initial }: { examId: str
                   className={BUTTON}
                   disabled={busy !== null || uploading}
                   onClick={() => completeCentre(c.id)}
-                  aria-label={`All scans for ${label} are uploaded`}
+                  aria-label={named(completeText, label)}
                 >
-                  {busy === `complete:${c.id}` ? "Checking scripts..." : "All scans for this centre are uploaded"}
+                  {completeText}
                 </button>
                 {uploading && <span className="text-xs text-slate-500">Wait until every file of this centre is uploaded.</span>}
               </div>
@@ -356,6 +358,7 @@ function BatchRow({
   const stored = b.uploads.some((u) => u.state === "stored") || files.some((f) => f.state === "stored");
   const processing = isProcessing(b);
   const line = totalsLine(b.totals);
+  const submitText = busy === `submit:${b.id}` ? "Starting..." : "Start processing";
 
   return (
     <li data-testid="scan-batch" className="rounded border border-slate-200 p-3">
@@ -403,7 +406,7 @@ function BatchRow({
                 <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-xs text-red-700">
                   {f.error}
                   {f.file && (
-                    <button type="button" className={QUIET} onClick={() => onRetry(f.key)} aria-label={`Try again: ${f.name}`}>
+                    <button type="button" className={QUIET} onClick={() => onRetry(f.key)} aria-label={named("Try again", f.name)}>
                       Try again
                     </button>
                   )}
@@ -423,7 +426,7 @@ function BatchRow({
               multiple
               accept={SCAN_ACCEPT}
               className="sr-only"
-              aria-label={`Add scan files to ${b.number}`}
+              aria-label={named("Add scan files", b.number)}
               onChange={(e) => {
                 const list = Array.from(e.target.files ?? []);
                 e.target.value = "";
@@ -436,9 +439,9 @@ function BatchRow({
             className={BUTTON}
             disabled={busy !== null || uploading || !stored}
             onClick={onSubmit}
-            aria-label={`Start processing ${b.number}`}
+            aria-label={named(submitText, b.number)}
           >
-            {busy === `submit:${b.id}` ? "Starting..." : "Start processing"}
+            {submitText}
           </button>
           {uploading && <span className="text-xs text-slate-500">Wait until every file is uploaded.</span>}
           {!uploading && failed > 0 && (

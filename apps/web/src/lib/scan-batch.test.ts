@@ -7,6 +7,7 @@ import {
   completeSummary,
   hasUploadsInFlight,
   isProcessing,
+  named,
   parseCompleteResult,
   parseScanStatus,
   scanFileProblem,
@@ -89,6 +90,14 @@ describe("hasUploadsInFlight", () => {
   it("is false once every file is uploaded or has failed", () => {
     expect(hasUploadsInFlight(files, ["a", "d"])).toBe(false);
     expect(hasUploadsInFlight(files, [])).toBe(false);
+  });
+});
+
+describe("named", () => {
+  it("starts the accessible name with the visible text, then says which one", () => {
+    expect(named("All scans for this centre are uploaded", "Main hall · R1")).toBe("All scans for this centre are uploaded: Main hall · R1");
+    expect(named("Checking scripts...", "Main hall · R1")).toBe("Checking scripts...: Main hall · R1");
+    expect(named("Manifest number (optional)", "Main hall · R1").startsWith("Manifest number (optional)")).toBe(true);
   });
 });
 
