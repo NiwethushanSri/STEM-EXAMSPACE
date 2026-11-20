@@ -9,7 +9,7 @@ import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 
 /** What the exam actions send back; they never throw for expected failures. */
-export type ExamActionResult = { ok: true; message: string } | { ok: false; message: string };
+export type ExamActionResult = { ok: true; message: string; id?: string } | { ok: false; message: string };
 
 function refresh() {
   revalidatePath("/admin/exams");
@@ -30,7 +30,8 @@ export async function saveExamAction(raw: Record<string, string>): Promise<ExamA
   if (out.ok) {
     const rulesProblem = await saveHomeRules(supabase, out.id, v);
     refresh();
-    if (rulesProblem) return { ok: false, message: rulesProblem };
+    // The exam is saved, so this is a success with a warning: the form closes and cannot save a second copy.
+    if (rulesProblem) return { ok: true, message: rulesProblem, id: out.id };
     return { ok: true, message: v.id ? "Exam saved." : "Exam created as a draft. Publish it when it is ready." };
   }
   refresh();

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(60);
+select plan(63);
 select tests.assert_no_owner();
 
 -- Fixtures. Exam e: home and centre, 2031-06-07 10:00 London (09:00 UTC), 90 minutes: finish 10:30 UTC.
@@ -154,6 +154,12 @@ select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
 select is(public.set_exam_home_rules(pg_temp.k('e'), repeat('x', 2001), null) ->> 'code', 'invalid_input', 'rules over 2000 characters refused');
 select is(public.set_exam_home_rules(pg_temp.k('e'), repeat('x', 2000), repeat('y', 501)) ->> 'code', 'invalid_input', 'materials over 500 characters refused');
 select is(public.set_exam_home_rules(gen_random_uuid(), 'x', 'y') ->> 'code', 'not_found', 'an unknown exam');
+-- unchanged_rules_write_no_audit
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+select is(public.set_exam_home_rules(pg_temp.k('e'), 'Same rules', 'Same kit') ->> 'ok', 'true', 'first save of new text');
+select is(public.set_exam_home_rules(pg_temp.k('e'), '  Same rules ', 'Same kit') ->> 'ok', 'true', 'the same text again is still ok');
+select tests.as_postgres();
+select is((select count(*)::int from public.audit_log where action = 'exam_home_rules_set' and target_id = pg_temp.k('e')), 3, 'and wrote no extra audit row (three real changes in this file)');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('teacher'));
 select is(public.set_exam_home_rules(pg_temp.k('d'), 'Draft rules', null) ->> 'ok', 'true', 'a teacher edits a draft in their subject');
 select is(public.set_exam_home_rules(pg_temp.k('e'), 'x', null) ->> 'code', 'forbidden', 'but not a published exam');

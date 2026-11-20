@@ -6,7 +6,7 @@ import { parseExamForm } from "@/lib/exam-form";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 
-export type TeacherExamResult = { ok: true; message: string } | { ok: false; message: string };
+export type TeacherExamResult = { ok: true; message: string; id?: string } | { ok: false; message: string };
 
 /**
  * A teacher creates or edits a draft exam in one of their own subjects. The form has no price and the
@@ -25,7 +25,8 @@ export async function saveTeacherExamAction(raw: Record<string, string>): Promis
   revalidatePath("/teacher/exams");
   revalidatePath("/admin/exams");
   if (!out.ok) return out;
-  if (rulesProblem) return { ok: false, message: rulesProblem };
+  // The draft is saved, so this is a success with a warning: the form closes and cannot save a second copy.
+  if (rulesProblem) return { ok: true, message: rulesProblem, id: out.id };
   return {
     ok: true,
     message: parsed.value.id ? "Draft saved." : "Draft created. An admin will set the price and publish it.",

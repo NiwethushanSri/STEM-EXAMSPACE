@@ -53,7 +53,7 @@ export async function saveHomeRules(supabase: Client, examId: string, v: ExamVal
   });
   const res = data && typeof data === "object" && !Array.isArray(data) ? (data as { ok?: unknown }) : null;
   if (!error && res?.ok === true) return null;
-  return "The exam was saved, but the home exam rules and allowed materials could not be. Open the exam and save again.";
+  return "The exam was saved, but its home exam rules and allowed materials were not. Open the exam and save the rules again.";
 }
 
 /**

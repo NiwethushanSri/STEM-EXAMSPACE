@@ -3,6 +3,7 @@ import {
   DEFAULT_ALLOWED_MATERIALS,
   DEFAULT_HOME_RULES,
   PRINT_AT_ACTUAL_SIZE,
+  sittingAnnouncement,
   sittingPhaseText,
   sittingSkewMs,
   type SittingState,
@@ -64,6 +65,17 @@ describe("sittingPhaseText", () => {
     expect(at("2031-06-04T09:00:00Z").countdown).toBe("Starts in 3 days");
     // A cancelled exam stays closed whatever the time.
     expect(at("2031-06-07T09:30:00Z", { phase: "closed" }).phase).toBe("closed");
+  });
+});
+
+describe("sittingAnnouncement", () => {
+  it("live_region_text_changes_with_the_phase_and_the_acknowledgement", () => {
+    const phases = ["before_start", "sitting", "upload_open", "late_window", "closed"] as const;
+    const texts = phases.map((p) => sittingAnnouncement(p, false));
+    expect(new Set(texts).size).toBe(5);
+    expect(sittingAnnouncement("sitting", true)).toBe(`${sittingAnnouncement("sitting", false)} Supervision confirmed.`);
+    // The same phase gives the same text however the countdown ticks, so the region is not re-read every second.
+    expect(sittingAnnouncement("sitting", false)).toBe(texts[1]);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   DEFAULT_HOME_RULES,
   PRINT_AT_ACTUAL_SIZE,
   SITTING_TEXT,
+  sittingAnnouncement,
   sittingPhaseText,
   sittingSkewMs,
   type SittingState,
@@ -120,15 +121,16 @@ export function SittingPanel({ bookingId, label, upload }: { bookingId: string; 
   }
 
   const paper = <BookingPaper bookingId={bookingId} label={label} />;
-  if (loadFailed && !state) {
+  // The live region is in the page from the start (empty until the details load), so what it later says is announced.
+  if (!state) {
     return (
-      <div className="space-y-2">
+      <section aria-label={`Home sitting for ${label}`} data-testid="sitting-panel" className="space-y-3">
+        <p data-testid="sitting-live" role="status" aria-live="polite" className="sr-only" />
         {paper}
-        <p role="alert" className="text-sm text-red-700">{SITTING_TEXT.failure}</p>
-      </div>
+        {loadFailed && <p role="alert" className="text-sm text-red-700">{SITTING_TEXT.failure}</p>}
+      </section>
     );
   }
-  if (!state) return paper;
 
   const text = sittingPhaseText(state, now, skew);
   const before = text.phase === "before_start";
@@ -141,6 +143,9 @@ export function SittingPanel({ bookingId, label, upload }: { bookingId: string; 
 
   return (
     <section aria-label={`Home sitting for ${label}`} data-testid="sitting-panel" className="space-y-3">
+      <p data-testid="sitting-live" role="status" aria-live="polite" className="sr-only">
+        {sittingAnnouncement(text.phase, !!state.acknowledged)}
+      </p>
       {paper}
       <div className="space-y-1 rounded-lg bg-slate-50 p-3">
         <p data-testid="sitting-title" className="font-semibold text-slate-800">{text.title}</p>
@@ -184,7 +189,7 @@ export function SittingPanel({ bookingId, label, upload }: { bookingId: string; 
       {text.phase !== "closed" && (ack || canAcknowledge || (state.has_parent && state.ack_as === null)) && (
         <div data-testid="sitting-ack" className="space-y-2 rounded-lg border border-slate-200 p-3">
           {ack ? (
-            <p aria-live="polite" className="text-slate-700">
+            <p className="text-slate-700">
               {ack.as_role === "parent" ? "Supervision confirmed" : "Confirmed by the student"}
               {ack.by_name ? ` by ${ack.by_name}` : ""} at {formatLondon(ack.at)}.
             </p>

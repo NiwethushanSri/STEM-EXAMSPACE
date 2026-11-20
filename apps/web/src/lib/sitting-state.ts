@@ -52,6 +52,21 @@ export function sittingSkewMs(state: Pick<SittingState, "server_now">, sentAt: n
   return Number.isNaN(server) ? 0 : server - (sentAt + receivedAt) / 2;
 }
 
+/**
+ * The text for the screen-reader live region: the phase and, once given, that supervision is confirmed. It changes
+ * only when the phase or the acknowledgement does, never with the ticking countdown.
+ */
+export function sittingAnnouncement(phase: SittingPhase, acknowledged: boolean): string {
+  const title = {
+    before_start: "Your exam has not started.",
+    sitting: "Your exam is now under way.",
+    upload_open: "The exam has finished. You can now upload your answers.",
+    late_window: "The on-time upload deadline has passed. Uploads now are marked late.",
+    closed: "Uploads are closed.",
+  }[phase];
+  return acknowledged ? `${title} Supervision confirmed.` : title;
+}
+
 const DAY_MS = 86_400_000;
 
 /** "1:30:00" (hours without a leading zero, minutes and seconds with); a day or more reads "3 days". */

@@ -67,6 +67,11 @@ begin
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
 
+  -- Every exam save calls this: nothing changed, nothing written and no audit row.
+  if v_exam.home_rules is not distinct from v_rules and v_exam.allowed_materials is not distinct from v_materials then
+    return jsonb_build_object('ok', true, 'id', v_exam.id);
+  end if;
+
   update public.exams set home_rules = v_rules, allowed_materials = v_materials where id = v_exam.id;
   insert into public.audit_log (actor_id, action, target_type, target_id)
   values (v_actor, 'exam_home_rules_set', 'exam', v_exam.id);
