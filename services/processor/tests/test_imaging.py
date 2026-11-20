@@ -172,6 +172,7 @@ def test_fit_page_finds_both_rules_on_a_clean_copy():
         fit = imaging.fit_page(page, imaging.read_code(page))
         assert fit.expected and min(fit.coverage) >= 0.98 and fit.error_mm < 0.3
         assert fit.rect_mm < 0.5 and fit.angle_deg < 0.1 and abs(fit.scale_agreement - 1) < 0.01  # the rectangle
+        assert abs(fit.code_aspect - 1) < 0.006 and abs(fit.vertical_agreement - 1) < 0.008  # a square code (R23)
         assert fit.bottom_offset_mm < 1.0 and not fit.ambiguous and fit.identity
         assert fit.paint_rule == fit.top_rule  # no lower rule-like line near the top rule
         slope, intercept = fit.top_rule

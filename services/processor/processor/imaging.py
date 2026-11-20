@@ -99,6 +99,12 @@ RULE_SEPARATION_PT = BOTTOM_RULE_PT - TOP_RULE_PT
 RECT_TOLERANCE_MM = 1.5  # lengths, matching ends and separation agree this closely
 RECT_PARALLEL_DEG = 0.5
 RECT_SCALE_AGREE = 0.02  # the code's scale and the rules' scale agree this closely (share)
+# The code is printed square (QR_PT each way), so its own height and width measure the picture's vertical and
+# horizontal scales separately (ruling R23). A page squashed one way only (flattened by the outline of a pile
+# it lies on) keeps the rules' lengths, ends and parallelism, and halves the squash in the code's averaged
+# scale; the two scales measured apart show it in full. Clean pictures measure 0.997-1.005.
+CODE_ASPECT_AGREE = 0.012  # the code's vertical and horizontal scales agree this closely (share)
+CODE_VERTICAL_AGREE = 0.015  # the code's vertical scale and the rules' scale agree this closely (share)
 RULE_PAINT_COVERAGE = 0.5  # lines found along this share of the length count for painting and the identity box
 # A look-alike is at least this share as dark as the chosen rule. 1A's spare pages rule full-width grey
 # answer lines (0.6 grey, 0.4 pt), the lowest about 4 mm above the bottom rule: they measure 0.36 to 0.40
@@ -172,9 +178,15 @@ class PageFit:
     `top_rule` and the bottom rule are the chosen rules; together they must form the printed rectangle:
     `rect_mm` is the largest disagreement, in mm, of their lengths, their matching ends (measured along the
     bottom rule) and their separation (RULE_SEPARATION_PT at the bottom rule's own scale); `angle_deg` the
-    angle between them; `scale_agreement` the code's scale over the rules' scale (1 = agree). `ambiguous`
-    says a second full-length rule-like line lies within RULE_AMBIGUOUS_MM of either rule; `identity` that
-    the identity line's ink lies above both ends of the top rule and no line lies in that box.
+    angle between them; `scale_agreement` the code's scale over the rules' scale (1 = agree).
+    `code_aspect` is the code's vertical scale over its horizontal scale (its measured height over its
+    width; the code is printed square) and `vertical_agreement` the code's vertical scale over the rules'
+    scale (ruling R23; 1 = agree): the rules measure the picture across, the code's height measures it up
+    and down, so a page squashed one way cannot have another sheet's rule prove its rectangle. `ambiguous`
+    says a second full-length rule-like line lies within RULE_AMBIGUOUS_MM of either rule and is at least
+    RULE_LOOKALIKE_DEPTH as dark as that rule (a paler line, such as a spare page's grey answer lines, does
+    not count); `identity` that the identity line's ink lies above both ends of the top rule and no line
+    lies in that box.
     `bottom_offset_mm` is the bottom rule's distance from where the code alone puts it. `coverage` is the
     share of each rule's full printed length it was found along (top, bottom). `paint_rule` is the lowest
     line found along RULE_PAINT_COVERAGE of the length near the top rule: the marking picture paints down
@@ -192,6 +204,8 @@ class PageFit:
     rect_mm: float = math.inf
     angle_deg: float = math.inf
     scale_agreement: float = 0.0
+    code_aspect: float = 0.0
+    vertical_agreement: float = 0.0
     bottom_offset_mm: float = math.inf
     ambiguous: bool = False
     identity: bool = False
@@ -206,6 +220,8 @@ class PageFit:
             and self.rect_mm <= RECT_TOLERANCE_MM
             and self.angle_deg <= RECT_PARALLEL_DEG
             and abs(self.scale_agreement - 1.0) <= RECT_SCALE_AGREE
+            and abs(self.code_aspect - 1.0) <= CODE_ASPECT_AGREE
+            and abs(self.vertical_agreement - 1.0) <= CODE_VERTICAL_AGREE
             and self.bottom_offset_mm <= RULE_PREDICT_MM
             and not self.ambiguous
             and self.identity
@@ -648,11 +664,16 @@ def fit_page(page: np.ndarray, read: CodeRead) -> PageFit:
        above it at that scale, the one whose separation is nearest is taken as the top rule; it is trusted
        only if the two form the printed rectangle (ruling R22): equal lengths, parallel, ends above one
        another and the right separation, all within RECT_TOLERANCE_MM, with the code's scale agreeing with
-       the rules'. Perspective or uneven stretch left in the picture breaks the rectangle (a narrower top
-       rule, a wrong separation), and a rule from another sheet lies at the wrong separation.
-    3. A second full-length line within RULE_AMBIGUOUS_MM of either rule, or any line in the identity box
-       above the top rule, or no identity ink there, leaves the page unconfirmed.
-    4. A perspective (homography) is fitted to the code's corners and both rules' ends, for painting.
+       the rules'. Perspective left in the picture breaks the rectangle (a narrower top rule).
+    3. The rectangle alone does not prove the picture's vertical scale: a page squashed up and down only
+       (a page on a pile, flattened by the pile's outline) keeps its rules' lengths, ends and parallelism,
+       and the rule of the sheet below can then lie at the printed separation. So the code, printed square,
+       must measure the same scale up and down as across (CODE_ASPECT_AGREE), and its vertical scale must
+       agree with the rules' scale (CODE_VERTICAL_AGREE) (ruling R23).
+    4. A second full-length line within RULE_AMBIGUOUS_MM of either rule and at least RULE_LOOKALIKE_DEPTH
+       as dark, or any line in the identity box above the top rule, or no identity ink there, leaves the
+       page unconfirmed.
+    5. A perspective (homography) is fitted to the code's corners and both rules' ends, for painting.
     The lowest line found along RULE_PAINT_COVERAGE of the length near the top rule is painted down to."""
     first = print_fit(read, page.shape)
     grey = cv2.blur(_grey(page), (3, 1)).astype(np.float32)  # a 3 px wide average along each row
@@ -698,6 +719,11 @@ def fit_page(page: np.ndarray, read: CodeRead) -> PageFit:
     )
     angle = abs(math.degrees(math.atan2(t1[1] - t0[1], t1[0] - t0[0]) - math.atan2(b1[1] - b0[1], b1[0] - b0[0])))
     scale_agreement = code_px_per_pt / s
+    ctl, ctr, cbr, cbl = read.corners.astype(np.float64)
+    code_across = float(np.linalg.norm(ctr - ctl) + np.linalg.norm(cbr - cbl)) / 2 / QR_PT  # px per pt
+    code_down = float(np.linalg.norm(cbl - ctl) + np.linalg.norm(cbr - ctr)) / 2 / QR_PT
+    code_aspect = code_down / max(code_across, 1e-9)
+    vertical_agreement = code_down / max(s, 1e-9)
 
     def lookalike(r: _Rule, rule: _Rule) -> bool:
         return (r is not rule and r.depth >= RULE_LOOKALIKE_DEPTH * rule.depth
@@ -720,7 +746,7 @@ def fit_page(page: np.ndarray, read: CodeRead) -> PageFit:
     return PageFit(
         homography, (top.slope, top.intercept), (paint.slope, paint.intercept), (top.coverage, bottom.coverage),
         error_mm, first.scale, first.offset_mm, rect_mm=rect_mm, angle_deg=angle, scale_agreement=scale_agreement,
-        bottom_offset_mm=bottom_offset, ambiguous=ambiguous, identity=identity,
+        code_aspect=code_aspect, vertical_agreement=vertical_agreement, bottom_offset_mm=bottom_offset, ambiguous=ambiguous, identity=identity,
     )
 
 

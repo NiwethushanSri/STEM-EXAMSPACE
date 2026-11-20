@@ -555,3 +555,77 @@ def test_clean_cases_still_get_marking_pictures():
         [p] = pipeline.prepare(synth.scan_pdf([synth.scan(synth.render("copy-a.pdf", index), seed=index)]),
                                "scan_file", PDF, make_ctx())
         assert p.quality.flags == [] and p.marking is not None, index
+
+
+# Fix round 4 (ruling R23): the code's own height and width measure the picture's two scales separately.
+
+SAME = synth.render("copy-a.pdf", 1)  # the same page's previous print: identical geometry
+
+
+def app_cropped(stack: np.ndarray) -> bytes:
+    """A scanning app that crops to the outline of the pile and saves it as an exact A4 page: the copy page
+    is squashed up and down only, with the lower sheet's strip above it."""
+    return synth.scan_pdf([synth.scan(cv2.resize(stack, (W, H), interpolation=cv2.INTER_AREA), seed=7)])
+
+
+@pytest.mark.parametrize("mm", [10.8, 11.2, 11.6, 12.0, 12.4])
+def test_pile_squash_lower_sheet_flags_or_hides(mm):
+    # The page lies on an identical sheet that sticks out `mm` above it and is printed a little lower on its
+    # paper. Flattened by the pile's outline, the page is squashed up and down by about 4%: the real top rule
+    # then lies some 10 mm short of the printed separation, and the lower sheet's rule within 1.5 mm of it.
+    # A one-way squash keeps the rules' lengths, ends and parallelism, so only the code's own height shows it.
+    for shift in (0.2, 0.6, 1.0):
+        for under, seed, angle, tone in ((UNDER_A, 40, 3.0, "dark"), (SAME, 41, -2.0, "light")):
+            stack = synth.on_pile(TAGGED, mm, under=synth.printed(under, shift_mm=(0.0, shift)))
+            img, _ = synth.photo(stack, turn=0, angle=angle, skew=0.04, seed=seed, table_tone=tone)
+            [p] = pipeline.prepare(synth.jpeg(img), "home_photo", "image/jpeg", tag_ctx())
+            assert_hidden_or_flagged(p)
+            pdf = app_cropped(stack)
+            for kind in ("home_pdf", "scan_file"):
+                [q] = pipeline.prepare(pdf, kind, PDF, tag_ctx())
+                assert_hidden_or_flagged(q)
+
+
+def test_pile_squash_shows_in_the_codes_height():
+    # The same squash, measured: the rules still form the printed rectangle with the lower sheet's rule and
+    # the code's averaged scale still agrees, but the code is no longer square.
+    stack = synth.on_pile(TAGGED, 12.0, under=synth.printed(SAME, shift_mm=(0.0, 0.6)))
+    page = decode(pipeline.prepare(app_cropped(stack), "scan_file", PDF, tag_ctx())[0].full)
+    fit = imaging.fit_page(page, imaging.read_code(page))
+    assert fit.rect_mm <= imaging.RECT_TOLERANCE_MM and abs(fit.scale_agreement - 1) <= imaging.RECT_SCALE_AGREE
+    assert fit.code_aspect < 1 - 2 * imaging.CODE_ASPECT_AGREE
+    assert fit.vertical_agreement < 1 - 2 * imaging.CODE_VERTICAL_AGREE
+    assert not fit.expected
+
+
+@pytest.mark.parametrize("d", [1.2, 1.6, 2.0, 2.4])
+def test_probe11_at_12mm_pile_flags(d):
+    # The real bottom rule has a 15% gap and a full-length look-alike lies d mm above it; the page lies on a
+    # copy page sticking out about 12 mm. Squashed by the pile's outline, the look-alike and the lower
+    # sheet's rule lie the printed separation apart; the code's height does not agree.
+    base = draw_rule_line(erase_rule(TAGGED, imaging.BOTTOM_RULE_PT, 0.15), *imaging.RULE_X_PT,
+                          imaging.BOTTOM_RULE_PT - d / 25.4 * 72, 2)
+    for mm in (11.5, 12.0, 12.5):
+        stack = synth.on_pile(base, mm, under=UNDER_A)
+        img, _ = synth.photo(stack, turn=0, angle=3.0, skew=0.04, seed=40)
+        for data, kind, mime in ((synth.jpeg(img), "home_photo", "image/jpeg"), (app_cropped(stack), "scan_file", PDF)):
+            [p] = pipeline.prepare(data, kind, mime, tag_ctx())
+            assert (p.code, p.copy_page) == (A, 2)
+            assert pipeline.LAYOUT_UNEXPECTED in p.quality.flags and p.marking is None, (mm, kind)
+
+
+@pytest.mark.parametrize("share", [0.45, 0.55, 0.65])
+def test_real_rule_in_shadow_on_pile_flags_or_hides(share):
+    # The same pile, with a shadow (the phone, a hand) over the left `share` of the page's top 20 mm, so the
+    # real top rule is found along less than half its length and is not even painted down to: without the
+    # vertical-scale check the whole name showed.
+    shaded = TAGGED.astype(np.float32)
+    shaded[round(4 * _MM):round(22 * _MM), :round(W * share)] *= 0.55
+    shaded = shaded.clip(0, 255).astype(np.uint8)
+    under = synth.printed(UNDER_A, shift_mm=(0.0, 0.4))
+    for mm in (11.6, 12.0, 12.2):
+        stack = synth.on_pile(shaded, mm, under=under)
+        img, _ = synth.photo(stack, turn=0, angle=3.0, skew=0.04, seed=40)
+        for data, kind, mime in ((synth.jpeg(img), "home_photo", "image/jpeg"), (app_cropped(stack), "scan_file", PDF)):
+            [p] = pipeline.prepare(data, kind, mime, tag_ctx())
+            assert_hidden_or_flagged(p)
