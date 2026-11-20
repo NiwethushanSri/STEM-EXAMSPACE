@@ -19,10 +19,10 @@ __all__ = [
 ]
 
 KINDS = ("home_photo", "home_pdf", "scan_file")
-# Quality flag: the page's geometry is not confirmed, so no marking picture is made (rulings R13 to R21): a
-# printed rule not found along its length, a rule not where the code (and, for the top rule, the bottom
-# rule) predicts it or a look-alike line near it, the code and rules not agreeing with one perspective, the
-# code off its printed place or size, or the page placed by its code alone.
+# Quality flag: the page's geometry is not proved, so no marking picture is made (rulings R13 to R22): a
+# printed rule not found along its length, the two rules not forming the printed rectangle or not agreeing
+# with the code's scale, a look-alike line near either rule or a line in the identity box, the code off its
+# printed place or size, or the page placed by its code alone.
 LAYOUT_UNEXPECTED = "layout_unexpected"
 
 
@@ -122,10 +122,10 @@ class _Shot:
 
     @property
     def layout_ok(self) -> bool:
-        """The page's geometry is confirmed (imaging.PageFit.expected; rulings R18, R21): both rules found
-        where the code and the bottom rule predict them, with no look-alike near the top rule, the code and
-        the rules' ends agreeing with one perspective, and the code at about its printed size and place. A
-        page placed by its code alone is never confirmed (ruling R15 follow-up)."""
+        """The page's geometry is proved (imaging.PageFit.expected; rulings R18, R22): both rules found and
+        forming the printed rectangle at the code's scale, no look-alike near either and nothing in the
+        identity box, and the code at about its printed size and place. A page placed by its code alone is
+        never confirmed (ruling R15 follow-up)."""
         return not self.placed_by_code and self.fit is not None and self.fit.expected
 
 

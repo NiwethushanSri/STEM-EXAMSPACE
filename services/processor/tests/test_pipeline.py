@@ -446,7 +446,7 @@ def test_lower_master_line_not_taken_for_top_rule():
     assert p.quality.flags == [pipeline.LAYOUT_UNEXPECTED] and p.marking is None
     full = decode(p.full)
     fit = imaging.fit_page(full, imaging.read_code(full))
-    assert fit.top_offset_mm > imaging.RULE_PREDICT_MM  # the nearest rule-like line is the master's, 15 mm off
+    assert fit.rect_mm > imaging.RECT_TOLERANCE_MM  # the master's line, 15 mm low, cannot form the printed rectangle
 
 
 def test_second_rule_within_8mm_flags_layout():
@@ -455,7 +455,7 @@ def test_second_rule_within_8mm_flags_layout():
     assert p.quality.flags == [pipeline.LAYOUT_UNEXPECTED] and p.marking is None
     full = decode(p.full)
     fit = imaging.fit_page(full, imaging.read_code(full))
-    assert fit.ambiguous and fit.top_offset_mm < 1.0  # the real rule is found, but so is a look-alike
+    assert fit.ambiguous and fit.rect_mm < 1.0  # the real rule proves the rectangle, but a look-alike is near
 
 
 def test_rule_coverage_counts_its_full_length():
@@ -468,3 +468,90 @@ def test_rule_coverage_counts_its_full_length():
     full = decode(p.full)
     fit = imaging.fit_page(full, imaging.read_code(full))
     assert fit.coverage[0] < imaging.RULE_COVERAGE
+
+
+# Fix round 3 (ruling R22): the two rules must prove the printed rectangle; no rule is predicted from another.
+
+
+def erase_rule(page: np.ndarray, y_pt: float, share: float) -> np.ndarray:
+    """`page` with the first `share` of a printed rule (at `y_pt`) missing."""
+    out = page.copy()
+    s = W / imaging.PAGE_PT[0]
+    x0, x1 = imaging.RULE_X_PT
+    y = round(y_pt * s)
+    out[y - 4:y + 5, round(x0 * s):round((x0 + (x1 - x0) * share) * s)] = 255
+    return out
+
+
+@pytest.mark.parametrize("k", [0.045, 0.06, 0.08])
+def test_keystone_pile_of_copies_name_and_area_hidden(k):
+    # A phone photo with its top further away (keystone), the page lying on another copy page that sticks
+    # out above it, on a white table (no paper edge to flatten by), as a home PDF and as a scan file; with
+    # and without part of the real top rule missing. The sheet below's rule and identity line are in the
+    # picture, where a prediction from the page's foot would expect the real rule.
+    for under in (UNDER_A, UNDER_B):
+        for mm in (11, 15, 24):
+            for gap in (0.0, 0.06, 0.12):
+                top = erase_rule(TAGGED, imaging.TOP_RULE_PT, gap) if gap else TAGGED
+                pdf = synth.scan_pdf([synth.keystone(synth.on_pile(top, mm, under=under), k, tone="white")])
+                for kind in ("home_pdf", "scan_file"):
+                    [p] = pipeline.prepare(pdf, kind, PDF, tag_ctx())
+                    assert_hidden_or_flagged(p)
+
+
+@pytest.mark.parametrize("d", [1.6, 2.0, 2.4])
+def test_bottom_lookalike_line_flags(d):
+    # The real bottom rule has a 15% gap (no longer full length) and a full-length look-alike lies d mm above
+    # it; the page lies on a copy page sticking out 11 to 20 mm. The look-alike cannot form the printed
+    # rectangle with the real top rule (d mm short), nor with the sheet below's rule.
+    base = draw_rule_line(erase_rule(TAGGED, imaging.BOTTOM_RULE_PT, 0.15), *imaging.RULE_X_PT,
+                          imaging.BOTTOM_RULE_PT - d / 25.4 * 72, 2)
+    for mm in (11, 14, 17, 20):
+        img, _ = synth.photo(synth.on_pile(base, mm, under=UNDER_A), turn=0, angle=3.0, skew=0.04, seed=40)
+        overlap = synth.scan_pdf([synth.scan(synth.on_pile(base, mm, under=UNDER_A), seed=3)])
+        for data, kind, mime in ((synth.jpeg(img), "home_photo", "image/jpeg"), (overlap, "scan_file", PDF)):
+            [p] = pipeline.prepare(data, kind, mime, tag_ctx())
+            assert (p.code, p.copy_page) == (A, 2)
+            assert pipeline.LAYOUT_UNEXPECTED in p.quality.flags and p.marking is None, (mm, kind)
+
+
+@pytest.mark.parametrize("d", [2.0, 3.0, 3.8])
+def test_lower_line_under_4mm_flags_or_hides(d):
+    # The real top rule's first 12% is missing and a full-width line lies d mm below it: that line cannot
+    # form the rectangle (d mm too low) and the real rule lies in the identity box above it.
+    base = draw_rule_line(erase_rule(TAGGED, imaging.TOP_RULE_PT, 0.12), 30.0, 565.0,
+                          imaging.TOP_RULE_PT + d / 25.4 * 72, 2)
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(base, seed=3)]), "scan_file", PDF, tag_ctx())
+    assert_hidden_or_flagged(p)
+    for lead in (8, 16, 22):
+        framed = synth.scan_pdf([synth.scan(synth.with_lead_in(base, lead), seed=3)])
+        [q] = pipeline.prepare(framed, "scan_file", PDF, tag_ctx())
+        assert_hidden_or_flagged(q)
+    for mm in (10, 18, 24):
+        img, _ = synth.photo(synth.on_pile(base, mm), turn=0, angle=3.0, skew=0.04, seed=40)
+        [r] = pipeline.prepare(synth.jpeg(img), "home_photo", "image/jpeg", tag_ctx())
+        assert_hidden_or_flagged(r)
+
+
+def test_clean_cases_still_get_marking_pictures():
+    # Pages that are what they look like must still get marking pictures, with the name and the hidden area
+    # white: flagging every page cannot pass this test.
+    cases = [
+        ("flat scan", synth.scan_pdf([synth.scan(TAGGED, seed=3)]), "scan_file", PDF),
+        ("flat scan upside down", synth.scan_pdf([synth.scan(TAGGED, turn=180, seed=4)]), "scan_file", PDF),
+        ("95% print", synth.scan_pdf([synth.scan(synth.printed(TAGGED, scale=0.95), seed=21)]), "scan_file", PDF),
+        ("lead-in 8 mm", synth.scan_pdf([synth.scan(synth.with_lead_in(TAGGED, 8.0), seed=1)]), "scan_file", PDF),
+        ("lead-in 20 mm", synth.scan_pdf([synth.scan(synth.with_lead_in(TAGGED, 20.0), seed=2)]), "scan_file", PDF),
+    ]
+    for turn, angle, seed, tone in ((0, 2.0, 34, "dark"), (180, 7.0, 4, "dark"), (90, -6.0, 5, "dark"),
+                                    (0, 5.0, 31, "light"), (180, 3.0, 33, "light"), (90, -7.0, 38, "light")):
+        img, _ = synth.photo(TAGGED, turn=turn, angle=angle, skew=0.06, seed=seed, table_tone=tone)
+        cases.append((f"photo {tone} {turn}", synth.jpeg(img), "home_photo", "image/jpeg"))
+    for label, data, kind, mime in cases:
+        [p] = pipeline.prepare(data, kind, mime, tag_ctx())
+        assert p.quality.flags == [], label
+        assert_hidden(p)
+    for index in (3, 4):  # spare pages: ruled grey answer lines run close to the bottom rule
+        [p] = pipeline.prepare(synth.scan_pdf([synth.scan(synth.render("copy-a.pdf", index), seed=index)]),
+                               "scan_file", PDF, make_ctx())
+        assert p.quality.flags == [] and p.marking is not None, index

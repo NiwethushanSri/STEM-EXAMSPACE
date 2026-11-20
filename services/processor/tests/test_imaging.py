@@ -156,8 +156,10 @@ def test_marking_image_blanks_top_band_and_areas():
     assert np.array_equal(out[qy0:qy1, qx0:qx1], page[qy0:qy1, qx0:qx1])  # the code is untouched
     margin = math.ceil(imaging.PREDICTED_MARGIN_PT * W / imaging.PAGE_PT[0]) + 1  # placed through the fit, 3 pt larger
     assert imaging.PREDICTED_MARGIN_PT >= 3  # ruling R19
-    assert np.array_equal(out[band + margin:y0 - margin], page[band + margin:y0 - margin])
-    assert np.array_equal(out[y1 + margin:], page[y1 + margin:])
+    area_margin = math.ceil(imaging.AREA_MARGIN_MM * synth.DPI / 25.4) + 1  # areas: 2 mm larger (ruling R22)
+    assert np.array_equal(out[band + margin:y0 - area_margin], page[band + margin:y0 - area_margin])
+    assert np.array_equal(out[y1 + area_margin:], page[y1 + area_margin:])
+    assert (out[y1:y1 + area_margin - 2, x0:x1] == 255).all()  # the 2 mm margin below the area is painted
     assert page[:band].min() < 100  # the input is not changed
     with pytest.raises(ValueError):
         imaging.marking_image(page, [area], imaging.PageFit(None, None, None, (0.0, 0.0), math.inf, 1.0, 0.0))
@@ -169,7 +171,8 @@ def test_fit_page_finds_both_rules_on_a_clean_copy():
         page = synth.render("copy-a.pdf", i)
         fit = imaging.fit_page(page, imaging.read_code(page))
         assert fit.expected and min(fit.coverage) >= 0.98 and fit.error_mm < 0.3
-        assert fit.top_offset_mm < 1.0 and fit.bottom_offset_mm < 1.0 and not fit.ambiguous and fit.identity
+        assert fit.rect_mm < 0.5 and fit.angle_deg < 0.1 and abs(fit.scale_agreement - 1) < 0.01  # the rectangle
+        assert fit.bottom_offset_mm < 1.0 and not fit.ambiguous and fit.identity
         assert fit.paint_rule == fit.top_rule  # no lower rule-like line near the top rule
         slope, intercept = fit.top_rule
         assert abs(slope) < 0.001 and abs(intercept - imaging.TOP_RULE_PT * px_per_pt) < 1.5  # 30 pt down
