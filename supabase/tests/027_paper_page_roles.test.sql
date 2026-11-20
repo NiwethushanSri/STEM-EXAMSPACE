@@ -102,7 +102,7 @@ insert into public.exam_papers (exam_id, kind, title, version, storage_path, pag
 select id, 'insert', 'Formula sheet', 1, id::text || '/' || gen_random_uuid()::text || '.pdf', 1, 1000 from kv where name = 'exam';
 select is((select count(*)::int from public.paper_page_roles r join public.exam_papers p on p.id = r.paper_id where p.kind = 'insert'), 0, 'inserts get no roles');
 
--- Roles lock once a script is attached (script_pages arrives with the scripts tables; a stand-in proves the guard).
+-- Roles lock once a script is attached (script_pages arrives with the scripts tables; a real script page proves the guard).
 select tests.as_user(pg_temp.uid('admin'));
 select is(public.set_paper_page_roles(pg_temp.k('v2'), '[{"page":1,"role":"answer"},{"page":2,"role":"answer"},{"page":3,"role":"answer"},{"page":4,"role":"answer"}]') ->> 'ok', 'true', 'roles can change while no script exists');
 select tests.as_postgres();
@@ -111,8 +111,15 @@ with b as (
   select id, pg_temp.uid('s1'), pg_temp.uid('s1'), 'paid', 0, 'home' from kv where name = 'exam' returning id)
 insert into public.paper_copies (code, booking_id, paper_id, page_count)
 select public.copy_code_new(), b.id, pg_temp.k('v2'), 6 from b;
-create table public.script_pages (copy_id uuid not null);
-insert into public.script_pages select id from public.paper_copies where paper_id = pg_temp.k('v2');
+with sub as (
+  insert into public.home_submissions (booking_id, seq) select booking_id, 1 from public.paper_copies where paper_id = pg_temp.k('v2') returning id, booking_id),
+up as (
+  insert into public.script_uploads (exam_id, booking_id, submission_id, kind, storage_path, mime, byte_size, uploaded_by)
+  select (select id from kv where name = 'exam'), sub.booking_id, sub.id, 'home_photo', 'home/' || gen_random_uuid()::text || '.jpg', 'image/jpeg', 1000, pg_temp.uid('s1')
+  from sub returning id, booking_id)
+insert into public.script_pages (upload_id, source_index, exam_id, copy_id, copy_page, booking_id, state, full_path)
+select up.id, 0, (select id from kv where name = 'exam'), c.id, 1, up.booking_id, 'matched', 'x/0-full.jpg'
+from up join public.paper_copies c on c.booking_id = up.booking_id and c.paper_id = pg_temp.k('v2');
 select tests.as_user(pg_temp.uid('admin'));
 select is(public.set_paper_page_roles(pg_temp.k('v2'), '[{"page":1,"role":"cover"},{"page":2,"role":"answer"},{"page":3,"role":"answer"},{"page":4,"role":"answer"}]') ->> 'code', 'conflict', 'roles are locked once a script page exists');
 select is(public.set_paper_hidden_areas(pg_temp.k('v2'), '[]') ->> 'ok', 'true', 'hidden areas can still change');
