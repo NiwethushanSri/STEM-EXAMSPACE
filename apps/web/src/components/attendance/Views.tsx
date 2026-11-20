@@ -2,7 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Card } from "@/components/AppShell";
 import { Register } from "@/components/attendance/Register";
+import { CollectionColumn } from "@/components/scripts/CollectionColumn";
+import { CustodyPanel } from "@/components/scripts/CustodyPanel";
 import { loadPicker, loadRegister, type Area } from "@/lib/attendance";
+import { loadCollection, loadCustody } from "@/lib/collection";
 import { SITTING_LABEL } from "@/lib/exam-form";
 import { formatLondon } from "@/lib/money";
 
@@ -60,6 +63,7 @@ export async function RegisterView({ area, examId, centreId }: { area: Area; exa
   if (!d) notFound();
   const { exam, centre } = d;
   const closed = !d.open;
+  const [collection, custody] = centre ? await Promise.all([loadCollection(exam.id, centre.id), loadCustody(exam.id, centre.id)]) : [[], { events: [], staff: [] }];
   const back = (
     <p className="text-sm">
       <Link href={`/${area}/attendance`} className="text-blue-700 underline">
@@ -154,6 +158,9 @@ export async function RegisterView({ area, examId, centreId }: { area: Area; exa
       </Card>
 
       <Register key={centre.id} centreId={centre.id} open={d.open} startsAt={exam.startsAt} />
+
+      <CollectionColumn key={`sheets-${centre.id}`} examId={exam.id} centreId={centre.id} rows={collection} />
+      <CustodyPanel key={`custody-${centre.id}-${custody.events.length}`} examId={exam.id} centreId={centre.id} events={custody.events} staff={custody.staff} />
 
       {closed ? (
         <NameList title="Absent" testId="absent-list" rows={d.absent} names={d.names} empty="Nobody was absent." />

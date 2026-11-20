@@ -119,6 +119,120 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"collection_counts": {
+                  Row: {
+                    "booking_id": string,"exam_id": string,"extra_sheets": number,"recorded_at": string,"recorded_by": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "booking_id": string,"exam_id": string,"extra_sheets": number,"recorded_at"?: string,"recorded_by": string
+                  }
+                  Update: {
+                    "booking_id"?: string,"exam_id"?: string,"extra_sheets"?: number,"recorded_at"?: string,"recorded_by"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "collection_counts_booking_id_fkey"
+      columns: ["booking_id"]
+isOneToOne: true
+      referencedRelation: "bookings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "collection_counts_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "collection_counts_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"collection_manifests": {
+                  Row: {
+                    "centre_id": string,"created_at": string,"created_by": string,"exam_id": string,"id": string,"number": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "centre_id": string,"created_at"?: string,"created_by": string,"exam_id": string,"id"?: string,"number": string
+                  }
+                  Update: {
+                    "centre_id"?: string,"created_at"?: string,"created_by"?: string,"exam_id"?: string,"id"?: string,"number"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "collection_manifests_centre_id_fkey"
+      columns: ["centre_id"]
+isOneToOne: false
+      referencedRelation: "exam_centres"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "collection_manifests_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "collection_manifests_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"custody_events": {
+                  Row: {
+                    "at": string,"batch_id": string | null,"centre_id": string,"exam_id": string,"from_staff": string | null,"id": string,"location": string,"manifest_id": string | null,"note": string | null,"recorded_by": string,"seq": number,"step": string,"to_staff": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "at"?: string,"batch_id"?: string | null,"centre_id": string,"exam_id": string,"from_staff"?: string | null,"id"?: string,"location": string,"manifest_id"?: string | null,"note"?: string | null,"recorded_by": string,"seq"?: never,"step": string,"to_staff"?: string | null
+                  }
+                  Update: {
+                    "at"?: string,"batch_id"?: string | null,"centre_id"?: string,"exam_id"?: string,"from_staff"?: string | null,"id"?: string,"location"?: string,"manifest_id"?: string | null,"note"?: string | null,"recorded_by"?: string,"seq"?: never,"step"?: string,"to_staff"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "custody_events_centre_id_fkey"
+      columns: ["centre_id"]
+isOneToOne: false
+      referencedRelation: "exam_centres"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "custody_events_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "custody_events_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "custody_events_from_staff_fkey"
+      columns: ["from_staff"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "custody_events_manifest_id_fkey"
+      columns: ["manifest_id"]
+isOneToOne: false
+      referencedRelation: "collection_manifests"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "custody_events_to_staff_fkey"
+      columns: ["to_staff"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"exam_centres": {
                   Row: {
                     "created_at": string,"exam_id": string,"id": string,"register_closed_at": string | null,"removed_at": string | null,"room": string,"seat_limit": number,"venue_id": string
@@ -567,6 +681,64 @@ isOneToOne: false
                   Relationships: [
                     
                   ]
+                },"script_notices": {
+                  Row: {
+                    "attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_recipients": Json | null
+                  }
+                  ComputedFields: "script_notice_content" | "script_notice_recipients"
+                  Insert: {
+                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"submission_id"?: string | null
+                  }
+                  Update: {
+                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"submission_id"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "script_notices_exception_id_fkey"
+      columns: ["exception_id"]
+isOneToOne: false
+      referencedRelation: "script_exceptions"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_notices_script_id_fkey"
+      columns: ["script_id"]
+isOneToOne: false
+      referencedRelation: "scripts"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_notices_submission_id_fkey"
+      columns: ["submission_id"]
+isOneToOne: false
+      referencedRelation: "home_submissions"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"script_notices_sent": {
+                  Row: {
+                    "notice_id": number,"profile_id": string,"sent_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "notice_id": number,"profile_id": string,"sent_at"?: string
+                  }
+                  Update: {
+                    "notice_id"?: number,"profile_id"?: string,"sent_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "script_notices_sent_notice_id_fkey"
+      columns: ["notice_id"]
+isOneToOne: false
+      referencedRelation: "script_notices"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_notices_sent_profile_id_fkey"
+      columns: ["profile_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"script_page_links": {
                   Row: {
                     "copy_page": number,"page_id": string,"script_id": string,"version": number
@@ -943,6 +1115,15 @@ isOneToOne: false
 "close_register_as":
 { Args: { "p_actor": string,"p_centre": string,"p_now": string }; Returns: Json
                            },
+"collection_list":
+{ Args: { "p_centre": string,"p_exam": string }; Returns: Json
+                           },
+"collection_manifest_create":
+{ Args: { "p_centre": string,"p_exam": string }; Returns: Json
+                           },
+"collection_record":
+{ Args: { "p_booking": string,"p_extra_sheets": number }; Returns: Json
+                           },
 "complete_finished_exams":
 { Args: { "p_now"?: string }; Returns: number
                            },
@@ -957,6 +1138,15 @@ isOneToOne: false
                            },
 "create_booking":
 { Args: { "p_centre"?: string,"p_exam": string,"p_sitting"?: Database["public"]['Enums']["sitting_mode"],"p_student": string }; Returns: Json
+                           },
+"custody_list":
+{ Args: { "p_centre": string,"p_exam": string }; Returns: Json
+                           },
+"custody_record":
+{ Args: { "p_centre": string,"p_exam": string,"p_from": string,"p_location": string,"p_manifest"?: string,"p_note": string,"p_step": string,"p_to": string }; Returns: Json
+                           },
+"custody_staff":
+{ Args: { "p_centre": string,"p_exam": string }; Returns: Json
                            },
 "decide_cancellation":
 { Args: { "p_approve": boolean,"p_booking": string,"p_note": string,"p_refund_pence": number }; Returns: Json
@@ -1266,6 +1456,30 @@ isOneToOne: false
                            },
 "script_links":
 { Args: { "p_script": string }; Returns: Json
+                           },
+"script_notice_content":
+{ Args: { "p_notice": Omit<Database["public"]['Tables']["script_notices"]['Row'], Database["public"]['Tables']["script_notices"]['ComputedFields']> }; Returns: Json
+                           },
+"script_notice_given_up":
+{ Args: { "p_now"?: string }; Returns: number
+                           },
+"script_notice_mark":
+{ Args: { "p_id": number,"p_now"?: string,"p_ok": boolean }; Returns: undefined
+                           },
+"script_notice_next":
+{ Args: { "p_limit": number,"p_now"?: string }; Returns: Json
+                           },
+"script_notice_recipients":
+{ Args: { "p_notice": Omit<Database["public"]['Tables']["script_notices"]['Row'], Database["public"]['Tables']["script_notices"]['ComputedFields']> }; Returns: Json
+                           },
+"script_notice_record":
+{ Args: { "p_id": number,"p_profile": string }; Returns: string
+                           },
+"script_notice_unmark":
+{ Args: { "p_id": number,"p_profile": string }; Returns: undefined
+                           },
+"script_notify_tick":
+{ Args: Record<PropertyKey, never>; Returns: undefined
                            },
 "script_number_next":
 { Args: { "p_exam": string }; Returns: string

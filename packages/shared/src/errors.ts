@@ -202,3 +202,32 @@ const uploadMessages: Record<string, string> = {
 export function uploadMessageFor(code: string | null | undefined): string {
   return code && Object.hasOwn(uploadMessages, code) ? uploadMessages[code] : messages.internal;
 }
+
+/** Which collection or custody RPC a failure code came from. */
+export type CollectionContext = "record" | "manifest" | "custody";
+
+const collectionMessages: Record<CollectionContext, Record<string, string>> = {
+  record: {
+    not_present: "Only a candidate marked present or late has sheets to count.",
+    invalid_input: "Enter a whole number of extra sheets from 0 to 50.",
+    not_found: "Not found",
+    forbidden: "You do not have permission to use this register.",
+  },
+  manifest: {
+    conflict: "This exam already has 99 manifests.",
+    not_found: "Not found",
+    forbidden: "You do not have permission to use this register.",
+  },
+  custody: {
+    invalid_input: "Choose the step, say where, and name who or add a note. The place can be up to 120 characters and the note up to 300.",
+    invalid_staff: "Choose staff members with an active account.",
+    not_found: "Not found",
+    forbidden: "You do not have permission to use this register.",
+  },
+};
+
+/** Message for a collection, manifest or custody RPC failure code; unknown codes get the generic message. */
+export function collectionMessageFor(code: string | null | undefined, context: CollectionContext): string {
+  const table = collectionMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}
