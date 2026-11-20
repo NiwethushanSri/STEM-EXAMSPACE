@@ -20,7 +20,7 @@ create table public.script_notices (
   exception_id uuid references public.script_exceptions (id) on delete set null,
   exam_id uuid,
   exception_kind text,
-  -- exam, kind, booking, upload and page of the exception: the same alert is not queued twice within 6 hours
+  -- exam, kind, booking, upload and page position (source_index) of the exception: the same alert is not queued twice within 6 hours
   dedupe_key text,
   created_at timestamptz not null default now(),
   claimed_at timestamptz,
@@ -90,9 +90,14 @@ set search_path = ''
 as $$
 declare
   v_key text;
+  v_page text;
 begin
+  -- A re-run of an upload writes new page rows, so the key uses what stays the same: the page's position in its
+  -- upload (source_index), or its copy page when the exception has no page row.
+  select 'p' || p.source_index into v_page from public.script_pages p where p.id = new.page_id;
+  v_page := coalesce(v_page, case when new.details ? 'copy_page' then 'c' || (new.details ->> 'copy_page') end, '-');
   v_key := concat_ws('|', new.exam_id, new.kind, coalesce(new.booking_id::text, '-'), coalesce(new.upload_id::text, '-'),
-    coalesce(new.page_id::text, '-'));
+    v_page);
   if exists (select 1 from public.script_notices n
              where n.dedupe_key = v_key and n.created_at > now() - interval '6 hours') then
     return null; -- a re-run recreated an exception already announced

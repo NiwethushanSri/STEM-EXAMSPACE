@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(48);
+select plan(51);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -158,6 +158,29 @@ select is((select x ->> 'exception_kind' from jsonb_array_elements(public.script
   where x ->> 'kind' = 'staff_alert' and x ->> 'exception_kind' = 'processing_failed'), 'processing_failed', 'an alert whose exception was deleted still says what it is about');
 insert into public.script_exceptions (exam_id, kind, booking_id) values (pg_temp.k('e'), 'late', pg_temp.k('b2'));
 select is(pg_temp.n('staff_alert'), 6, 'a different booking is a different alert');
+
+-- ----- rerun_with_new_page_rows_queues_no_second_alert -----
+insert into public.script_uploads (id, exam_id, booking_id, submission_id, kind, position, storage_path, mime, byte_size, uploaded_by)
+values ('00000000-0000-4000-8000-0000000000a1', pg_temp.k('e'), pg_temp.k('b1'), pg_temp.k('d1'), 'home_photo', 1, 'zzn/a1.jpg',
+  'image/jpeg', 1000, pg_temp.uid('s1'));
+insert into public.script_pages (id, upload_id, source_index, exam_id, state, full_path)
+values ('00000000-0000-4000-8000-0000000000b1', '00000000-0000-4000-8000-0000000000a1', 0, pg_temp.k('e'), 'unmatched', 'zzn/a1-0.jpg');
+insert into public.script_exceptions (exam_id, kind, booking_id, upload_id, page_id)
+values (pg_temp.k('e'), 'uncoded_family_page', pg_temp.k('b1'), '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b1');
+select is(pg_temp.n('staff_alert'), 7, 'a page without a code queues an alert');
+-- The rerun replaces the page row (same position in the upload) and recreates the exception.
+update public.script_pages set replaced_at = now() where id = '00000000-0000-4000-8000-0000000000b1';
+insert into public.script_pages (id, upload_id, source_index, exam_id, state, full_path)
+values ('00000000-0000-4000-8000-0000000000b2', '00000000-0000-4000-8000-0000000000a1', 0, pg_temp.k('e'), 'unmatched', 'zzn/a1-0.jpg');
+delete from public.script_exceptions where page_id = '00000000-0000-4000-8000-0000000000b1';
+insert into public.script_exceptions (exam_id, kind, booking_id, upload_id, page_id)
+values (pg_temp.k('e'), 'uncoded_family_page', pg_temp.k('b1'), '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b2');
+select is(pg_temp.n('staff_alert'), 7, 'the same problem on new page rows after a rerun queues no second alert');
+insert into public.script_pages (id, upload_id, source_index, exam_id, state, full_path)
+values ('00000000-0000-4000-8000-0000000000b3', '00000000-0000-4000-8000-0000000000a1', 1, pg_temp.k('e'), 'unmatched', 'zzn/a1-1.jpg');
+insert into public.script_exceptions (exam_id, kind, booking_id, upload_id, page_id)
+values (pg_temp.k('e'), 'uncoded_family_page', pg_temp.k('b1'), '00000000-0000-4000-8000-0000000000a1', '00000000-0000-4000-8000-0000000000b3');
+select is(pg_temp.n('staff_alert'), 8, 'another page of the upload is its own alert');
 
 -- ----- given_up_count -----
 select pg_temp.reset();
