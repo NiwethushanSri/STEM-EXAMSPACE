@@ -244,7 +244,7 @@ const scanMessages: Record<ScanContext, Record<string, string>> = {
     forbidden: FORBIDDEN,
     invalid_input: "Check the manifest number and try again.",
     not_found: "This centre is not part of this exam. Refresh the page.",
-    conflict: "This centre is no longer part of this exam, or the exam already has 999 scan batches.",
+    conflict: "This centre is no longer part of this exam, or the exam already has 99 scan batches.",
     unknown_manifest: "No manifest has that number. Check the number printed on the manifest.",
     other_manifest: "That manifest belongs to another centre or exam.",
   },

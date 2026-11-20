@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(89);
+select plan(90);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -165,12 +165,12 @@ select ok(exists (select 1 from pg_constraint where conrelid = 'public.scan_batc
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.batch('bt1', 'e', 'ce1', pg_temp.r('m1') ->> 'number') ->> 'number',
-  'B-' || (select exam_code from public.exams where id = pg_temp.k('e')) || '-001', 'batch_numbers_per_exam: the first batch is 001');
+  'B-' || (select exam_code from public.exams where id = pg_temp.k('e')) || '-01', 'batch_numbers_per_exam: the first batch is 01');
 select is(pg_temp.r('bt1') ->> 'manifest', pg_temp.r('m1') ->> 'number', 'it names the manifest it came with');
 select is(pg_temp.batch('bt2', 'e', 'ce2') ->> 'number',
-  'B-' || (select exam_code from public.exams where id = pg_temp.k('e')) || '-002', 'numbers run on across the exam''s centres');
+  'B-' || (select exam_code from public.exams where id = pg_temp.k('e')) || '-02', 'numbers run on across the exam''s centres');
 select is(pg_temp.batch('btf', 'f', 'cf') ->> 'number',
-  'B-' || (select exam_code from public.exams where id = pg_temp.k('f')) || '-001', 'another exam starts again at 001');
+  'B-' || (select exam_code from public.exams where id = pg_temp.k('f')) || '-01', 'another exam starts again at 01');
 select is(pg_temp.batch('bt3', 'e', 'ce1', '  ' || lower(pg_temp.r('m1') ->> 'number') || ' ') ->> 'manifest', pg_temp.r('m1') ->> 'number',
   'a manifest number is read without spaces or case');
 select is(pg_temp.code(pg_temp.batch(null, 'e', 'ce1', pg_temp.r('m2') ->> 'number')), 'other_manifest', 'a manifest of another centre is refused');
@@ -182,6 +182,13 @@ select tests.as_postgres();
 select is((select manifest_id from public.scan_batches where id = pg_temp.k('bt1')), pg_temp.k('m1'), 'the batch keeps the manifest''s id');
 select is((select count(*)::int from public.audit_log where action = 'scan_batch_created' and target_type = 'scan_batch'
            and target_id in (pg_temp.k('bt1'), pg_temp.k('bt2'), pg_temp.k('btf'), pg_temp.k('bt3'))), 4, 'each batch made is audited');
+-- Exam f gets batches 02 to 99: its 100th is refused.
+insert into public.scan_batches (exam_id, centre_id, number, created_by)
+select pg_temp.k('f'), pg_temp.k('cf'), 'B-' || (select exam_code from public.exams where id = pg_temp.k('f')) || '-' || lpad(n::text, 2, '0'), pg_temp.uid('admin')
+from generate_series(2, 99) n;
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(pg_temp.batch(null, 'f', 'cf')), 'conflict', 'an exam has at most 99 batches (numbers have two digits)');
+select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
 -- batch_for_teacher_forbidden
@@ -339,7 +346,7 @@ select is(pg_temp.missing('b5') || pg_temp.missing('b6') || pg_temp.missing('b7'
 -- More scans arrive; staff say a page of b3 was left blank (as the exception queue will).
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('admin'));
-select is(pg_temp.batch('bt4', 'e', 'ce1') ->> 'number', 'B-' || (select exam_code from public.exams where id = pg_temp.k('e')) || '-004',
+select is(pg_temp.batch('bt4', 'e', 'ce1') ->> 'number', 'B-' || (select exam_code from public.exams where id = pg_temp.k('e')) || '-04',
   'a later batch of the centre runs on');
 select pg_temp.bgn('u4', 'bt4', 'application/pdf', 500);
 select tests.as_postgres();

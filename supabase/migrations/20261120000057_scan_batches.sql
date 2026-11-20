@@ -50,8 +50,9 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- scan_batch_create: a new batch of one centre of the exam, numbered B-<exam code>-<001..999> per exam. A manifest
--- number (as printed, read without spaces or case) must be a manifest of that exam and centre.
+-- scan_batch_create: a new batch of one centre of the exam, numbered B-<exam code>-<01..99> per exam (the 100th is
+-- refused, as manifests are). A manifest number (as printed, read without spaces or case) must be a manifest of that
+-- exam and centre.
 -- ---------------------------------------------------------------------------------------------
 create function public.scan_batch_create(p_exam uuid, p_centre uuid, p_manifest_number text default null)
 returns jsonb
@@ -96,10 +97,10 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('scan_batch:' || p_exam::text, 0));
   select coalesce(max(substring(b.number from '-([0-9]+)$')::int), 0) + 1 into v_n
   from public.scan_batches b where b.exam_id = p_exam;
-  if v_n > 999 then
+  if v_n > 99 then
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end if;
-  v_number := 'B-' || v_code || '-' || lpad(v_n::text, 3, '0');
+  v_number := 'B-' || v_code || '-' || lpad(v_n::text, 2, '0');
   insert into public.scan_batches (exam_id, centre_id, manifest_id, number, created_by)
   values (p_exam, p_centre, v_m.id, v_number, v_actor)
   returning id into v_id;

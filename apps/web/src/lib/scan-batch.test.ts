@@ -14,7 +14,7 @@ import {
 const raw = {
   ok: true,
   batch_id: "11111111-1111-4111-8111-111111111111",
-  number: "B-MATH-P1-001",
+  number: "B-MATH-P1-01",
   exam_id: "22222222-2222-4222-8222-222222222222",
   centre_id: "33333333-3333-4333-8333-333333333333",
   manifest: "M-MATH-P1-01",
@@ -35,7 +35,7 @@ describe("parseScanStatus", () => {
     const s = parseScanStatus(raw);
     expect(s).toEqual({
       id: raw.batch_id,
-      number: "B-MATH-P1-001",
+      number: "B-MATH-P1-01",
       centreId: raw.centre_id,
       manifest: "M-MATH-P1-01",
       createdAt: "2031-06-07T12:00:00Z",
