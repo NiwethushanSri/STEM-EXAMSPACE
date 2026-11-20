@@ -1,17 +1,17 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(97);
+select plan(105);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
--- Fixtures. Exam ea: paper v1 (3 answer pages, superseded) and v2 (4 pages: 1 cover, 2-3 answer, 4 blank), two
--- centres; exam eb: another exam. Home bookings b1, b2 (the brother), b3, b8-b12, b15-b18; centre bookings b4
+-- Fixtures. Exam ea: paper v1 (3 pages: 1 cover, 2 answer, 3 information; superseded) and v2 (4 pages: 1 cover, 2-3 answer, 4 blank), two
+-- centres; exam eb: another exam. Home bookings b1, b2 (the brother), b3, b8-b12, b15-b20; centre bookings b4
 -- (present), b5 (absent), b6 (the other centre), b7 (cancelled), b13, b14; bx on exam eb.
 -- ---------------------------------------------------------------------------------------------
 create temp table c (name text primary key, id uuid not null);
 grant select on c to public;
 insert into c values ('admin', tests.create_user('admin', 'active'));
-insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 18) i;
+insert into c select 's' || i, tests.create_user('student', 'active') from generate_series(1, 20) i;
 create temp table kv (name text primary key, id uuid);
 grant all on kv to public;
 create temp table res (name text primary key, j jsonb);
@@ -42,6 +42,8 @@ insert into kv (name, id) select 'pv' || version, id from public.exam_papers whe
 insert into kv (name, id) select 'pb', id from public.exam_papers where exam_id = pg_temp.k('eb');
 update public.paper_page_roles set role = (case page when 1 then 'cover' when 4 then 'blank' else 'answer' end)::public.page_role
 where paper_id = pg_temp.k('pv2');
+update public.paper_page_roles set role = (case page when 1 then 'cover' when 2 then 'answer' else 'information' end)::public.page_role
+where paper_id = pg_temp.k('pv1');
 
 create function pg_temp.mk_booking(p_name text, p_student text, p_exam text, p_sitting public.sitting_mode, p_centre text,
   p_status public.booking_status default 'paid') returns void language sql as $$
@@ -118,7 +120,7 @@ $$;
 grant execute on function pg_temp.script(text), pg_temp.links(text), pg_temp.page_id(text, int) to public;
 
 select pg_temp.mk_booking(t.b, t.s, 'ea', 'home', null) from (values ('b1', 's1'), ('b2', 's2'), ('b3', 's3'), ('b8', 's8'), ('b9', 's9'),
-  ('b10', 's10'), ('b11', 's11'), ('b12', 's12'), ('b15', 's15'), ('b16', 's16'), ('b17', 's17'), ('b18', 's18')) t(b, s);
+  ('b10', 's10'), ('b11', 's11'), ('b12', 's12'), ('b15', 's15'), ('b16', 's16'), ('b17', 's17'), ('b18', 's18'), ('b19', 's19'), ('b20', 's20')) t(b, s);
 select pg_temp.mk_booking('b4', 's4', 'ea', 'centre', 'ce1');
 select pg_temp.mk_booking('b5', 's5', 'ea', 'centre', 'ce1');
 select pg_temp.mk_booking('b6', 's6', 'ea', 'centre', 'ce2');
@@ -127,8 +129,9 @@ select pg_temp.mk_booking('b13', 's13', 'ea', 'centre', 'ce1');
 select pg_temp.mk_booking('b14', 's14', 'ea', 'centre', 'ce1');
 select pg_temp.mk_booking('bx', 's1', 'eb', 'home', null);
 select pg_temp.mk_copy('c' || substr(t.b, 2), t.b, 'pv2', 6) from (values ('b1'), ('b2'), ('b4'), ('b5'), ('b6'), ('b7'), ('b8'), ('b9'),
-  ('b10'), ('b11'), ('b12'), ('b13'), ('b14'), ('b15'), ('b16'), ('b17'), ('b18')) t(b);
+  ('b10'), ('b11'), ('b12'), ('b13'), ('b14'), ('b15'), ('b16'), ('b17'), ('b18'), ('b20')) t(b);
 select pg_temp.mk_copy('c3a', 'b3', 'pv1', 5);
+select pg_temp.mk_copy('c19', 'b19', 'pv1', 5);
 select pg_temp.mk_copy('c3b', 'b3', 'pv2', 6);
 select pg_temp.mk_copy('cx', 'bx', 'pb', 4);
 insert into public.attendance (exam_id, student_id, status, marked_by) values
@@ -273,6 +276,29 @@ select public.script_evaluate(pg_temp.script('b9'));
 select is((select s.state::text || '/' || x.state::text from public.home_submissions s, public.scripts x
   where s.id = pg_temp.k('h9') and x.booking_id = pg_temp.k('b9')), 'received/needs_attention',
   'pages sent as they are (a poor_quality exception each): received, and staff check them');
+
+-- rerun_keeps_send_as_it_is: the first file is prepared again; the family's choice follows the page.
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u9a'), 'prepare');
+insert into res select 'claim9', public.processing_job_claim('R9');
+select public.script_pages_record((pg_temp.r('claim9') -> 'job' ->> 'id')::bigint, 'R9', 1, pg_temp.h('u9a'),
+  jsonb_build_array(pg_temp.pg('u9a', 0, 'c9', 2, 30, '{blurred}')));
+select public.processing_job_finish((pg_temp.r('claim9') -> 'job' ->> 'id')::bigint, 'R9', 1, true);
+select is((select count(*)::int from public.script_exceptions where kind = 'poor_quality' and state = 'open' and page_id = pg_temp.page_id('u9a', 0)), 1,
+  'rerun_keeps_send_as_it_is: the family''s "Send as it is" moves to the new page');
+select is((select count(*)::int from public.script_pages where upload_id = pg_temp.k('u9a')), 1, 'and the earlier page, named by nothing now, is gone');
+select is((select s.state::text || '/' || x.state::text from public.home_submissions s, public.scripts x
+  where s.id = pg_temp.k('h9') and x.booking_id = pg_temp.k('b9')), 'received/needs_attention', 'the submission stays received');
+
+-- flagged_cover_page_still_received: on b19's v1 copy, a cut-off cover and an information page whose layout could not
+-- be proven (neither is needed) with a clean answer page.
+select pg_temp.mk_sub('h19', 'b19', 1);
+select pg_temp.mk_upload('u19', 'h19');
+select pg_temp.run('u19', jsonb_build_array(pg_temp.pg('u19', 0, 'c19', 1, 200, '{cut_off}', false), pg_temp.pg('u19', 1, 'c19', 2),
+  pg_temp.pg('u19', 2, 'c19', 3, 200, '{layout_unexpected}', false)));
+select is((select state::text from public.home_submissions where id = pg_temp.k('h19')), 'received',
+  'flagged_cover_page_still_received: flags on pages that are not answer pages ask for no retake');
+select is((select state::text || '/' || pg_temp.links('b19') from public.scripts where booking_id = pg_temp.k('b19')), 'verified/1,2,3',
+  'the script is verified, with all three pages');
 
 -- ---------------------------------------------------------------------------------------------
 -- duplicate_keeps_clearer_page (home): page 2 twice; page 3 twice, the sharper one cut off.
@@ -432,8 +458,13 @@ select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bi
   jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6))) ->> 'ok', 'true', 'the first record is accepted');
 select is((select sha256 from public.script_uploads where id = pg_temp.k('us8')), pg_temp.h('us8'), 'and sets the upload''s SHA-256');
 create temp table us8_ids as select id from public.script_pages where upload_id = pg_temp.k('us8');
+insert into public.script_exceptions (exam_id, kind, booking_id, page_id, upload_id)
+values (pg_temp.k('ea'), 'name_visible', pg_temp.k('b13'), pg_temp.page_id('us8', 0), pg_temp.k('us8'));
 select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, pg_temp.h('us8'),
   jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6, 300))) ->> 'ok', 'true', 'a rerun with the same SHA-256 is accepted');
+select is((select count(*) filter (where p.replaced_at is null)::int || '/' || count(*) filter (where p.replaced_at is not null
+    and exists (select 1 from public.script_exceptions e where e.page_id = p.id and e.kind = 'name_visible'))::int
+  from public.script_pages p where p.upload_id = pg_temp.k('us8')), '1/1', 'a page an exception still names is kept, marked replaced, not deleted');
 delete from us8_ids;
 insert into us8_ids select id from public.script_pages where upload_id = pg_temp.k('us8');
 select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, pg_temp.h('us1'),
@@ -497,6 +528,29 @@ select public.processing_job_finish((pg_temp.r('g4') -> 'job' ->> 'id')::bigint,
 select is((select s.state::text || '/' || x.version || '/' || pg_temp.links('b18') || '/' || x.state::text
   from public.home_submissions s, public.scripts x where s.id = pg_temp.k('h18') and x.booking_id = pg_temp.k('b18')),
   'received/1/2,3/needs_attention', 'when the failed file settles last, the good file''s pages still make the version; staff see the failure');
+
+-- b20: the same with a failed file (holding only spare pages, say) whose upload row names no booking.
+select pg_temp.mk_sub('h20', 'b20', 1);
+select pg_temp.mk_upload('u20bad', 'h20', 1);
+select pg_temp.mk_upload('u20', 'h20', 2);
+update public.script_uploads set booking_id = null where id = pg_temp.k('u20bad');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u20bad'), 'prepare');
+insert into res select 'k1', public.processing_job_claim('w', now() + interval '4 days');
+select public.processing_job_finish((pg_temp.r('k1') -> 'job' ->> 'id')::bigint, 'w', 1, false, 'unreadable', now() + interval '4 days');
+insert into public.processing_jobs (upload_id, kind, run_after) values (pg_temp.k('u20'), 'prepare', now() + interval '4 days');
+insert into res select 'k2', public.processing_job_claim('w', now() + interval '4 days');
+select public.script_pages_record((pg_temp.r('k2') -> 'job' ->> 'id')::bigint, 'w', 1, pg_temp.h('u20'),
+  jsonb_build_array(pg_temp.pg('u20', 0, 'c20', 2), pg_temp.pg('u20', 1, 'c20', 3)), now() + interval '4 days');
+select public.processing_job_finish((pg_temp.r('k2') -> 'job' ->> 'id')::bigint, 'w', 1, true, null, now() + interval '4 days');
+insert into res select 'k3', public.processing_job_claim('w', now() + interval '4 days 2 minutes');
+select public.processing_job_finish((pg_temp.r('k3') -> 'job' ->> 'id')::bigint, 'w', 2, false, 'unreadable', now() + interval '4 days 2 minutes');
+insert into res select 'k4', public.processing_job_claim('w', now() + interval '4 days 10 minutes');
+select public.processing_job_finish((pg_temp.r('k4') -> 'job' ->> 'id')::bigint, 'w', 3, false, 'unreadable', now() + interval '4 days 10 minutes');
+select is((select s.state::text || '/' || x.state::text from public.home_submissions s, public.scripts x
+  where s.id = pg_temp.k('h20') and x.booking_id = pg_temp.k('b20')), 'received/needs_attention',
+  'a failed file whose upload names no booking still keeps the script out of verified');
+select is((select count(*)::int from public.script_exceptions where kind = 'processing_failed' and upload_id = pg_temp.k('u20bad')
+  and booking_id = pg_temp.k('b20') and script_id = pg_temp.script('b20')), 1, 'its processing_failed names the submission''s booking and script');
 
 -- ---------------------------------------------------------------------------------------------
 -- Invalid page lists are refused and record nothing.

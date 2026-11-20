@@ -143,6 +143,25 @@ def test_conflict_on_record_does_not_finish(monkeypatch):
     assert client.named("finish") == []
 
 
+def test_changed_original_stores_no_picture(monkeypatch):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    job = claimed()
+    job["upload"]["sha256"] = hashlib.sha256(b"the original as first recorded").hexdigest()
+    client = FakeClient(data=b"something else now")
+    assert main.process(client, "w-1", job) == "queued"
+    assert client.named("upload") == [] and client.stored == {} and client.named("record_pages") == []
+    assert client.named("finish") == [("finish", 7, False, "OriginalChanged", "w-1", 1)]
+
+
+def test_same_original_again_is_prepared(monkeypatch):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    job = claimed()
+    job["upload"]["sha256"] = hashlib.sha256(b"same bytes").hexdigest()
+    client = FakeClient(data=b"same bytes")
+    assert main.process(client, "w-1", job) == "done"
+    assert len(client.named("upload")) == 3
+
+
 def test_changed_original_is_a_failure_not_a_lost_job(monkeypatch):
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(data=b"other bytes", record={"ok": False, "code": "conflict", "reason": "sha256_mismatch"})
@@ -225,6 +244,37 @@ def test_run_waits_two_seconds_when_idle():
     started = time.monotonic()
     assert main.run(client, "w-1", stop=stop) == 0
     assert time.monotonic() - started < 1.5 and len(client.named("claim")) == 1
+
+
+def test_run_survives_an_unexpected_error(monkeypatch, caplog):
+    """An answer process() does not expect (a finish result that is not an object, a claim without its upload)
+    fails that job with the error's class name only, and the worker carries on."""
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    caplog.set_level(logging.DEBUG, logger="processor")
+    stop = threading.Event()
+
+    class Odd(FakeClient):
+        def claim(self, worker_id):
+            job = super().claim(worker_id)
+            if job is None:
+                stop.set()
+            return job
+
+        def finish(self, job_id, ok, error=None, *, worker, attempt):
+            result = super().finish(job_id, ok, error, worker=worker, attempt=attempt)
+            return ["not", "an", "object"] if job_id == 1 and ok else result
+
+    broken = {"job": {"id": 2, "kind": "prepare", "attempts": 1}}
+    client = Odd(jobs=[claimed(job_id=1), broken, claimed(job_id=3)])
+    assert main.run(client, "w-1", stop=stop, idle_seconds=0.01) == 3
+    finishes = client.named("finish")
+    assert ("finish", 1, False, "AttributeError", "w-1", 1) in finishes
+    assert ("finish", 2, False, "KeyError", "w-1", 1) in finishes
+    assert ("finish", 3, True, None, "w-1", 1) in finishes
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "AttributeError" in text and "KeyError" in text
+    for secret in (PATH, "upload'", "not", BOOKING):
+        assert secret not in text
 
 
 @pytest.mark.skipif(threading.current_thread() is not threading.main_thread(), reason="signals need the main thread")

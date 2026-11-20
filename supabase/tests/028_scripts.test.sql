@@ -202,7 +202,7 @@ select is((select (j -> 'job' ->> 'kind') || '/' || (j -> 'job' ->> 'attempts') 
 select is((select state::text || '/' || attempts || '/' || locked_by from public.processing_jobs where upload_id = pg_temp.k('u1')), 'running/1/worker-1', 'claimed: running, attempts 1, locked by the worker');
 select is((select (j -> 'upload') - 'id' from claims where name = 'a'),
   jsonb_build_object('kind', 'home_photo', 'mime', 'image/jpeg', 'storage_path', pg_temp.kp('u1'), 'exam_id', pg_temp.k('ea'),
-    'booking_id', pg_temp.k('b1'), 'batch_id', null), 'the upload: kind, mime, path, exam, booking and no batch');
+    'booking_id', pg_temp.k('b1'), 'batch_id', null, 'sha256', null), 'the upload: kind, mime, path, exam, booking, no batch and no SHA-256 yet');
 select is((select jsonb_array_length(j -> 'papers') from claims where name = 'a'), 2, 'every version of the exam''s question paper (inserts are not papers)');
 select is((select p ->> 'page_count' from claims x, jsonb_array_elements(x.j -> 'papers') p where x.name = 'a' and p ->> 'paper_id' = pg_temp.k('pv2')::text),
   '4', 'a paper carries its page count');

@@ -156,5 +156,18 @@ def test_home_pdf_is_prepared_matched_and_received(rest):
         links = rest.select("script_page_links", script_id=f"eq.{script['id']}")
         assert sorted(link["copy_page"] for link in links) == [1, 2, 3, 4, 5]
         assert rest.select("script_exceptions", exam_id=f"eq.{exam_id}") == []
+
+        # Prepared again (as staff will ask for): the claim carries the recorded SHA-256, the original still
+        # matches it, and the rerun leaves one set of pages and the same version.
+        again = rest.insert("processing_jobs", {"upload_id": upload_id, "kind": "prepare", "run_after": "2000-01-01T00:00:00Z"})
+        with supa.Client.from_env() as client:
+            assert main.run(client, f"itest-{tag}", once=True) == 1
+        assert rest.select("processing_jobs", id=f"eq.{again['id']}")[0]["state"] == "done"
+        rerun = rest.select("script_pages", upload_id=f"eq.{upload_id}")
+        assert len(rerun) == 5 and all(p["replaced_at"] is None for p in rerun)
+        assert {p["id"] for p in rerun}.isdisjoint({p["id"] for p in pages})
+        assert rest.select("script_uploads", id=f"eq.{upload_id}")[0]["sha256"] == hashlib.sha256(data).hexdigest()
+        script = rest.select("scripts", booking_id=f"eq.{booking['id']}")[0]
+        assert (script["state"], script["version"]) == ("verified", 1)
     finally:
         cleanup(rest, exam_id)

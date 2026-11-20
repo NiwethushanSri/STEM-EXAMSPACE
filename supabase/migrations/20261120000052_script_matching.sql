@@ -272,7 +272,8 @@ begin
          select 1 from public.script_page_links l
          join public.script_pages p on p.id = l.page_id
          where l.script_id = v_script and l.version = v_version
-           and public.script_page_poor(p.quality, p.marking_path, public.script_page_is_answer(p.copy_id, p.copy_page))
+           and public.script_page_is_answer(p.copy_id, p.copy_page)
+           and public.script_page_poor(p.quality, p.marking_path, true)
            and not exists (select 1 from public.script_exceptions e where e.page_id = p.id and e.kind = 'poor_quality'))
        or exists (
          select 1 from public.script_pages p
@@ -526,9 +527,12 @@ begin
     select sb.centre_id into v_centre from public.scan_batches sb where sb.id = v_up.batch_id;
   end if;
 
-  -- A rerun. The latest versions this upload (or its submission) made are undone, to be made again below; the
-  -- open exceptions of the earlier run go; earlier pages go, except those a kept version still shows, which are
-  -- marked replaced. A family's placement of a page with no code carries over to the page at the same position.
+  -- A rerun. The latest versions this upload (or its submission) made are undone, to be made again below. The open
+  -- exceptions this function raised on the earlier run go (they are raised again where they still hold); on a home
+  -- upload an open poor_quality exception is the family's "Send as it is" and moves to the new page of the same
+  -- copy page. The earlier pages are set aside (replaced_at) and, once the new pages are in, deleted unless a kept
+  -- version or an exception still names them. A family's placement of a page with no code carries over to the new
+  -- page at the same position.
   for v_x in
     select s.* from public.scripts s
     join public.script_versions v on v.script_id = s.id and v.version = s.version
@@ -552,9 +556,8 @@ begin
   delete from public.script_exceptions e
   where e.state = 'open'
     and e.kind in ('no_code', 'unknown_code', 'other_exam', 'not_expected', 'duplicate', 'mixed_versions', 'poor_quality')
+    and not (v_home and e.kind = 'poor_quality')
     and (e.upload_id = v_up.id or e.page_id = any (v_old));
-  delete from public.script_pages p
-  where p.id = any (v_old) and not exists (select 1 from public.script_page_links l where l.page_id = p.id);
   update public.script_pages p set replaced_at = v_now where p.id = any (v_old);
 
   -- What each page is.
@@ -622,13 +625,26 @@ begin
       select p2.id, row_number() over (
         partition by p2.copy_page
         order by public.script_page_poor(p2.quality, p2.marking_path, public.script_page_is_answer(p2.copy_id, p2.copy_page)),
-                 (p2.quality ->> 'sharpness')::numeric desc, u.position nulls last, u.created_at, u.id, p2.source_index) as rn
+                 (p2.quality ->> 'sharpness')::numeric desc nulls last, u.position nulls last, u.created_at, u.id,
+                 p2.source_index) as rn
       from public.script_pages p2
       join public.script_uploads u on u.id = p2.upload_id
       where u.submission_id = v_sub.id and p2.replaced_at is null and p2.booking_id = v_sub.booking_id
         and p2.state in ('matched', 'duplicate')
     ) r
     where p.id = r.id and p.state <> (case when r.rn = 1 then 'matched' else 'duplicate' end)::public.page_state;
+
+    -- The family's "Send as it is" (an open poor_quality exception) follows its page to the new run's page of the
+    -- same copy page, the kept one first.
+    update public.script_exceptions e set page_id = n.id
+    from public.script_pages o
+    cross join lateral (
+      select n2.id from public.script_pages n2
+      where n2.upload_id = v_up.id and n2.replaced_at is null and n2.booking_id = o.booking_id and n2.copy_page = o.copy_page
+      order by (n2.state = 'matched') desc, n2.source_index
+      limit 1
+    ) n
+    where o.id = e.page_id and o.id = any (v_old) and e.kind = 'poor_quality' and e.state = 'open';
 
     select * into v_x from public.scripts s where s.booking_id = v_sub.booking_id for update;
     if v_x.id is null and exists (
@@ -669,7 +685,7 @@ begin
         ) c
         join public.script_uploads u on u.id = c.upload_id
         order by public.script_page_poor(c.quality, c.marking_path, public.script_page_is_answer(c.copy_id, c.copy_page)),
-                 (c.quality ->> 'sharpness')::numeric desc, u.created_at, u.id, c.source_index
+                 (c.quality ->> 'sharpness')::numeric desc nulls last, u.created_at, u.id, c.source_index
         limit 1;
 
         update public.script_pages p
@@ -700,6 +716,12 @@ begin
       end if;
     end loop;
   end if;
+
+  -- The earlier run's pages that no version and no exception names any more are deleted; the rest stay, replaced.
+  delete from public.script_pages p
+  where p.id = any (v_old)
+    and not exists (select 1 from public.script_page_links l where l.page_id = p.id)
+    and not exists (select 1 from public.script_exceptions e where e.page_id = p.id);
 
   -- Exceptions about single pages.
   insert into public.script_exceptions (exam_id, kind, booking_id, page_id, upload_id, details)
@@ -755,7 +777,8 @@ $$;
 -- A prepare job that fails for good now also settles what waits on its upload: a home submission whose other
 -- uploads are prepared makes its version from them (the failed file is often the last to settle, after its
 -- retries) and stops showing "Checking your pages"; the booking's script, and any script showing the upload's
--- pages, are worked out again. (Same as 20261120000051 otherwise.)
+-- pages, are worked out again. The processing_failed exception names a home upload's booking from its submission,
+-- and the booking's script. (Same as 20261120000051 otherwise.)
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.processing_job_fail(p_job public.processing_jobs, p_error text, p_now timestamptz)
 returns void
@@ -776,13 +799,15 @@ begin
   else
     select * into v_up from public.script_uploads u where u.id = p_job.upload_id;
   end if;
-  insert into public.script_exceptions (exam_id, kind, booking_id, upload_id, details)
-  values (v_up.exam_id, 'processing_failed', v_up.booking_id, v_up.id,
+  -- A home upload's booking is its submission's (script_uploads.booking_id may be empty).
+  select s.booking_id into v_booking from public.home_submissions s where s.id = v_up.submission_id;
+  v_booking := coalesce(v_booking, v_up.booking_id);
+  insert into public.script_exceptions (exam_id, kind, booking_id, script_id, upload_id, details)
+  values (v_up.exam_id, 'processing_failed', v_booking, (select x.id from public.scripts x where x.booking_id = v_booking), v_up.id,
     jsonb_build_object('job_id', p_job.id, 'kind', p_job.kind, 'attempts', p_job.attempts));
 
   if p_job.kind = 'prepare' then
-    select s.booking_id into v_booking from public.home_submissions s where s.id = v_up.submission_id;
-    if v_booking is not null then
+    if v_up.submission_id is not null then
       perform pg_advisory_xact_lock(hashtextextended('script_booking:' || v_booking::text, 0));
       if public.home_submission_assemble(v_up.submission_id, v_up.id, p_now) then
         perform public.script_raise_mixed(s.id, v_up.id) from public.scripts s where s.booking_id = v_booking;
@@ -798,6 +823,73 @@ begin
       perform public.script_evaluate_at(v_script, p_now);
     end loop;
   end if;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- The claimed upload now also carries the SHA-256 recorded on an earlier run (null before the first), so the server
+-- checks the original before it stores any picture; script_pages_record stays the authority. (Same as
+-- 20261120000051 otherwise.)
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.processing_job_claim(p_worker text, p_now timestamptz default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_now timestamptz := coalesce(p_now, now());
+  v_job public.processing_jobs%rowtype;
+  v_up public.script_uploads%rowtype;
+begin
+  for v_job in
+    select j.* from public.processing_jobs j
+    where j.state = 'running' and j.attempts >= 3 and j.locked_at < v_now - interval '15 minutes'
+    order by j.id
+    for update skip locked
+  loop
+    perform public.processing_job_fail(v_job, 'worker stopped responding', v_now);
+  end loop;
+
+  select j.* into v_job from public.processing_jobs j
+  where (j.state = 'queued' and j.run_after <= v_now)
+     or (j.state = 'running' and j.attempts < 3 and j.locked_at < v_now - interval '15 minutes')
+  order by j.run_after, j.id
+  limit 1
+  for update skip locked;
+  if not found then
+    return null;
+  end if;
+  update public.processing_jobs
+  set state = 'running', attempts = attempts + 1, locked_by = left(coalesce(p_worker, ''), 100), locked_at = v_now
+  where id = v_job.id
+  returning * into v_job;
+  if v_job.kind = 'prepare' then
+    update public.script_uploads set state = 'processing' where id = v_job.upload_id;
+  end if;
+  select * into v_up from public.script_uploads u where u.id = v_job.upload_id;
+
+  return jsonb_build_object(
+    'job', jsonb_build_object('id', v_job.id, 'kind', v_job.kind, 'attempts', v_job.attempts),
+    'upload', jsonb_build_object('id', v_up.id, 'kind', v_up.kind, 'mime', v_up.mime, 'storage_path', v_up.storage_path,
+      'exam_id', v_up.exam_id, 'booking_id', v_up.booking_id, 'batch_id', v_up.batch_id, 'sha256', v_up.sha256),
+    'papers', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'paper_id', p.id,
+        'page_count', p.page_count,
+        'roles', coalesce((select jsonb_agg(jsonb_build_object('page', r.page, 'role', r.role) order by r.page)
+                           from public.paper_page_roles r where r.paper_id = p.id), '[]'::jsonb),
+        'areas', coalesce((select jsonb_agg(jsonb_build_object('page', a.page, 'x', a.x, 'y', a.y, 'w', a.w, 'h', a.h)
+                                            order by a.page, a.created_at, a.id)
+                           from public.paper_hidden_areas a where a.paper_id = p.id), '[]'::jsonb))
+        order by p.version)
+      from public.exam_papers p where p.exam_id = v_up.exam_id and p.kind = 'paper'), '[]'::jsonb),
+    'copies', coalesce((
+      select jsonb_object_agg(c.code, jsonb_build_object(
+        'copy_id', c.id, 'paper_id', c.paper_id, 'booking_id', c.booking_id, 'page_count', c.page_count))
+      from public.paper_copies c
+      join public.exam_papers p on p.id = c.paper_id
+      where p.exam_id = v_up.exam_id and p.kind = 'paper'), '{}'::jsonb));
 end;
 $$;
 

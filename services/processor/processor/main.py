@@ -115,8 +115,8 @@ class _Heartbeat:
 
 def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: float = HEARTBEAT_SECONDS) -> str:
     """Runs one claimed job to its end: downloads the original and hashes it (SHA-256, recorded with the pages; a
-    hash that differs from an earlier run's fails the job), prepares and stores the pages, records them and
-    finishes the job. Returns the outcome: the job's state after finishing ('done', 'queued'
+    hash that differs from the one an earlier run recorded fails the job before any picture is stored, and the
+    database checks it again), prepares and stores the pages, records them and finishes the job. Returns the outcome: the job's state after finishing ('done', 'queued'
     for a retry, 'failed'), 'lost' when another worker took the job over, or 'unfinished' when finishing failed
     (the job is then claimed again after 15 minutes)."""
     job, upload = claimed["job"], claimed["upload"]
@@ -130,6 +130,8 @@ def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: fl
                 raise UnsupportedJob()
             data = client.download(UPLOADS, upload["storage_path"])
             sha256 = hashlib.sha256(data).hexdigest()
+            if upload.get("sha256") and upload["sha256"] != sha256:
+                raise OriginalChanged()  # before any picture is stored over the earlier run's
             beat.check()
             pages = []
             for page in pipeline.iter_prepare(data, upload["kind"], upload["mime"], job_context(claimed)):
@@ -168,6 +170,20 @@ def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: fl
     return str(outcome)
 
 
+def _abandon(client: Any, worker_id: str, claimed: Any, exc: Exception) -> None:
+    """process() itself failed on an answer it did not expect: the job is failed with the error's class name only
+    (when its id is known), and the worker carries on."""
+    job = claimed.get("job") if isinstance(claimed, dict) else None
+    job_id = job.get("id") if isinstance(job, dict) else None
+    log.error("job %s: unexpected %s", job_id, type(exc).__name__)
+    if job_id is None:
+        return
+    try:
+        client.finish(job_id, False, type(exc).__name__, worker=worker_id, attempt=job.get("attempts"))
+    except Exception as again:
+        log.error("job %s: could not finish: %s", job_id, type(again).__name__)
+
+
 def _on_sigterm(stop: threading.Event) -> Callable[[], None]:
     """Sets `stop` on SIGTERM (only possible in the main thread); returns what puts the old handler back."""
     if threading.current_thread() is not threading.main_thread():
@@ -198,7 +214,10 @@ def run(client: Any, worker_id: str, *, once: bool = False, stop: threading.Even
                     break
                 stop.wait(idle_seconds)
                 continue
-            process(client, worker_id, claimed, heartbeat_seconds=heartbeat_seconds)
+            try:
+                process(client, worker_id, claimed, heartbeat_seconds=heartbeat_seconds)
+            except Exception as exc:
+                _abandon(client, worker_id, claimed, exc)
             ran += 1
             if once:
                 break
