@@ -1082,8 +1082,14 @@ isOneToOne: false
 "processing_job_claim":
 { Args: { "p_now"?: string,"p_worker": string }; Returns: Json
                            },
+"processing_job_fail":
+{ Args: { "p_error": string,"p_job": Omit<Database["public"]['Tables']["processing_jobs"]['Row'], Database["public"]['Tables']["processing_jobs"]['ComputedFields']>,"p_now": string }; Returns: undefined
+                           },
 "processing_job_finish":
-{ Args: { "p_error"?: string,"p_job": number,"p_now"?: string,"p_ok": boolean }; Returns: Json
+{ Args: { "p_attempt": number,"p_error"?: string,"p_job": number,"p_now"?: string,"p_ok": boolean,"p_worker": string }; Returns: Json
+                           },
+"processing_job_heartbeat":
+{ Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_worker": string }; Returns: boolean
                            },
 "purge_student_residue":
 { Args: { "p_user": string }; Returns: undefined

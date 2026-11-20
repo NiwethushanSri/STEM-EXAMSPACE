@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(74);
+select plan(104);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -104,10 +104,14 @@ select throws_ok(format($q$insert into public.home_submissions (booking_id, seq)
 select ok(not has_function_privilege('authenticated', 'public.processing_job_claim(text,timestamptz)', 'execute')
   and not has_function_privilege('anon', 'public.processing_job_claim(text,timestamptz)', 'execute')
   and has_function_privilege('service_role', 'public.processing_job_claim(text,timestamptz)', 'execute')
-  and not has_function_privilege('authenticated', 'public.processing_job_finish(bigint,boolean,text,timestamptz)', 'execute')
-  and not has_function_privilege('anon', 'public.processing_job_finish(bigint,boolean,text,timestamptz)', 'execute')
-  and has_function_privilege('service_role', 'public.processing_job_finish(bigint,boolean,text,timestamptz)', 'execute'),
+  and not has_function_privilege('authenticated', 'public.processing_job_finish(bigint,text,int,boolean,text,timestamptz)', 'execute')
+  and not has_function_privilege('anon', 'public.processing_job_finish(bigint,text,int,boolean,text,timestamptz)', 'execute')
+  and has_function_privilege('service_role', 'public.processing_job_finish(bigint,text,int,boolean,text,timestamptz)', 'execute'),
   'claim_not_granted_to_authenticated: the job functions are for service_role only');
+select ok(not has_function_privilege('authenticated', 'public.processing_job_heartbeat(bigint,text,int,timestamptz)', 'execute')
+  and not has_function_privilege('anon', 'public.processing_job_heartbeat(bigint,text,int,timestamptz)', 'execute')
+  and has_function_privilege('service_role', 'public.processing_job_heartbeat(bigint,text,int,timestamptz)', 'execute'),
+  'the heartbeat is for service_role only');
 select ok(not has_function_privilege('authenticated', 'public.script_number_next(uuid)', 'execute')
   and not has_function_privilege('anon', 'public.script_number_next(uuid)', 'execute'), 'script_number_next is internal');
 
@@ -121,12 +125,14 @@ select throws_ok(format($q$insert into public.script_uploads (exam_id, submissio
 select throws_ok(format($q$insert into public.home_submissions (booking_id, seq) values (%L, 9)$q$, pg_temp.k('b1')), '42501', null, 'no submission row');
 select throws_ok($q$insert into public.processing_jobs (upload_id, kind) values (gen_random_uuid(), 'prepare')$q$, '42501', null, 'no job row');
 select throws_ok($q$update public.script_uploads set state = 'stored'$q$, '42501', null, 'no update of an upload');
-select is((select count(*)::int from public.script_uploads) + (select count(*)::int from public.home_submissions) + (select count(*)::int from public.scripts),
+select is((select count(*)::int from public.script_uploads) + (select count(*)::int from public.home_submissions) + (select count(*)::int from public.scripts)
+  + (select count(*)::int from public.processing_jobs) + (select count(*)::int from public.script_exceptions),
   0, 'a family reads none of the script rows directly');
 select throws_ok($q$select public.processing_job_claim('w')$q$, '42501', null, 'claim_not_granted_to_authenticated: a signed-in user cannot claim');
 select tests.as_postgres();
 select tests.as_user(pg_temp.uid('admin'));
-select ok((select count(*) from public.script_uploads) = 3 and (select count(*) from public.home_submissions) = 2, 'an admin reads uploads and submissions');
+select ok((select count(*) from public.script_uploads where id in (select id from kv where name in ('u1', 'u2', 'u3'))) = 3
+  and (select count(*) from public.home_submissions where id in (pg_temp.k('h1'), pg_temp.k('h2'))) = 2, 'an admin reads uploads and submissions');
 select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
@@ -143,40 +149,42 @@ select throws_ok(format($q$insert into storage.objects (bucket_id, name) values 
   '42501', null, 'a row that is no longer pending is refused');
 select throws_ok(format($q$insert into storage.objects (bucket_id, name) values ('script-pages', %L)$q$, pg_temp.kp('u1')),
   '42501', null, 'the page bucket takes no uploads from users');
-select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads'), 1, 'the uploader reads its own file');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads' and name = pg_temp.kp('u1')), 1, 'the uploader reads its own file');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('s2'));
-select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads'), 0, 'another user reads nothing');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads' and name = pg_temp.kp('u1')), 0, 'another user reads nothing');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
-select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads'), 1, 'an admin reads it');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads' and name = pg_temp.kp('u1')), 1, 'an admin reads it');
 select tests.as_postgres();
 update public.script_uploads set state = 'stored' where id = pg_temp.k('u1');
 select tests.as_user(pg_temp.uid('s1'));
-select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads'), 1, 'the uploader still reads it once stored');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads' and name = pg_temp.kp('u1')), 1, 'the uploader still reads it once stored');
 select tests.as_postgres();
 update public.script_uploads set state = 'queued' where id = pg_temp.k('u1');
 select tests.as_user(pg_temp.uid('s1'));
-select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads'), 0, 'but not once it is queued for processing');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads' and name = pg_temp.kp('u1')), 0, 'but not once it is queued for processing');
 select tests.as_postgres();
 select tests.as_user(pg_temp.uid('admin'));
 select set_config('storage.allow_delete_query', 'true', true);
-delete from storage.objects where bucket_id = 'script-uploads';
+delete from storage.objects where bucket_id = 'script-uploads' and name = pg_temp.kp('u1');
 select set_config('storage.allow_delete_query', '', true);
 select tests.as_postgres();
-select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads'), 1, 'not even an admin can delete script files from the API');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-uploads' and name = pg_temp.kp('u1')), 1, 'not even an admin can delete script files from the API');
 select tests.as_user(pg_temp.uid('admin'));
 select throws_ok(format($q$insert into storage.objects (bucket_id, name) values ('script-pages', %L)$q$, pg_temp.k('ea')::text || '/x/1-full.jpg'),
   '42501', null, 'nor add page pictures from the API');
 select tests.as_postgres();
 insert into storage.objects (bucket_id, name) values ('script-pages', pg_temp.k('ea')::text || '/x/1-full.jpg');
 select tests.as_user(pg_temp.uid('s1'));
-select is((select count(*)::int from storage.objects where bucket_id = 'script-pages'), 0, 'a family reads no page pictures');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-pages' and name = pg_temp.k('ea')::text || '/x/1-full.jpg'), 0, 'a family reads no page pictures');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
-select is((select count(*)::int from storage.objects where bucket_id = 'script-pages'), 1, 'an admin reads page pictures');
+select is((select count(*)::int from storage.objects where bucket_id = 'script-pages' and name = pg_temp.k('ea')::text || '/x/1-full.jpg'), 1, 'an admin reads page pictures');
 select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
 -- Jobs: claim.
 -- ---------------------------------------------------------------------------------------------
+-- Jobs left in a local database by other work are not part of this test.
+update public.processing_jobs set state = 'done' where state in ('queued', 'running');
 insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u1'), 'prepare');
 insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u2'), 'prepare');
 create temp table claims (name text primary key, j jsonb);
@@ -189,6 +197,7 @@ select ok((select j -> 'job' ->> 'id' from claims where name = 'a') <> (select j
   'claim_skips_locked_jobs: two claims in one transaction return different jobs');
 select is((select j from claims where name = 'c'), null, 'and when nothing is left, the claim is SQL null');
 select is((select j -> 'upload' ->> 'id' from claims where name = 'a'), pg_temp.k('u1')::text, 'the oldest job is claimed first');
+select is((select state::text from public.script_uploads where id = pg_temp.k('u1')), 'processing', 'claiming a prepare job sets its upload to processing');
 select is((select (j -> 'job' ->> 'kind') || '/' || (j -> 'job' ->> 'attempts') from claims where name = 'a'), 'prepare/1', 'the job: kind and first attempt');
 select is((select state::text || '/' || attempts || '/' || locked_by from public.processing_jobs where upload_id = pg_temp.k('u1')), 'running/1/worker-1', 'claimed: running, attempts 1, locked by the worker');
 select is((select (j -> 'upload') - 'id' from claims where name = 'a'),
@@ -223,33 +232,91 @@ select is((select locked_by || '/' || (locked_at = now() + interval '16 minutes'
 -- ---------------------------------------------------------------------------------------------
 -- Jobs: finish.
 -- ---------------------------------------------------------------------------------------------
-select is(public.processing_job_finish((select id from public.processing_jobs where upload_id = pg_temp.k('u1')), true) ->> 'ok', 'true', 'a finished job');
+select is(public.processing_job_finish((select id from public.processing_jobs where upload_id = pg_temp.k('u1')), 'worker-4', 2, true) ->> 'ok', 'true', 'a finished job');
 select is((select state::text || '/' || (finished_at is not null) from public.processing_jobs where upload_id = pg_temp.k('u1')), 'done/true', 'is done with a finish time');
-select is(public.processing_job_finish((select id from public.processing_jobs where upload_id = pg_temp.k('u1')), true) ->> 'code', 'conflict', 'a job that is not running cannot finish again');
-select is(public.processing_job_finish(-1, true) ->> 'code', 'not_found', 'an unknown job');
-select is(public.processing_job_finish((select id from public.processing_jobs where upload_id = pg_temp.k('u2')), true) ->> 'ok', 'true', 'the other job finishes');
+select is(public.processing_job_finish((select id from public.processing_jobs where upload_id = pg_temp.k('u1')), 'worker-4', 2, true) ->> 'code', 'conflict', 'a job that is not running cannot finish again');
+select is(public.processing_job_finish(-1, 'w', 1, true) ->> 'code', 'not_found', 'an unknown job');
+select is(public.processing_job_finish((select id from public.processing_jobs where upload_id = pg_temp.k('u2')), 'worker-2', 1, true) ->> 'ok', 'true', 'the other job finishes');
 
 -- finish_retries_twice_then_fails (upload u3).
 insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u3'), 'prepare');
 insert into claims select 'e1', public.processing_job_claim('w', now());
-select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'e1'), false, repeat('x', 400), now()) ->> 'state', 'queued',
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'e1'), 'w', 1, false, repeat('x', 400), now()) ->> 'state', 'queued',
   'finish_retries_twice_then_fails: the first failure queues a retry');
 select is((select state::text || '/' || char_length(last_error) || '/' || (run_after = now() + interval '1 minute') || '/' || coalesce(locked_by, 'none')
   from public.processing_jobs where upload_id = pg_temp.k('u3')), 'queued/300/true/none', 'the error is cut to 300 characters, the retry is a minute away and unlocked');
 select is(public.processing_job_claim('w', now()), null, 'a retry is not claimed before its time');
 insert into claims select 'e2', public.processing_job_claim('w', now() + interval '2 minutes');
 select is((select j -> 'job' ->> 'attempts' from claims where name = 'e2'), '2', 'the retry is attempt 2');
-select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'e2'), false, 'second', now() + interval '2 minutes') ->> 'state', 'queued',
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'e2'), 'w', 2, false, 'second', now() + interval '2 minutes') ->> 'state', 'queued',
   'the second failure queues another retry');
 select is((select run_after = now() + interval '4 minutes' from public.processing_jobs where upload_id = pg_temp.k('u3')), true, 'two minutes after the second attempt');
 insert into claims select 'e3', public.processing_job_claim('w', now() + interval '10 minutes');
-select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'e3'), false, 'third', now() + interval '10 minutes') ->> 'state', 'failed',
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'e3'), 'w', 3, false, 'third', now() + interval '10 minutes') ->> 'state', 'failed',
   'the third failure fails the job');
 select is((select state::text from public.script_uploads where id = pg_temp.k('u3')), 'failed', 'and the upload');
 select is((select count(*)::int from public.script_exceptions where upload_id = pg_temp.k('u3') and kind = 'processing_failed' and state = 'open'
   and exam_id = pg_temp.k('ea') and booking_id = pg_temp.k('b1')), 1, 'with exactly one open processing_failed exception');
 select is((select last_error from public.processing_jobs where upload_id = pg_temp.k('u3')), 'third', 'the last error is kept');
 select is(public.processing_job_claim('w', now() + interval '1 day'), null, 'a failed job is never claimed again');
+
+-- ---------------------------------------------------------------------------------------------
+-- stale_job_after_third_attempt_fails (upload u4, times well after the sections above)
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.mk_upload('u4', 's2', 'b2', 'h2', 'queued');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u4'), 'prepare');
+select is((public.processing_job_claim('w', now() + interval '2 days') -> 'job' ->> 'attempts'), '1', 'a new job: attempt 1');
+select is((public.processing_job_claim('w', now() + interval '2 days 16 minutes') -> 'job' ->> 'attempts'), '2', 'quiet for 15 minutes: attempt 2');
+select is((public.processing_job_claim('w', now() + interval '2 days 32 minutes') -> 'job' ->> 'attempts'), '3', 'quiet again: attempt 3');
+select is(public.processing_job_claim('w', now() + interval '2 days 48 minutes'), null, 'stale_job_after_third_attempt_fails: no fourth attempt');
+select is((select state::text from public.processing_jobs where upload_id = pg_temp.k('u4')) || '/' || (select state::text from public.script_uploads where id = pg_temp.k('u4')),
+  'failed/failed', 'the job and its upload are failed');
+select is((select count(*)::int from public.script_exceptions where upload_id = pg_temp.k('u4') and kind = 'processing_failed'), 1, 'with exactly one exception');
+select is(public.processing_job_claim('w', now() + interval '3 days'), null, 'and it stays failed');
+select is((select count(*)::int from public.script_exceptions where upload_id = pg_temp.k('u4')), 1, 'no second exception');
+
+-- late_finish_from_old_worker_ignored (upload u5)
+select pg_temp.mk_upload('u5', 's1', 'b1', 'h1', 'queued');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u5'), 'prepare');
+insert into claims select 'f1', public.processing_job_claim('A', now() + interval '4 days');
+insert into claims select 'f2', public.processing_job_claim('B', now() + interval '4 days 16 minutes');
+select is((select j -> 'job' ->> 'attempts' from claims where name = 'f2'), '2', 'worker B reclaimed the quiet job');
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'f1'), 'A', 1, true, null, now() + interval '4 days 17 minutes') ->> 'code', 'conflict',
+  'late_finish_from_old_worker_ignored: the old worker''s finish is refused');
+select is((select state::text || '/' || locked_by || '/' || attempts from public.processing_jobs where upload_id = pg_temp.k('u5')), 'running/B/2', 'and B''s run is unaffected');
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'f1'), 'B', 1, true) ->> 'code', 'conflict', 'B cannot finish with the old attempt either');
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'f1'), 'B', 2, true) ->> 'ok', 'true', 'B finishes its own run');
+
+-- heartbeat_extends_lock (upload u6)
+select pg_temp.mk_upload('u6', 's2', 'b2', 'h2', 'queued');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u6'), 'prepare');
+insert into claims select 'g1', public.processing_job_claim('hb', now() + interval '6 days');
+select is(public.processing_job_heartbeat((select (j -> 'job' ->> 'id')::bigint from claims where name = 'g1'), 'hb', 1, now() + interval '6 days 1 minute'), true, 'the holder''s heartbeat is accepted');
+select is(public.processing_job_heartbeat((select (j -> 'job' ->> 'id')::bigint from claims where name = 'g1'), 'other', 1, now() + interval '6 days 1 minute'), false, 'another worker''s heartbeat is not');
+select is(public.processing_job_heartbeat((select (j -> 'job' ->> 'id')::bigint from claims where name = 'g1'), 'hb', 2, now() + interval '6 days 1 minute'), false, 'nor is one for another attempt');
+select is(public.processing_job_claim('w', now() + interval '6 days 16 minutes'), null, 'heartbeat_extends_lock: not reclaimable 16 minutes after the claim');
+select is((public.processing_job_claim('w', now() + interval '6 days 17 minutes') -> 'job' ->> 'attempts'), '2', 'reclaimable 16 minutes after the heartbeat');
+select is(public.processing_job_heartbeat((select (j -> 'job' ->> 'id')::bigint from claims where name = 'g1'), 'hb', 1, now() + interval '6 days 18 minutes'), false, 'the old holder can no longer heartbeat');
+
+update public.processing_jobs set state = 'done' where upload_id = pg_temp.k('u6');
+
+-- failed_remask_keeps_upload_state (upload u7, processed) and one_active_job_per_upload_and_kind
+select pg_temp.mk_upload('u7', 's1', 'b1', 'h1', 'processed');
+insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u7'), 'remask');
+select throws_ok(format($q$insert into public.processing_jobs (upload_id, kind) values (%L, 'remask')$q$, pg_temp.k('u7')), '23505', null,
+  'one_active_job_per_upload_and_kind: a second active remask is refused');
+select lives_ok(format($q$insert into public.processing_jobs (upload_id, kind) values (%L, 'prepare')$q$, pg_temp.k('u7')), 'a prepare job for the same upload is allowed');
+update public.processing_jobs set state = 'done' where upload_id = pg_temp.k('u7') and kind = 'prepare';
+insert into claims select 'h1', public.processing_job_claim('w', now() + interval '8 days');
+select is((select j -> 'job' ->> 'kind' from claims where name = 'h1'), 'remask', 'the remask job is claimed');
+select is((select state::text from public.script_uploads where id = pg_temp.k('u7')), 'processed', 'claiming a remask leaves its upload alone');
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'h1'), 'w', 1, false, 'x', now() + interval '8 days') ->> 'state', 'queued', 'a failed remask is retried');
+insert into claims select 'h2', public.processing_job_claim('w', now() + interval '8 days 2 minutes');
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'h2'), 'w', 2, false, 'x', now() + interval '8 days 2 minutes') ->> 'state', 'queued', 'twice');
+insert into claims select 'h3', public.processing_job_claim('w', now() + interval '8 days 10 minutes');
+select is(public.processing_job_finish((select (j -> 'job' ->> 'id')::bigint from claims where name = 'h3'), 'w', 3, false, 'x', now() + interval '8 days 10 minutes') ->> 'state', 'failed', 'and fails the third time');
+select is((select state::text from public.script_uploads where id = pg_temp.k('u7')), 'processed', 'failed_remask_keeps_upload_state: the upload stays processed');
+select is((select count(*)::int from public.script_exceptions where upload_id = pg_temp.k('u7') and kind = 'processing_failed'), 1, 'but staff get one exception');
 
 -- ---------------------------------------------------------------------------------------------
 -- script_number_sequence_per_exam

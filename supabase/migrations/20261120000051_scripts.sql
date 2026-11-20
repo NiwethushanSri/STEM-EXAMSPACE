@@ -154,6 +154,8 @@ create table public.processing_jobs (
 );
 create index processing_jobs_claim_idx on public.processing_jobs (run_after, id) where state in ('queued', 'running');
 create index processing_jobs_upload_idx on public.processing_jobs (upload_id);
+-- One active job per upload and kind: a second prepare (or remask) waits until the first has finished.
+create unique index processing_jobs_one_active on public.processing_jobs (upload_id, kind) where state in ('queued', 'running');
 
 create table public.script_exceptions (
   id uuid primary key default gen_random_uuid(),
@@ -285,10 +287,38 @@ revoke execute on function public.script_number_next(uuid) from public, anon, au
 -- Processing jobs (the Python server, with the service role).
 -- ---------------------------------------------------------------------------------------------
 
--- Takes the oldest claimable job: queued and due, or running whose worker has been quiet for 15 minutes. Returns
--- what the server needs to prepare the upload: the upload, every question-paper version of its exam (current and
--- superseded) with page count, page roles and hidden areas, and every copy made from them by code. SQL null when
--- nothing is claimable. p_now (default now()) lets tests and the server's clock-free callers choose the time.
+-- Fails a job for good: the job is failed, a prepare job's upload is failed with it (a failed remask leaves its
+-- upload as it is: the pages already exist), and one processing_failed exception is raised for staff. Only the
+-- short error text is stored (300 characters at most), never page contents or names. Used by claim and finish.
+create function public.processing_job_fail(p_job public.processing_jobs, p_error text, p_now timestamptz)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_up public.script_uploads%rowtype;
+begin
+  update public.processing_jobs
+  set state = 'failed', finished_at = p_now, locked_by = null, locked_at = null, last_error = left(p_error, 300)
+  where id = p_job.id;
+  if p_job.kind = 'prepare' then
+    update public.script_uploads set state = 'failed' where id = p_job.upload_id returning * into v_up;
+  else
+    select * into v_up from public.script_uploads u where u.id = p_job.upload_id;
+  end if;
+  insert into public.script_exceptions (exam_id, kind, booking_id, upload_id, details)
+  values (v_up.exam_id, 'processing_failed', v_up.booking_id, v_up.id,
+    jsonb_build_object('job_id', p_job.id, 'kind', p_job.kind, 'attempts', p_job.attempts));
+end;
+$$;
+revoke execute on function public.processing_job_fail(public.processing_jobs, text, timestamptz) from public, anon, authenticated;
+
+-- Takes the oldest claimable job: queued and due, or running whose worker has been quiet for 15 minutes while it
+-- has attempts left (a quiet job on its third attempt is failed here instead). Claiming a prepare job sets its
+-- upload to processing. Returns what the server needs to prepare the upload: the upload, every question-paper
+-- version of its exam (current and superseded) with page count, page roles and hidden areas, and every copy made
+-- from them by code. SQL null when nothing is claimable. p_now (default now()) lets tests choose the time.
 create function public.processing_job_claim(p_worker text, p_now timestamptz default null)
 returns jsonb
 language plpgsql
@@ -300,9 +330,18 @@ declare
   v_job public.processing_jobs%rowtype;
   v_up public.script_uploads%rowtype;
 begin
+  for v_job in
+    select j.* from public.processing_jobs j
+    where j.state = 'running' and j.attempts >= 3 and j.locked_at < v_now - interval '15 minutes'
+    order by j.id
+    for update skip locked
+  loop
+    perform public.processing_job_fail(v_job, 'worker stopped responding', v_now);
+  end loop;
+
   select j.* into v_job from public.processing_jobs j
   where (j.state = 'queued' and j.run_after <= v_now)
-     or (j.state = 'running' and j.locked_at < v_now - interval '15 minutes')
+     or (j.state = 'running' and j.attempts < 3 and j.locked_at < v_now - interval '15 minutes')
   order by j.run_after, j.id
   limit 1
   for update skip locked;
@@ -313,6 +352,9 @@ begin
   set state = 'running', attempts = attempts + 1, locked_by = left(coalesce(p_worker, ''), 100), locked_at = v_now
   where id = v_job.id
   returning * into v_job;
+  if v_job.kind = 'prepare' then
+    update public.script_uploads set state = 'processing' where id = v_job.upload_id;
+  end if;
   select * into v_up from public.script_uploads u where u.id = v_job.upload_id;
 
   return jsonb_build_object(
@@ -339,11 +381,28 @@ begin
 end;
 $$;
 
--- Ends a claimed job. ok: done. Not ok: queued again for attempts minutes later while attempts < 3; after that the
--- job and its upload fail and one processing_failed exception is raised for staff. Only the short error text the
--- server sends is stored (300 characters at most): never page contents or names.
+-- Keeps a long job's lock alive. True only for the worker and attempt that hold the job.
+create function public.processing_job_heartbeat(p_job bigint, p_worker text, p_attempt int, p_now timestamptz default null)
+returns boolean
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.processing_jobs
+  set locked_at = coalesce(p_now, now())
+  where id = p_job and state = 'running' and locked_by = left(coalesce(p_worker, ''), 100) and attempts = p_attempt;
+  return found;
+end;
+$$;
+
+-- Ends a claimed job, only for the worker and attempt that hold it (a late answer from a worker whose job was
+-- reclaimed changes nothing). ok: done. Not ok: queued again for attempts minutes later while attempts < 3; after
+-- that the job fails (processing_job_fail).
 create function public.processing_job_finish(
   p_job bigint,
+  p_worker text,
+  p_attempt int,
   p_ok boolean,
   p_error text default null,
   p_now timestamptz default null
@@ -356,14 +415,13 @@ as $$
 declare
   v_now timestamptz := coalesce(p_now, now());
   v_job public.processing_jobs%rowtype;
-  v_up public.script_uploads%rowtype;
-  v_error text := left(p_error, 300);
 begin
   select * into v_job from public.processing_jobs j where j.id = p_job for update;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
-  if v_job.state <> 'running' then
+  if v_job.state <> 'running' or v_job.locked_by is distinct from left(coalesce(p_worker, ''), 100)
+     or v_job.attempts is distinct from p_attempt then
     return jsonb_build_object('ok', false, 'code', 'conflict');
   end if;
   if p_ok is null then
@@ -379,23 +437,19 @@ begin
   if v_job.attempts < 3 then
     update public.processing_jobs
     set state = 'queued', run_after = v_now + v_job.attempts * interval '1 minute', locked_by = null, locked_at = null,
-        last_error = v_error
+        last_error = left(p_error, 300)
     where id = v_job.id;
     return jsonb_build_object('ok', true, 'state', 'queued');
   end if;
 
-  update public.processing_jobs
-  set state = 'failed', finished_at = v_now, locked_by = null, locked_at = null, last_error = v_error
-  where id = v_job.id;
-  update public.script_uploads set state = 'failed' where id = v_job.upload_id returning * into v_up;
-  insert into public.script_exceptions (exam_id, kind, booking_id, upload_id, details)
-  values (v_up.exam_id, 'processing_failed', v_up.booking_id, v_up.id,
-    jsonb_build_object('job_id', v_job.id, 'attempts', v_job.attempts));
+  perform public.processing_job_fail(v_job, p_error, v_now);
   return jsonb_build_object('ok', true, 'state', 'failed');
 end;
 $$;
 
 revoke execute on function public.processing_job_claim(text, timestamptz) from public, anon, authenticated;
-revoke execute on function public.processing_job_finish(bigint, boolean, text, timestamptz) from public, anon, authenticated;
+revoke execute on function public.processing_job_heartbeat(bigint, text, int, timestamptz) from public, anon, authenticated;
+revoke execute on function public.processing_job_finish(bigint, text, int, boolean, text, timestamptz) from public, anon, authenticated;
 grant execute on function public.processing_job_claim(text, timestamptz) to service_role;
-grant execute on function public.processing_job_finish(bigint, boolean, text, timestamptz) to service_role;
+grant execute on function public.processing_job_heartbeat(bigint, text, int, timestamptz) to service_role;
+grant execute on function public.processing_job_finish(bigint, text, int, boolean, text, timestamptz) to service_role;
