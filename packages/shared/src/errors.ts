@@ -379,3 +379,23 @@ const markerMessages: Record<string, string> = {
 export function markerMessageFor(code: string | null | undefined): string {
   return code && Object.hasOwn(markerMessages, code) ? markerMessages[code] : messages.internal;
 }
+
+/** Failure codes of opening and closing marking for an exam (marking_settings_set, marking_exam_get, marking_open,
+ * marking_close, marking_reopen); marking_not_open and marking_closed are also what hand-out answers. */
+const markingMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  reason_required: "Give a reason of 3 to 300 characters.",
+  invalid_input: "Check the details. The marking deadline must be after the exam finishes.",
+  not_found: "This exam no longer exists. Refresh the page.",
+  conflict: "Marking has opened, so how this exam is marked can no longer change.",
+  structure_incomplete:
+    "Finish the questions and their marks first. When marking by question, every question must be in a group.",
+  no_markers: "Approve at least one marker for this subject first.",
+  marking_not_open: "Marking has not opened for this exam.",
+  marking_closed: "Marking has closed for this exam.",
+};
+
+/** Message for a marking open or close RPC failure code; unknown codes get the generic message. */
+export function markingMessageFor(code: string | null | undefined): string {
+  return code && Object.hasOwn(markingMessages, code) ? markingMessages[code] : messages.internal;
+}

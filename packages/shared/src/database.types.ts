@@ -1747,8 +1747,41 @@ isOneToOne: false
 "markers_list":
 { Args: Record<PropertyKey, never>; Returns: Json
                            },
+"marking_close":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_exam_get":
+{ Args: { "p_exam": string,"p_now"?: string }; Returns: Json
+                           },
+"marking_exam_sync":
+{ Args: { "p_exam": string,"p_now": string }; Returns: number
+                           },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
+                           },
+"marking_open":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_reopen":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_script_blocked":
+{ Args: { "p_now": string,"p_script": string }; Returns: string
+                           },
+"marking_script_busy":
+{ Args: { "p_script": string }; Returns: boolean
+                           },
+"marking_script_state":
+{ Args: { "p_script": string }; Returns: undefined
+                           },
+"marking_script_waiting":
+{ Args: { "p_now": string,"p_script": string }; Returns: string
+                           },
+"marking_settings_set":
+{ Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
+                           },
+"marking_tick":
+{ Args: Record<PropertyKey, never>; Returns: undefined
                            },
 "money_totals":
 { Args: { "p_from": string,"p_to": string }; Returns: Json

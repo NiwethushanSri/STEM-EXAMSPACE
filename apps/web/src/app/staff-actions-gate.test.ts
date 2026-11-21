@@ -103,6 +103,16 @@ describe("questions and mark scheme actions", () => {
     expect(state.calls).toHaveLength(4);
     expect(Object.values(structure).some((f) => f.mock.calls.length > 0)).toBe(false);
   });
+  it("the marking open and close ones are refused for a teacher and touch nothing", async () => {
+    const a = await import("./admin/exams/[id]/actions");
+    await expect(a.saveMarkingSettingsAction(UUID, { mode: "whole", deadlineDate: "", deadlineTime: "" })).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.openMarkingAction(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.closeMarkingAction(UUID, "Marking is finished")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.reopenMarkingAction(UUID, "More scripts came in")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(state.calls).toHaveLength(4);
+    expect(createClient).not.toHaveBeenCalled();
+  });
   it("the teacher ones are refused for an admin and touch nothing", async () => {
     state.role = "admin";
     const t = await import("./teacher/exams/actions");

@@ -1,18 +1,19 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { AppShell, Badge } from "@/components/AppShell";
+import { ExamMarkingPanel } from "@/components/marking/ExamMarkingPanel";
 import { DownloadLog } from "@/components/papers/DownloadLog";
 import { PaperPanel } from "@/components/papers/PaperPanel";
 import { PrintPanel } from "@/components/papers/PrintPanel";
 import { ReleasePanel } from "@/components/papers/ReleasePanel";
 import { ScanBatches } from "@/components/scripts/ScanBatches";
-import { loadExamAdmin, loadScanBatches } from "@/lib/exam-admin";
+import { loadExamAdmin, loadExamMarking, loadScanBatches } from "@/lib/exam-admin";
 import { missingPaperWarning } from "@/lib/print-pack";
 import { formatLondon } from "@/lib/money";
 
 async function Body({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [v, scans] = await Promise.all([loadExamAdmin(id), loadScanBatches(id)]);
+  const [v, scans, marking] = await Promise.all([loadExamAdmin(id), loadScanBatches(id), loadExamMarking(id)]);
   const now = new Date();
   const nowMs = now.getTime();
   const current = v.papers.find((p) => p.kind === "paper" && p.current) ?? null;
@@ -77,6 +78,7 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
       {v.centres.length > 0 && (
         <ScanBatches examId={v.exam.id} centres={v.centres.map((c) => ({ id: c.id, venue: c.venue, room: c.room }))} batches={scans} />
       )}
+      <ExamMarkingPanel examId={v.exam.id} view={marking.view} groups={marking.groups} finishesAt={marking.finishesAt} homeUntil={marking.homeUntil} />
       <DownloadLog entries={v.downloads} capped={v.downloadsCapped} />
     </div>
   );

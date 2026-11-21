@@ -1,8 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { markingMessageFor } from "@stem/shared";
+import { reasonProblem } from "@/lib/exception-queue";
 import type { FileBegun, StructurePayload, StructureResult } from "@/lib/exam-structure";
 import { beginMarkSchemeFile, markSchemeFileStored, removeMarkSchemeFile, saveStructure } from "@/lib/exam-structure-server";
+import { londonLocalToUtc } from "@/lib/london-time";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
@@ -180,4 +183,76 @@ export async function markSchemeStoredAction(examId: string, fileId: string): Pr
 export async function markSchemeRemoveAction(examId: string, fileId: string, reason: string): Promise<StructureResult> {
   await requireStaff(["admin", "owner"]);
   return removeMarkSchemeFile(examId, fileId, reason);
+}
+
+/** What the marking actions send back. reasonRequired: a deadline change after marking has opened needs a reason. */
+export type MarkingActionResult = { ok: true; message: string } | { ok: false; message: string; reasonRequired?: boolean };
+
+type LooseRpc = (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+
+/** Calls one marking function (the database checks every rule again); done words a successful answer. */
+async function callMarking(
+  examId: string,
+  fn: string,
+  args: Record<string, unknown>,
+  done: (answer: Record<string, unknown>) => string,
+): Promise<MarkingActionResult> {
+  const supabase = await createClient();
+  // p_deadline may be null (no deadline), which the generated argument types do not allow.
+  const { data, error } = await (supabase.rpc as unknown as LooseRpc)(fn, { p_exam: examId, ...args });
+  refresh(examId);
+  if (error || !data || typeof data !== "object" || Array.isArray(data)) return { ok: false, message: GENERIC };
+  const a = data as Record<string, unknown>;
+  if (a.ok === true) return { ok: true, message: done(a) };
+  const code = typeof a.code === "string" ? a.code : null;
+  return code === "reason_required" ? { ok: false, message: markingMessageFor(code), reasonRequired: true } : { ok: false, message: markingMessageFor(code) };
+}
+
+const readyLine = (n: unknown) => (n === 1 ? "1 script is ready to mark." : `${typeof n === "number" ? n : 0} scripts are ready to mark.`);
+
+/** How the exam is marked, and its marking deadline as a UK date and time (both empty: no deadline). Once marking has
+ * opened the mode is fixed and a deadline change needs a reason. */
+export async function saveMarkingSettingsAction(
+  examId: string,
+  settings: { mode: string; deadlineDate: string; deadlineTime: string; reason?: string },
+): Promise<MarkingActionResult> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId) || (settings?.mode !== "whole" && settings?.mode !== "by_question")) return { ok: false, message: GENERIC };
+  const date = (settings.deadlineDate ?? "").trim();
+  const time = (settings.deadlineTime ?? "").trim();
+  const deadline = date || time ? londonLocalToUtc(date, time) : null;
+  if ((date || time) && !deadline) return { ok: false, message: "Enter the deadline as a date and a time." };
+  const reason = (settings.reason ?? "").trim();
+  const problem = reasonProblem(reason, false);
+  if (problem) return { ok: false, message: problem, reasonRequired: true };
+  return callMarking(examId, "marking_settings_set", { p_mode: settings.mode, p_deadline: deadline, p_reason: reason || null }, () => "Marking settings saved.");
+}
+
+/** Opens marking: the verified scripts that may be handed out are made ready to mark. */
+export async function openMarkingAction(examId: string): Promise<MarkingActionResult> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId)) return { ok: false, message: GENERIC };
+  return callMarking(examId, "marking_open", {}, (a) => (a.already === true ? "Marking was already open." : `Marking is open. ${readyLine(a.ready)}`));
+}
+
+/** Closes marking, with a reason. Nothing is ended or deleted; nothing more is handed out. */
+export async function closeMarkingAction(examId: string, reason: string): Promise<MarkingActionResult> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId)) return { ok: false, message: GENERIC };
+  const problem = reasonProblem(reason ?? "", true);
+  if (problem) return { ok: false, message: problem };
+  return callMarking(examId, "marking_close", { p_reason: reason.trim() }, (a) =>
+    a.already === true ? "Marking was already closed." : "Marking is closed. Nothing more is handed out to markers.",
+  );
+}
+
+/** Reopens marking, with a reason. */
+export async function reopenMarkingAction(examId: string, reason: string): Promise<MarkingActionResult> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId)) return { ok: false, message: GENERIC };
+  const problem = reasonProblem(reason ?? "", true);
+  if (problem) return { ok: false, message: problem };
+  return callMarking(examId, "marking_reopen", { p_reason: reason.trim() }, (a) =>
+    a.already === true ? "Marking was already open." : `Marking is open again. ${readyLine(a.ready)}`,
+  );
 }

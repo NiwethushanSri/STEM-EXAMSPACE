@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -232,5 +232,20 @@ describe("markerMessageFor", () => {
     expect(markerMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markerMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(markerMessageFor(null)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("markingMessageFor", () => {
+  it("maps each code of opening and closing marking", () => {
+    expect(markingMessageFor("no_markers")).toBe("Approve at least one marker for this subject first.");
+    expect(markingMessageFor("marking_not_open")).toBe("Marking has not opened for this exam.");
+    expect(markingMessageFor("marking_closed")).toBe("Marking has closed for this exam.");
+    expect(markingMessageFor("structure_incomplete")).toContain("every question must be in a group");
+    expect(markingMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+  });
+  it("falls back to the generic message", () => {
+    expect(markingMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(markingMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(markingMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });
