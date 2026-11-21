@@ -63,7 +63,8 @@ describe("uploadResumable", () => {
     expect(o.chunkSize).toBe(6 * 1024 * 1024);
     expect(o.endpoint).toBe("http://127.0.0.1:54321/storage/v1/upload/resumable");
     expect(o.headers["x-upsert"]).toBe("false");
-    expect(o.headers.authorization).toBe("Bearer user-jwt");
+    // The token is set per request (onBeforeRequest), never also among the fixed headers (see the next test).
+    expect(o.headers.authorization).toBeUndefined();
     expect(o.headers.apikey).toBe("anon-key");
     expect(o.metadata).toMatchObject({ bucketName: "script-uploads", objectName: "home/b-1/u-1.jpg", contentType: "image/jpeg" });
     expect(o.uploadDataDuringCreation).toBe(true);
@@ -71,6 +72,18 @@ describe("uploadResumable", () => {
     expect(Array.isArray(o.retryDelays) && (o.retryDelays as number[]).length).toBeGreaterThan(2);
     expect(progress).toEqual([[3, 10]]);
     expect(tus.made[0].started).toBe(true);
+  });
+
+  it("sends one authorization value per request, as a browser joins a header set twice", async () => {
+    await uploadResumable(file(), { bucket: "script-uploads", path: "home/b-1/u-1.jpg", accessToken: "user-jwt", getAccessToken: async () => "fresh-jwt" });
+    const o = tus.made[0].options as { headers: Record<string, string>; onBeforeRequest: (req: { setHeader: (k: string, v: string) => void }) => Promise<void> };
+    // tus-js-client opens each request by setting the fixed headers, then calls onBeforeRequest; in a browser both go
+    // through XMLHttpRequest.setRequestHeader, which joins a repeated header ("Bearer a, Bearer b": Storage refuses it).
+    const sent: Record<string, string> = {};
+    const req = { setHeader: (k: string, v: string) => (sent[k.toLowerCase()] = sent[k.toLowerCase()] ? `${sent[k.toLowerCase()]}, ${v}` : v) };
+    for (const [k, v] of Object.entries(o.headers)) req.setHeader(k, v);
+    await o.onBeforeRequest(req);
+    expect(sent.authorization).toBe("Bearer fresh-jwt");
   });
 
   it("resumes from the stored fingerprint of the same file and path", async () => {

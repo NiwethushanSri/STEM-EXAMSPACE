@@ -35,8 +35,9 @@ export function uploadResumable(file: File | Blob, opts: ResumableOptions): Prom
     const upload = new Upload(file, {
       endpoint: `${base}/storage/v1/upload/resumable`,
       retryDelays: RETRY_DELAYS,
+      // The token is set only in onBeforeRequest, which runs before every request: tus sets these fixed headers
+      // first, and a browser's XMLHttpRequest joins a header set twice ("Bearer a, Bearer b"), which Storage refuses.
       headers: {
-        authorization: `Bearer ${opts.accessToken}`,
         "x-upsert": "false",
         ...(anonKey ? { apikey: anonKey } : {}),
       },
