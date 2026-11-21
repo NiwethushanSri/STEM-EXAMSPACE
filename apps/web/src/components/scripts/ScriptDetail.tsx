@@ -292,7 +292,8 @@ export function ScriptDetailView({ detail }: { detail: ScriptDetail }) {
                     <summary className="cursor-pointer text-sm font-medium text-blue-800">Process this file again</summary>
                     <p className="my-2 text-sm text-slate-600">
                       The file is read again from the original and its pages are replaced. Staff changes to its pages (turns, hidden names,
-                      confirmations) are lost and must be done again.
+                      confirmations) are lost and must be done again. Pages staff placed in a script, and pages the family added, stay where
+                      they are, but staff must check their names (or confirm them) again.
                     </p>
                     <ReasonForm
                       scriptId={s.id}

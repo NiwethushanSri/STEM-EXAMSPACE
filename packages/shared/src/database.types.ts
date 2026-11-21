@@ -1559,6 +1559,9 @@ isOneToOne: false
 "script_exception_reject":
 { Args: { "p_exception": string,"p_reason": string }; Returns: Json
                            },
+"script_exception_seq":
+{ Args: { "p_exception": string }; Returns: number
+                           },
 "script_exceptions_list":
 { Args: { "p_exam"?: string,"p_kind"?: Database["public"]['Enums']["exception_kind"],"p_state"?: string }; Returns: Json
                            },
@@ -1637,7 +1640,7 @@ isOneToOne: false
 { Args: { "p_page": string }; Returns: boolean
                            },
 "script_page_marking_lost":
-{ Args: { "p_page": string }; Returns: undefined
+{ Args: { "p_cleared"?: boolean,"p_page": string }; Returns: undefined
                            },
 "script_page_marking_made":
 { Args: { "p_page": string }; Returns: undefined
@@ -1672,6 +1675,9 @@ isOneToOne: false
 "script_page_set_hidden_areas":
 { Args: { "p_areas": Json,"p_page": string,"p_reason": string }; Returns: Json
                            },
+"script_page_slot_answer":
+{ Args: { "p_page": string }; Returns: boolean
+                           },
 "script_pages_record":
 { Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_sha256": string,"p_worker": string }; Returns: Json
                            },
@@ -1698,6 +1704,9 @@ isOneToOne: false
                            },
 "script_resolution_settle":
 { Args: { "p_actor": string,"p_booking": string,"p_reason": string }; Returns: undefined
+                           },
+"script_slot_copy":
+{ Args: { "p_script": string }; Returns: string
                            },
 "script_upload_begin":
 { Args: { "p_bytes": number,"p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string,"p_now"?: string,"p_submission": string }; Returns: Json

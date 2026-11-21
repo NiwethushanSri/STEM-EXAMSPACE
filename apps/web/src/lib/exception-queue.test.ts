@@ -237,6 +237,7 @@ describe("words", () => {
   it("labels kinds and resolutions", () => {
     expect(KIND_LABEL.uncoded_family_page).toBe("Page added by the family");
     expect(resolutionLabel("dismissed")).toBe("Confirmed left blank");
+    expect(resolutionLabel("marking_made")).toBe("Marking picture made");
     expect(resolutionLabel("something_new")).toBe("something_new");
   });
   it("says why an assignment or a changed page was refused", () => {
@@ -279,6 +280,10 @@ describe("a page whose marking picture a remask could not make again", () => {
     expect(words.join(" ")).toContain("Hide the candidate's name");
     // A page with a code is only ever made from its print layout (Ruling R32).
     expect(words.join(" ")).toContain("process its file again");
+  });
+  it("says a script being marked kept a marking picture that may be out of date", () => {
+    const words = foundInWords(item({ kind: "poor_quality", details: { from: "remask", marking_picture: true, stale_marking: true, flags: [] } }));
+    expect(words.join(" ")).toContain("may be out of date");
   });
   it("says noting a remask failure makes the marking pictures again", () => {
     const words = foundInWords(item({ kind: "processing_failed", page: null, details: { kind: "remask", attempts: 3 } }));

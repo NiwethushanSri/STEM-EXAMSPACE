@@ -270,6 +270,8 @@ export function foundInWords(item: QueueItem): string[] {
       if (flags.includes("layout_unexpected")) {
         out.push("The page was not where it should be on the picture, so the name band could not be hidden and no marking picture was made.");
         out.push("Hide the candidate's name on the full page, then accept it.");
+      } else if (str(d.from) === "remask" && d.stale_marking === true) {
+        out.push("Its marking pictures could not be made again after its hidden areas changed, and the script is already being marked: the marking picture it has may be out of date.");
       } else if (str(d.from) === "remask") {
         out.push("Its marking picture could not be made again after its hidden areas or its turn changed, so the old one was taken away (this is not the family's file).");
         out.push("Hide the candidate's name on the full page, or tick that there is none, then accept it.");
@@ -459,6 +461,7 @@ const RESOLUTIONS: Record<string, string> = {
   late_rejected: "Late script not marked",
   one_version: "Pages made one version",
   set_aside: "Set aside with its page",
+  marking_made: "Marking picture made",
   submission_rejected: "Submission rejected",
   pages_arrived: "Pages arrived",
   not_expected: "Candidate no longer expected",
