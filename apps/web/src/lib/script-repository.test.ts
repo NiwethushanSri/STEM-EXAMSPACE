@@ -179,5 +179,9 @@ describe("the repository actions", () => {
     // Voiding a final script: results are out, which is why it cannot be voided (not "being marked").
     expect(repoFailureMessage({ code: "script_locked" }, "void")).toContain("results are out");
     expect(repoFailureMessage({ code: "script_locked" }, "rotate")).toContain("being marked");
+    // Ruling R35: a file staff have worked on is not processed again.
+    expect(repoFailureMessage({ code: "staff_changes", reason: "hidden_areas" }, "reprocess")).toBe(
+      "Staff have worked on pages of this file, so reprocessing it would undo that work and is not allowed.",
+    );
   });
 });

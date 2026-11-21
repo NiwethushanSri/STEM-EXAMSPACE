@@ -378,6 +378,7 @@ export const versionReason = (r: string | null) => (r ? (VERSION_REASONS[r] ?? r
 const ACTION_WORDS: Record<string, string> = {
   script_page_rotated: "Page turned",
   script_upload_reprocess: "File processed again",
+  script_upload_reprocess_kept: "File not processed again: its pages were kept",
   script_voided: "Script voided",
   script_page_removed: "Page removed from the script",
   script_page_hidden_areas_set: "Name hidden on a page",
@@ -445,8 +446,13 @@ export function repoDoneMessage(input: RepoInput): string {
   }
 }
 
+/** Why a file staff have worked on is not processed again (the database answers staff_changes). */
+export const STAFF_CHANGES = "Staff have worked on pages of this file, so reprocessing it would undo that work and is not allowed.";
+
 /** What the screen says when a page tool was refused (`action`: the tool, for a message that fits it). */
 export function repoFailureMessage(a: { code?: unknown; reason?: unknown }, action?: RepoInput["action"]): string {
   if (action === "void" && a.code === "script_locked") return "This script is final: its results are out, so it cannot be voided.";
+  // Ruling R35: a file staff have worked on is never processed again (its pages hold that work).
+  if (a.code === "staff_changes") return STAFF_CHANGES;
   return scriptMessageFor(typeof a.code === "string" ? a.code : null, typeof a.reason === "string" ? a.reason : null);
 }

@@ -297,6 +297,40 @@ describe("a page whose marking picture a remask could not make again", () => {
     expect(foundInWords(locked).join(" ")).toContain("can no longer change here");
     expect(actionsFor(item({ kind: "name_visible" }))).toContain("hide_areas");
   });
+  it("says being marked only of a script that is being marked, not one withdrawn or void (R35)", () => {
+    for (const state of ["ready_to_mark", "marking", "marked", "checked", "final"]) {
+      const marking = item({ kind: "name_visible", script: { ...raw().script, state }, page: page({ areas: [] }) });
+      expect(foundInWords(marking).join(" ")).toContain("is being marked");
+      expect(actionsFor(marking)).not.toContain("hide_areas");
+    }
+    const withdrawn = item({ kind: "name_visible", script: { ...raw().script, state: "withdrawn" }, page: page({ areas: [] }) });
+    expect(foundInWords(withdrawn).join(" ")).not.toContain("being marked");
+    expect(foundInWords(withdrawn).join(" ")).toContain("The script is withdrawn");
+    // The database still refuses hidden areas there, so they are still not offered.
+    expect(actionsFor(withdrawn)).not.toContain("hide_areas");
+    const voided = item({ kind: "poor_quality", script: { ...raw().script, state: "void" }, page: page({ areas: [] }), details: { flags: ["blurred"] } });
+    expect(foundInWords(voided).join(" ")).not.toContain("being marked");
+    expect(foundInWords(voided).join(" ")).toContain("The script is void");
+    expect(foundInWords(item({ kind: "name_visible" })).join(" ")).not.toContain("The script is");
+  });
+  it("offers for a check left on a replaced page only what the database allows (R35)", () => {
+    const gone = page({ areas: [], replaced: true });
+    const check = item({ kind: "poor_quality", page: gone, details: { from: "remask", marking_picture: false, flags: [] } });
+    expect(actionsFor(check)).toEqual(["confirm"]);
+    expect(foundInWords(check).join(" ")).toContain("this page was replaced");
+    const family = item({ kind: "uncoded_family_page", page: gone, details: { after_page: 2 } });
+    expect(actionsFor(family)).not.toContain("hide_areas");
+    expect(actionsFor(family)).not.toContain("assign");
+    expect(actionsFor(family)).toContain("confirm");
+    const current = item({ kind: "uncoded_family_page", page: page({ areas: [] }), details: { after_page: 2 } });
+    expect(actionsFor(current)).toEqual(expect.arrayContaining(["hide_areas", "assign"]));
+    expect(foundInWords(current).join(" ")).not.toContain("was replaced");
+  });
+  it("says a page read for a script being marked was not added to it (R35)", () => {
+    const words = foundInWords(item({ kind: "not_expected", details: { reason: "script_locked", copy_page: 3 } }));
+    expect(words.join(" ")).toContain("already being marked");
+    expect(words.join(" ")).toContain("not added to the script");
+  });
   it("asks for the name to be checked again after reprocessing", () => {
     const words = foundInWords(item({ kind: "poor_quality", details: { from: "remask", marking_picture: false, reprocessed: true, flags: [] } }));
     expect(words.join(" ")).toContain("Check the name again after reprocessing");

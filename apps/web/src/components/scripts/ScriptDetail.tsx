@@ -291,9 +291,9 @@ export function ScriptDetailView({ detail }: { detail: ScriptDetail }) {
                   <details className="rounded border border-slate-200 p-3">
                     <summary className="cursor-pointer text-sm font-medium text-blue-800">Process this file again</summary>
                     <p className="my-2 text-sm text-slate-600">
-                      The file is read again from the original and its pages are replaced. Staff changes to its pages (turns, hidden names,
-                      confirmations) are lost and must be done again. Pages staff placed in a script, and pages the family added, stay where
-                      they are, but staff must check their names (or confirm them) again.
+                      The file is read again from the original and its pages are replaced; turns of its pages are lost. This is not allowed
+                      once staff have worked on its pages (a hidden name, a confirmation, a page placed, moved or taken out, or a page the
+                      family added), because it would undo that work.
                     </p>
                     <ReasonForm
                       scriptId={s.id}

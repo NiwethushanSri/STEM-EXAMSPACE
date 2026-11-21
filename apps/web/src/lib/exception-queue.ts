@@ -213,13 +213,19 @@ const NOT_EXPECTED: Record<string, string> = {
   home_sitting: "This page belongs to a candidate who sits this exam at home.",
   other_centre: "This page belongs to a candidate booked at another centre.",
   absent: "This page belongs to a candidate marked absent on the register.",
+  script_locked: "This page belongs to a candidate whose script is already being marked, so it was not added to the script: tell the marking lead.",
 };
 
 /** What the server found, in plain words: one sentence per line. */
 export function foundInWords(item: QueueItem): string[] {
   const words = foundWords(item);
-  if (isLocked(item) && !isStaleNotice(item) && item.page) {
+  if (isBeingMarked(item) && !isStaleNotice(item) && item.page) {
     words.push("The script is being marked, so this page's hidden areas can no longer change here: tell the marking lead.");
+  } else if (isLocked(item) && !isStaleNotice(item) && item.page) {
+    words.push(`The script is ${item.script?.state === "void" ? "void" : "withdrawn"}, so this page's hidden areas can no longer change.`);
+  }
+  if (item.page?.replaced && item.state === "open") {
+    words.push("The file was processed again and this page was replaced: its name can no longer be hidden here, and it cannot be assigned.");
   }
   return words;
 }
@@ -354,13 +360,21 @@ export function actionsFor(item: QueueItem): QueueAction[] {
   if (item.kind === "late" && !item.script) return [];
   if (isRemaskFailure(item) || isStaleNotice(item)) return ["confirm"];
   const actions = isRemaskQuality(item) ? (["hide_areas", "confirm"] as QueueAction[]) : ACTIONS[item.kind];
-  // The database refuses hidden areas on a page of a script past verification (R34 d): never offer them there.
-  return isLocked(item) ? actions.filter((a) => a !== "hide_areas") : actions;
+  // Only what the database allows is offered. It refuses hidden areas on a page of a script past verification
+  // (R34 d), and hidden areas and assigning for a page a rerun replaced (page_replaced, R35).
+  const refused: QueueAction[] = [];
+  if (isLocked(item)) refused.push("hide_areas");
+  if (item.page?.replaced) refused.push("hide_areas", "assign");
+  return actions.filter((a) => !refused.includes(a));
 }
 
-/** A script past verification (being marked, marked, or out of the marking): its pages no longer change here. */
+/** A script past verification (being marked, marked, withdrawn or void): its pages no longer change here. */
 export const isLocked = (item: QueueItem) =>
   item.script !== null && !["receiving", "checking", "needs_attention", "verified"].includes(item.script.state);
+
+/** A script that is really being marked (ready to mark up to final), not one withdrawn or void (R35). */
+export const isBeingMarked = (item: QueueItem) =>
+  item.script !== null && ["ready_to_mark", "marking", "marked", "checked", "final"].includes(item.script.state);
 
 /** A script being marked kept a marking picture a failed remask could not make again (stale_marking): only noted. */
 export const isStaleNotice = (item: QueueItem) => item.kind === "poor_quality" && item.details.stale_marking === true;

@@ -472,11 +472,13 @@ select is((select s.version || '/' || (select count(*) from public.script_versio
   (select version || '/' || version from v8), 'the rerun rolled the version back without writing a new one');
 select is(pg_temp.script('b8'), 'false/needs_attention', 'and the script is incomplete again until it is checked');
 
--- A script past verification is Phase 3's: a version change leaves complete as it is.
+-- A script past verification is Phase 3's: no version is written for a script being marked (Ruling R35).
 update public.scripts set state = 'ready_to_mark' where booking_id = pg_temp.k('b1');
-select ok((select public.script_version_write(s.id, public.script_links(s.id) - '5', null, null, 'test', now()) from public.scripts s where s.booking_id = pg_temp.k('b1')),
-  'a new version is written for b1''s script, ready to mark');
-select is(pg_temp.script('b1'), 'true/ready_to_mark', 'and it stays complete');
+create temp table v1 as select version from public.scripts where booking_id = pg_temp.k('b1');
+select ok(not (select public.script_version_write(s.id, public.script_links(s.id) - '5', null, null, 'test', now()) from public.scripts s where s.booking_id = pg_temp.k('b1')),
+  'no version is written for b1''s script, ready to mark');
+select is(pg_temp.script('b1') || '/' || (select s.version = v1.version from public.scripts s, v1 where s.booking_id = pg_temp.k('b1')),
+  'true/ready_to_mark/true', 'it stays complete, at the version it had');
 
 -- ---------------------------------------------------------------------------------------------
 -- No paper version known (exam g has none): never complete, one missing_pages exception says why.

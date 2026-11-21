@@ -462,12 +462,14 @@ select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bi
   jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6))) ->> 'ok', 'true', 'the first record is accepted');
 select is((select sha256 from public.script_uploads where id = pg_temp.k('us8')), pg_temp.h('us8'), 'and sets the upload''s SHA-256');
 create temp table us8_ids as select id from public.script_pages where upload_id = pg_temp.k('us8');
-insert into public.script_exceptions (exam_id, kind, booking_id, page_id, upload_id)
-values (pg_temp.k('ea'), 'name_visible', pg_temp.k('b13'), pg_temp.page_id('us8', 0), pg_temp.k('us8'));
+-- An exception the system closed (a marking picture made again) still names the page. (An open check staff raised, or
+-- one staff resolved, would stop the rerun from replacing the page at all: Ruling R35, tested in 036.)
+insert into public.script_exceptions (exam_id, kind, booking_id, page_id, upload_id, details, state, resolution, resolved_at)
+values (pg_temp.k('ea'), 'poor_quality', pg_temp.k('b13'), pg_temp.page_id('us8', 0), pg_temp.k('us8'), '{"from": "remask"}', 'resolved', 'marking_made', now());
 select is(public.script_pages_record((pg_temp.r('claim8') -> 'job' ->> 'id')::bigint, 'H', 1, pg_temp.h('us8'),
   jsonb_build_array(pg_temp.pg('us8', 0, 'c13', 6, 300))) ->> 'ok', 'true', 'a rerun with the same SHA-256 is accepted');
 select is((select count(*) filter (where p.replaced_at is null)::int || '/' || count(*) filter (where p.replaced_at is not null
-    and exists (select 1 from public.script_exceptions e where e.page_id = p.id and e.kind = 'name_visible'))::int
+    and exists (select 1 from public.script_exceptions e where e.page_id = p.id and e.kind = 'poor_quality'))::int
   from public.script_pages p where p.upload_id = pg_temp.k('us8')), '1/1', 'a page an exception still names is kept, marked replaced, not deleted');
 delete from us8_ids;
 insert into us8_ids select id from public.script_pages where upload_id = pg_temp.k('us8');
