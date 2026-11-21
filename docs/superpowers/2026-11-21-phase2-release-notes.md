@@ -75,7 +75,7 @@ Do not deploy until you give the go-ahead.
 2. **A host account for the processing server, in London** (the settings assume Fly.io's London region; tell us if you prefer another host).
 3. **Real test files:** a full centre pack from the office scanner, and photos and scanning-app PDFs of printed copies from several phones (old and new, iPhone and Android), including some taken on a white table and some on a pile of pages. Every threshold so far was set on made-up files; these real files set them properly. They are kept out of the code repository.
 4. **The first real exam's date and size** (how many at home, how many at each centre), so the server size and the trial can be planned.
-5. **Email on** (launch items L3 and L4) and the secrets in step 2.
+5. **Email on** (launch items L3 and L4) and the secrets in step 2. Family emails are kept for 7 days, so turning email on sends any family receipts and notices queued in the 7 days before. Turn it on before the first real exam, not during one.
 
 ## Home rules
 
@@ -106,7 +106,10 @@ The marking picture is made only when the printed page proves where the name ban
 - **Drawing hidden areas with a finger on an iPad is awkward.** Use an Apple Pencil or a mouse.
 - **Each page printed with "Fit to page" needs its own hidden area** before staff can accept it (there is no "same area for every page of this file" yet).
 - **Plan more than one processing machine for a large home exam.** One machine reads one file at a time, at about 0.1 seconds per page plus the time to store the pictures; several hundred families handing in at the same moment wait in a queue.
-- **A family is emailed that the paper is released even if its page roles are not checked yet;** the download is refused until they are. The admin home page warns the day before.
+- **A family is emailed that the paper is released (or corrected) even if its page roles are not checked yet;** the download is refused until they are. The admin home page warns the day before. To be fixed before launch (see "Small fixes before launch").
+- **After the upload window has closed,** a family with uploaded but unsent pages still sees "Press Submit to send them" and a leave-page prompt, although Submit is no longer offered. Staff can still submit for them. To be fixed before launch.
+- **The "Answers uploaded but not sent" list does not say when a draft replaces pages already received.** Submitting such a draft for a family after the finish plus 2 hours marks the script late. Families may still be uploading in the late window (24 hours after the finish), and submitting for them then drops any file still on its way, so wait until that window has closed where you can.
+- **Right after a deploy,** two large files recorded at the same moment can make one of them wait while the database refreshes its statistics. If it waits too long it is simply tried again.
 - **A file staff have worked on cannot be processed again** (the screen says so), so that their work is never undone.
 - **Families cannot change a script once marking starts.**
 - **"Please try again."** Rarely, when two staff act on the same file at the same moment, one of them is asked to try again. Nothing is lost.
@@ -129,6 +132,16 @@ The marking picture is made only when the printed page proves where the name ban
 - Markers may read marking pictures only (a storage rule for "-marking" pictures).
 - When staff confirm a page, show them the marking picture first.
 - Clean up page pictures no row points at any more: serve markers a page's current marking picture only, and delete the pictures it replaced.
+
+## Small fixes before launch
+
+Found by the last check of the fixes. None of them shows a name or loses a page.
+
+- Send the "paper released" and "paper corrected" emails only once the page roles are checked.
+- Show the "not sent yet" warning and the leave-page prompt only while the family can still press Submit.
+- On the "Answers uploaded but not sent" list, say when a draft replaces pages already received.
+- Decide whether turning email on should skip family emails queued before it.
+- Test the 5,000-page limit at exactly 5,000 pages (today's test never reaches it).
 
 ## Not in this part
 
