@@ -18,6 +18,7 @@ const messages: Record<ErrorCode, string> = {
   internal: "Something went wrong. Please try again.",
   paper_missing: "Your paper is not ready yet. The institution has been told.",
   paper_held: "The paper is paused by the institution. Please wait.",
+  roles_not_reviewed: "Your paper is not ready yet. Please contact the institution.",
   paper_not_released: "Your paper is not ready to download yet.",
   paper_closed: "Downloads for this paper have closed.",
   wrong_sitting: "Your booking is for the centre; your paper is handed out in the exam room",
@@ -179,4 +180,152 @@ const attendanceMessages: Record<AttendanceContext, Record<string, string>> = {
 export function attendanceMessageFor(code: string | null | undefined, context: AttendanceContext): string {
   const table = attendanceMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}
+
+/** Failure codes returned by the home upload RPCs (home_submission_open, script_upload_begin, script_upload_stored,
+ * home_submission_submit and the "Needs your attention" answers). */
+const uploadMessages: Record<string, string> = {
+  uploads_not_open: "You can upload your answers once the exam has started.",
+  uploads_closed: "Uploads for this exam have closed. Please contact the institution.",
+  too_many_files: "You can hand in at most 60 files. Delete some, or put the pages into one PDF.",
+  too_many_files_total:
+    "Too many files have been added and deleted in this hand-in (120 at most). Press Submit to send the pages you have; you can then replace pages.",
+  file_too_large: "This file is too large. Photos can be up to 25 MB and PDFs up to 100 MB.",
+  wrong_file_type: "This file cannot be used. Upload a PDF, or photos as JPEG, PNG or HEIC.",
+  still_uploading: "Some files are still uploading. Wait until every file shows as uploaded, or delete it.",
+  nothing_to_submit: "Add at least one photo or PDF before you submit.",
+  wrong_sitting: "Your booking is for the centre; your answers are collected in the exam room.",
+  script_locked: "Your answers are already being marked.",
+  not_found: "The file did not arrive. Please try again.",
+  invalid_input: "That did not work. Please check and try again.",
+  conflict: "This has already changed. Refresh the page to see where it stands.",
+  forbidden: "You do not have permission to do that.",
+};
+
+/** Message for a home upload RPC failure code; unknown codes get the generic message. */
+export function uploadMessageFor(code: string | null | undefined): string {
+  return code && Object.hasOwn(uploadMessages, code) ? uploadMessages[code] : messages.internal;
+}
+
+/** Which collection or custody RPC a failure code came from. */
+export type CollectionContext = "record" | "manifest" | "custody";
+
+const CENTRE_REMOVED = "This centre is no longer part of this exam. Refresh the page.";
+
+const collectionMessages: Record<CollectionContext, Record<string, string>> = {
+  record: {
+    not_present: "Only a candidate marked present or late has sheets to count.",
+    invalid_input: "Enter a whole number of extra sheets from 0 to 50.",
+    not_found: "Not found",
+    forbidden: "You do not have permission to use this register.",
+    conflict: CENTRE_REMOVED,
+  },
+  manifest: {
+    conflict: "This exam already has 99 manifests, or this centre is no longer part of this exam.",
+    not_found: "Not found",
+    forbidden: "You do not have permission to use this register.",
+  },
+  custody: {
+    invalid_input: "Choose the step, say where, and name who or add a note. The place can be up to 120 characters and the note up to 300.",
+    invalid_staff: "Choose staff members with an active account.",
+    not_found: "Not found",
+    forbidden: "You do not have permission to use this register.",
+    conflict: CENTRE_REMOVED,
+  },
+};
+
+/** Message for a collection, manifest or custody RPC failure code; unknown codes get the generic message. */
+export function collectionMessageFor(code: string | null | undefined, context: CollectionContext): string {
+  const table = collectionMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}
+
+/** Which scan batch RPC a failure code came from. */
+export type ScanContext = "create" | "upload" | "submit" | "complete";
+
+const scanMessages: Record<ScanContext, Record<string, string>> = {
+  create: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Check the manifest number and try again.",
+    not_found: "This centre is not part of this exam. Refresh the page.",
+    conflict: "This centre is no longer part of this exam, or the exam already has 99 scan batches.",
+    unknown_manifest: "No manifest has that number. Check the number printed on the manifest.",
+    other_manifest: "That manifest belongs to another centre or exam.",
+  },
+  upload: {
+    forbidden: FORBIDDEN,
+    invalid_input: "That file could not be added. Please try again.",
+    not_found: "The file did not arrive. Please try again.",
+    conflict: "Processing has already started for this batch. Make a new scan batch for more files.",
+    wrong_file_type: "This file cannot be used. Upload scans as PDF, JPEG or PNG.",
+    file_too_large: "This file is larger than 1 GB. Split the scan into smaller files.",
+  },
+  submit: {
+    forbidden: FORBIDDEN,
+    not_found: "This batch no longer exists. Refresh the page.",
+    nothing_to_submit: "Upload at least one file before you start processing.",
+  },
+  complete: {
+    forbidden: FORBIDDEN,
+    not_found: "This centre is not part of this exam. Refresh the page.",
+    conflict: "This centre is no longer part of this exam. Refresh the page.",
+    still_processing:
+      "Some scans of this centre are still uploading or being processed. Start processing every batch and wait until it has finished.",
+  },
+};
+
+/** Message for a scan batch RPC failure code; unknown codes get the generic message. */
+export function scanMessageFor(code: string | null | undefined, context: ScanContext): string {
+  const table = scanMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}
+
+/** Failure codes of the exception queue (script_exception_* and script_late_decide, script_page_set_hidden_areas). A
+ * conflict answer also names who resolved it and when; the screen adds that. */
+const exceptionMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  reason_required: "Give a reason of 3 to 300 characters.",
+  invalid_input: "Check the details: choose a page within the candidate's copy, or pages listed as missing, and areas inside the page.",
+  not_found: "This could not be found. Refresh the page.",
+  conflict: "This has already been resolved. Refresh the page to see how.",
+  wrong_kind: "That action does not fit this kind of problem.",
+  other_exam: "That candidate is booked for another exam.",
+  booking_not_active: "That candidate's booking is not paid, or has been cancelled.",
+  wrong_sitting: "That candidate sits this exam elsewhere: a scanned page goes to a candidate at the centre, a page handed in from home to a candidate at home.",
+  not_present: "That candidate is not marked present or late on the register. Correct the register first.",
+  in_other_script: "This page is already in another candidate's script.",
+  script_locked: "That candidate's script is already being marked, so its pages cannot change here.",
+  page_replaced: "This file has been processed again. Refresh the page.",
+  still_mixed: "The script still shows pages from two versions of the paper. Make its pages one version first.",
+  not_late: "This script was not handed in late.",
+  name_not_hidden: "Hide the candidate's name on the page first, or tick \"There is no name on this page\".",
+  name_area_required: "This page has a printed name box. Draw a box over the name before confirming.",
+  other_family: "A page handed in by one family can only go to that family's own bookings, not to another family's.",
+};
+
+/** Message for an exception queue RPC failure code; unknown codes get the generic message. */
+export function exceptionMessageFor(code: string | null | undefined): string {
+  return code && Object.hasOwn(exceptionMessages, code) ? exceptionMessages[code] : messages.internal;
+}
+
+/** Failure codes of the script repository (script_page_rotate, script_upload_reprocess, script_void,
+ * script_page_remove, scripts_list, script_detail). A conflict says why in `reason`. */
+const scriptMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  reason_required: "Give a reason of 3 to 300 characters.",
+  invalid_input: "Check the details and try again.",
+  not_found: "This could not be found. Refresh the page.",
+  page_replaced: "This file has been processed again. Refresh the page.",
+  script_locked: "This script is being marked or has been marked, so its pages can no longer change.",
+};
+const scriptConflicts: Record<string, string> = {
+  busy: "This file is already waiting to be processed, or is being processed now. Wait until it has finished.",
+  void: "This script is already void.",
+  changed: "This script changed while you were working. Refresh the page and try again.",
+};
+
+/** Message for a script repository RPC failure code (and a conflict's reason); unknown codes get the generic message. */
+export function scriptMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") return reason && Object.hasOwn(scriptConflicts, reason) ? scriptConflicts[reason] : scriptConflicts.changed;
+  return code && Object.hasOwn(scriptMessages, code) ? scriptMessages[code] : messages.internal;
 }

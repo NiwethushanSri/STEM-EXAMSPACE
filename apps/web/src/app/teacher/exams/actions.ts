@@ -1,12 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { callSaveExam, readRpc } from "@/lib/exam-rpc";
+import { callSaveExam, readRpc, saveHomeRules } from "@/lib/exam-rpc";
 import { parseExamForm } from "@/lib/exam-form";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 
-export type TeacherExamResult = { ok: true; message: string } | { ok: false; message: string };
+export type TeacherExamResult = { ok: true; message: string; id?: string } | { ok: false; message: string };
 
 /**
  * A teacher creates or edits a draft exam in one of their own subjects. The form has no price and the
@@ -21,9 +21,12 @@ export async function saveTeacherExamAction(raw: Record<string, string>): Promis
   const supabase = await createClient();
   const { data, error } = await callSaveExam(supabase, parsed.value, 0);
   const out = readRpc(data, error, "save_exam");
+  const rulesProblem = out.ok ? await saveHomeRules(supabase, out.id, parsed.value) : null;
   revalidatePath("/teacher/exams");
   revalidatePath("/admin/exams");
   if (!out.ok) return out;
+  // The draft is saved, so this is a success with a warning: the form closes and cannot save a second copy.
+  if (rulesProblem) return { ok: true, message: rulesProblem, id: out.id };
   return {
     ok: true,
     message: parsed.value.id ? "Draft saved." : "Draft created. An admin will set the price and publish it.",

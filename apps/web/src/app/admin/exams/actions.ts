@@ -2,14 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import { messageFor } from "@stem/shared";
-import { callSaveExam, explainSaveConflict, readRpc } from "@/lib/exam-rpc";
+import { callSaveExam, explainSaveConflict, readRpc, saveHomeRules } from "@/lib/exam-rpc";
 import { parseExamForm } from "@/lib/exam-form";
 import { isUuid } from "@/lib/uuid";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 
 /** What the exam actions send back; they never throw for expected failures. */
-export type ExamActionResult = { ok: true; message: string } | { ok: false; message: string };
+export type ExamActionResult = { ok: true; message: string; id?: string } | { ok: false; message: string };
 
 function refresh() {
   revalidatePath("/admin/exams");
@@ -27,8 +27,14 @@ export async function saveExamAction(raw: Record<string, string>): Promise<ExamA
   const supabase = await createClient();
   const { data, error } = await callSaveExam(supabase, v, v.pricePence ?? 0);
   const out = readRpc(data, error, "save_exam");
+  if (out.ok) {
+    const rulesProblem = await saveHomeRules(supabase, out.id, v);
+    refresh();
+    // The exam is saved, so this is a success with a warning: the form closes and cannot save a second copy.
+    if (rulesProblem) return { ok: true, message: rulesProblem, id: out.id };
+    return { ok: true, message: v.id ? "Exam saved." : "Exam created as a draft. Publish it when it is ready." };
+  }
   refresh();
-  if (out.ok) return { ok: true, message: v.id ? "Exam saved." : "Exam created as a draft. Publish it when it is ready." };
   const code = data && typeof data === "object" && !Array.isArray(data) ? (data as { code?: unknown }).code : undefined;
   if (code === "conflict") return { ok: false, message: await explainSaveConflict(supabase, v) };
   return out;

@@ -36,6 +36,7 @@ export function PrintPanel({
   examCode,
   startsAt,
   paperVersion,
+  rolesChecked,
   centres,
 }: {
   examTitle: string;
@@ -43,6 +44,8 @@ export function PrintPanel({
   startsAt: string;
   /** Version of the current paper, or null when none is uploaded. */
   paperVersion: number | null;
+  /** Whether the current paper's page roles were checked: no pack or reprint is made before (the database refuses). */
+  rolesChecked: boolean;
   centres: PackCentre[];
 }) {
   const router = useRouter();
@@ -133,6 +136,12 @@ export function PrintPanel({
   return (
     <Card title="Print packs">
       {paperVersion === null && <p className="mb-3 text-sm text-slate-600">Upload the paper before making print packs.</p>}
+      {paperVersion !== null && !rolesChecked && (
+        <p role="alert" data-testid="print-roles-first" className="mb-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Check the page roles first: under &quot;Page roles and hidden areas&quot; above, set each page and save. No print pack or
+          reprint is made before that.
+        </p>
+      )}
       {centres.length === 0 ? (
         <p className="text-sm text-slate-500">This exam has no centres.</p>
       ) : (
@@ -153,7 +162,7 @@ export function PrintPanel({
                   <button
                     type="button"
                     onClick={() => makePack(c)}
-                    disabled={paperVersion === null || c.candidates.length === 0 || anyRunning}
+                    disabled={paperVersion === null || !rolesChecked || c.candidates.length === 0 || anyRunning}
                     className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     Print pack
@@ -215,7 +224,7 @@ export function PrintPanel({
                               <button
                                 type="button"
                                 onClick={() => reprint(cand.bookingId)}
-                                disabled={paperVersion === null || rp?.busy}
+                                disabled={paperVersion === null || !rolesChecked || rp?.busy}
                                 aria-label={`Reprint ${cand.indexNumber}`}
                                 className="rounded border border-slate-300 px-3 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
                               >

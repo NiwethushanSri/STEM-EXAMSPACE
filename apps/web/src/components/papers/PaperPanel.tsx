@@ -9,7 +9,8 @@ import { ReasonDialog, REASON_MAX, REASON_MIN } from "@/components/papers/Reason
 import { removeInsertAction } from "@/app/admin/exams/[id]/actions";
 import { createClient } from "@/lib/supabase/client";
 import { formatLondon } from "@/lib/money";
-import type { PaperVersion } from "@/lib/exam-admin";
+import { PageRolesPanel } from "@/components/papers/PageRolesPanel";
+import type { PaperLayout, PaperVersion } from "@/lib/exam-admin";
 
 /** Paper PDFs are at most 20 MB (the bucket and the paper-register function enforce the same limit). */
 export const MAX_PAPER_BYTES = 20 * 1024 * 1024;
@@ -24,11 +25,14 @@ export function PaperPanel({
   examId,
   papers,
   currentHasCopies,
+  layout,
   locked,
 }: {
   examId: string;
   papers: PaperVersion[];
   currentHasCopies: boolean;
+  /** Page roles and hidden areas of the current paper. */
+  layout: PaperLayout | null;
   /** The exam is cancelled or finished: nothing can be uploaded. */
   locked: boolean;
 }) {
@@ -129,6 +133,8 @@ export function PaperPanel({
           </div>
         </div>
       )}
+
+      {current && layout && <PageRolesPanel key={current.id} examId={examId} paper={current} layout={layout} locked={locked} />}
 
       <div className="mt-6 border-t border-slate-100 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

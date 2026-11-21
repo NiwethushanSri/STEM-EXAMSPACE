@@ -5,13 +5,14 @@ import { DownloadLog } from "@/components/papers/DownloadLog";
 import { PaperPanel } from "@/components/papers/PaperPanel";
 import { PrintPanel } from "@/components/papers/PrintPanel";
 import { ReleasePanel } from "@/components/papers/ReleasePanel";
-import { loadExamAdmin } from "@/lib/exam-admin";
+import { ScanBatches } from "@/components/scripts/ScanBatches";
+import { loadExamAdmin, loadScanBatches } from "@/lib/exam-admin";
 import { missingPaperWarning } from "@/lib/print-pack";
 import { formatLondon } from "@/lib/money";
 
 async function Body({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const v = await loadExamAdmin(id);
+  const [v, scans] = await Promise.all([loadExamAdmin(id), loadScanBatches(id)]);
   const now = new Date();
   const nowMs = now.getTime();
   const current = v.papers.find((p) => p.kind === "paper" && p.current) ?? null;
@@ -46,7 +47,15 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
         </div>
       )}
 
-      <PaperPanel examId={v.exam.id} papers={v.papers} currentHasCopies={v.currentHasCopies} locked={locked} />
+      {current && current.pagesReviewedAt === null && !locked && (
+        <div role="status" data-testid="page-roles-warning" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Check the page roles before the release time. Say which pages are answer pages and hide any candidate name boxes. Until
+          the roles are saved, the paper cannot be released and no copy is made for candidates (at home, in a print pack or as a
+          reprint).
+        </div>
+      )}
+
+      <PaperPanel examId={v.exam.id} papers={v.papers} currentHasCopies={v.currentHasCopies} layout={v.layout} locked={locked} />
       <ReleasePanel
         examId={v.exam.id}
         status={v.exam.status}
@@ -60,7 +69,11 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
         codeLocked={v.hasCopies}
         nowMs={nowMs}
       />
-      <PrintPanel examTitle={v.exam.title} examCode={v.exam.examCode} startsAt={v.exam.startsAt} paperVersion={current?.version ?? null} centres={v.centres} />
+      <PrintPanel examTitle={v.exam.title} examCode={v.exam.examCode} startsAt={v.exam.startsAt} paperVersion={current?.version ?? null}
+        rolesChecked={current !== null && current.pagesReviewedAt !== null} centres={v.centres} />
+      {v.centres.length > 0 && (
+        <ScanBatches examId={v.exam.id} centres={v.centres.map((c) => ({ id: c.id, venue: c.venue, room: c.room }))} batches={scans} />
+      )}
       <DownloadLog entries={v.downloads} capped={v.downloadsCapped} />
     </div>
   );

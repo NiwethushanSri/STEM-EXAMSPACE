@@ -105,6 +105,12 @@ async function registerPaper(examId: string, kind: "paper" | "insert", bytes: Bu
   const res = await client.functions.invoke("paper-register", { body: { examId, kind, storagePath, ...extra } });
   await client.auth.signOut();
   if (res.error) throw new Error(`paper-register failed: ${res.error.message}`);
+  // An admin has checked the page roles (no copy is made for a family before that; the admin spec covers the panel).
+  if (kind === "paper") {
+    const checked = await svc().from("exam_papers").update({ pages_reviewed_at: new Date().toISOString() })
+      .eq("exam_id", examId).eq("kind", "paper").is("superseded_at", null);
+    if (checked.error) throw new Error(`page roles could not be marked checked: ${checked.error.message}`);
+  }
 }
 
 async function removeData() {

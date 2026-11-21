@@ -27,6 +27,9 @@ export type ExamRow = {
   pricePence: number | null;
   priceConfirmed: boolean;
   bookingDeadline: string;
+  /** Rules and allowed materials for the home sitting; empty text means the institution default shows. */
+  homeRules: string;
+  allowedMaterials: string;
   status: ExamStatus;
   /** Seats taken: bookings awaiting payment, paid or cancel-requested, at a centre or at home. */
   seatsSold: number;
@@ -60,6 +63,8 @@ type ExamQueryRow = {
   price_pence?: number;
   price_confirmed?: boolean;
   booking_deadline: string;
+  home_rules?: string | null;
+  allowed_materials?: string | null;
   status: ExamStatus;
   release_minutes_before?: number;
   released_early_at?: string | null;
@@ -179,6 +184,8 @@ function toRows(exams: ExamQueryRow[], bookings: BookingQueryRow[], names: Map<s
       pricePence: e.price_pence ?? null,
       priceConfirmed: e.price_confirmed ?? false,
       bookingDeadline: e.booking_deadline,
+      homeRules: e.home_rules ?? "",
+      allowedMaterials: e.allowed_materials ?? "",
       status: e.status,
       // A cancelled exam releases its seats.
       seatsSold: cancelled ? 0 : bs.filter((b) => SEAT_STATUSES.includes(b.status)).length,
@@ -215,9 +222,9 @@ export async function loadVenues(): Promise<VenueOption[]> {
 }
 
 const ADMIN_COLUMNS =
-  "id, title, paper, subject_id, format, starts_at, duration_minutes, price_pence, price_confirmed, booking_deadline, status, release_minutes_before, released_early_at, subject:subjects(name), centres:exam_centres(id, venue_id, room, seat_limit, removed_at, created_at, venue:venues(name))";
+  "id, title, paper, subject_id, format, starts_at, duration_minutes, price_pence, price_confirmed, booking_deadline, home_rules, allowed_materials, status, release_minutes_before, released_early_at, subject:subjects(name), centres:exam_centres(id, venue_id, room, seat_limit, removed_at, created_at, venue:venues(name))";
 const TEACHER_COLUMNS =
-  "id, title, paper, subject_id, format, starts_at, duration_minutes, booking_deadline, status, subject:subjects(name), centres:exam_centres(id, venue_id, room, seat_limit, removed_at, created_at, venue:venues(name))";
+  "id, title, paper, subject_id, format, starts_at, duration_minutes, booking_deadline, home_rules, allowed_materials, status, subject:subjects(name), centres:exam_centres(id, venue_id, room, seat_limit, removed_at, created_at, venue:venues(name))";
 
 /** The ids (of these exams) that have a current question paper. */
 async function loadExamsWithPaper(examIds: string[]): Promise<Set<string>> {
@@ -239,6 +246,33 @@ async function loadExamsWithPaper(examIds: string[]): Promise<Set<string>> {
     }
   }
   return out;
+}
+
+/** Published exams that are still to start and whose current question paper's page roles nobody has checked: no copy
+ * is made for candidates until they are (the admin home page decides which are close to release). */
+export async function loadExamsRolesUnchecked(): Promise<{ id: string; title: string; paper: string; startsAt: string; releaseAt: string }[]> {
+  await requireStaff(["admin", "owner"]);
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("exam_papers")
+    .select("exam:exams!inner(id, title, paper, starts_at, status, release_minutes_before, released_early_at)")
+    .eq("kind", "paper")
+    .is("superseded_at", null)
+    .is("pages_reviewed_at", null)
+    .eq("exam.status", "published")
+    .gt("exam.starts_at", new Date().toISOString())
+    .limit(EXAM_CAP);
+  if (error) throw new Error("papers could not be loaded");
+  return (data ?? [])
+    .map((r) => r.exam)
+    .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+    .map((e) => ({
+      id: e.id,
+      title: e.title,
+      paper: e.paper,
+      startsAt: e.starts_at,
+      releaseAt: e.released_early_at ?? new Date(Date.parse(e.starts_at) - e.release_minutes_before * 60_000).toISOString(),
+    }));
 }
 
 /** Published exams that are still to start and have no question paper yet (the admin home page decides which are close to release). */

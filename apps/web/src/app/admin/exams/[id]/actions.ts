@@ -32,6 +32,8 @@ function answer(
       return { ok: false, message: "Check the details and try again. A reason needs 3 to 300 characters." };
     case "conflict":
       return { ok: false, message: conflict };
+    case "roles_not_reviewed":
+      return { ok: false, message: ROLES_NOT_REVIEWED };
     case "not_found":
       return { ok: false, message: "That could not be found. Refresh the page and try again." };
     case "forbidden":
@@ -40,6 +42,10 @@ function answer(
       return { ok: false, message: GENERIC };
   }
 }
+
+/** The database refuses to release a paper whose page roles were never checked (Ruling R40). */
+const ROLES_NOT_REVIEWED =
+  'Check the page roles first: under "Page roles and hidden areas" on this page, set each page (answer, cover, blank or information) and save. Then release the paper.';
 
 function refresh(examId: string) {
   revalidatePath(`/admin/exams/${examId}`);
@@ -97,3 +103,55 @@ export async function removeInsertAction(examId: string, paperId: string, reason
   refresh(examId);
   return answer(data, error, CONFLICTS.insert, "The insert has been removed.");
 }
+
+type Rpc = { data: unknown; error: unknown };
+const codeOf = (r: Rpc) =>
+  !r.error && r.data && typeof r.data === "object" && !Array.isArray(r.data) ? (r.data as { ok?: unknown; code?: unknown; pages?: unknown; reviewed_at?: unknown }) : null;
+
+/** Whether these roles are the ones saved (paper_page_layout's answer) and were already checked. */
+function rolesUnchanged(saved: ReturnType<typeof codeOf>, roles: { page: number; role: string }[]): boolean {
+  if (saved?.ok !== true || !saved.reviewed_at || !Array.isArray(saved.pages)) return false;
+  const byPage = new Map(
+    saved.pages.flatMap((p: unknown) => {
+      const r = p as { page?: unknown; role?: unknown };
+      return typeof r?.page === "number" && typeof r.role === "string" ? [[r.page, r.role] as const] : [];
+    }),
+  );
+  return byPage.size === roles.length && roles.every((r) => byPage.get(r.page) === r.role);
+}
+
+/**
+ * Saves the page roles and the hidden areas of a paper version, each through its own database function (both are
+ * admin only and re-check everything). The roles lock once scripts have come in; the areas can still change then.
+ * `changedPages` are the pages whose areas changed.
+ */
+export async function savePageLayoutAction(
+  examId: string,
+  paperId: string,
+  roles: { page: number; role: string }[],
+  areas: { page: number; x: number; y: number; w: number; h: number }[],
+): Promise<PaperActionResult & { changedPages?: number[] }> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId) || !isUuid(paperId) || !Array.isArray(roles) || !Array.isArray(areas)) return { ok: false, message: GENERIC };
+  const supabase = await createClient();
+  // The roles are sent only when they change (or are confirmed for the first time): once scripts exist they are
+  // locked, and an areas-only save must still go through.
+  const saved = codeOf(await supabase.rpc("paper_page_layout", { p_paper: paperId }));
+  const rolesRes = rolesUnchanged(saved, roles)
+    ? { data: { ok: true }, error: null }
+    : await supabase.rpc("set_paper_page_roles", { p_paper: paperId, p_roles: roles });
+  const areasRes = await supabase.rpc("set_paper_hidden_areas", { p_paper: paperId, p_areas: areas });
+  refresh(examId);
+  const r = codeOf(rolesRes);
+  const a = codeOf(areasRes);
+  if (r?.ok === true && a?.ok === true) {
+    const changed = (areasRes.data as { changed_pages?: unknown }).changed_pages;
+    return { ok: true, message: "Page roles and hidden areas saved.", changedPages: Array.isArray(changed) ? changed.filter((n): n is number => typeof n === "number") : [] };
+  }
+  if (r?.code === "conflict") {
+    return { ok: false, message: ROLES_LOCKED + (a?.ok === true ? " The hidden areas were saved." : "") };
+  }
+  return answer(r?.ok === true ? areasRes.data : rolesRes.data, r?.ok === true ? areasRes.error : rolesRes.error, ROLES_LOCKED, "");
+}
+
+const ROLES_LOCKED = "Scripts have already come in for this paper, so the page roles can no longer change.";

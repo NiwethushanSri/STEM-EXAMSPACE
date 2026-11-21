@@ -36,7 +36,13 @@ const REFUSALS: Record<string, [ErrorCode, number, string]> = {
   invalid_input: ["invalid_input", 400, "Please check the details you entered."],
 };
 
-function refusal(code: unknown): HttpError {
+/** The paper's page roles have not been checked yet (the database refuses every candidate's copy until then). */
+const ROLES_FAMILY = "Your paper is not ready yet. Please contact the institution.";
+const ROLES_STAFF =
+  'Check the page roles first: on the exam page, open "Page roles and hidden areas", set each page and save. No copy is made before that.';
+
+function refusal(code: unknown, staff = false): HttpError {
+  if (code === "roles_not_reviewed") return new HttpError("roles_not_reviewed", 409, staff ? ROLES_STAFF : ROLES_FAMILY);
   const r = typeof code === "string" && Object.hasOwn(REFUSALS, code) ? REFUSALS[code] : null;
   return r ? new HttpError(r[0], r[1], r[2]) : new HttpError("internal", 500, "Something went wrong. Please try again.");
 }
@@ -84,7 +90,7 @@ async function readMaster(path: string): Promise<Uint8Array | null> {
 
 Deno.serve(handle(async (req) => {
   if (req.method !== "POST") throw bad("Use POST.");
-  await requireCaller(req, ["owner", "admin", "student", "parent"]);
+  const caller = await requireCaller(req, ["owner", "admin", "student", "parent"]);
 
   let raw: Record<string, unknown>;
   try {
@@ -92,6 +98,46 @@ Deno.serve(handle(async (req) => {
   } catch {
     throw bad("Send a JSON body.");
   }
+  // The admin's drawing surface: any paper version, with a made-up candidate. No booking, no copy row, no log.
+  if (raw.kind === "admin_sample") {
+    if (caller.role !== "owner" && caller.role !== "admin") {
+      throw new HttpError("forbidden", 403, "You do not have permission to do this.");
+    }
+    const paperId = typeof raw.paperId === "string" ? raw.paperId : "";
+    if (!UUID.test(paperId)) throw bad("Choose a paper.");
+    const svc = serviceClient();
+    const found = await svc.from("exam_papers").select("exam_id, storage_path, version")
+      .eq("id", paperId).eq("kind", "paper").maybeSingle();
+    if (found.error) {
+      console.error("sample paper lookup failed:", found.error.code ?? "unknown");
+      throw refusal(null);
+    }
+    if (!found.data) throw new HttpError("not_found", 404, "Not found.");
+    const exam = await svc.from("exams").select("exam_code, starts_at, spare_pages")
+      .eq("id", found.data.exam_id).maybeSingle();
+    if (exam.error || !exam.data) {
+      console.error("sample exam lookup failed:", exam.error?.code ?? "unknown");
+      throw refusal(null);
+    }
+    const master = await readMaster(found.data.storage_path as string);
+    if (!master) throw new HttpError("paper_unreadable", 422, FAILED);
+    let sample: Uint8Array;
+    try {
+      sample = await buildCopy(master, {
+        candidateName: "Sample candidate",
+        indexNumber: "SAMPLE",
+        examCode: exam.data.exam_code as string,
+        examDate: formatExamDate(exam.data.starts_at as string),
+        code: "000000000", // a valid copy code (the check symbol of all zeros is 0) that belongs to no candidate
+        sparePages: exam.data.spare_pages as number,
+      });
+    } catch (e) {
+      console.error("paper-copy sample build failed:", e instanceof Error ? e.name : "unknown");
+      throw new HttpError("paper_unreadable", 422, FAILED);
+    }
+    return pdfResponse(sample, `${safeName(exam.data.exam_code as string, "paper")}-SAMPLE.pdf`, false, found.data.version as number);
+  }
+
   const bookingId = typeof raw.bookingId === "string" ? raw.bookingId : "";
   if (!UUID.test(bookingId)) throw bad("Choose a booking.");
   const db = callerClient(req);
@@ -133,7 +179,7 @@ Deno.serve(handle(async (req) => {
     paper_version: number;
     differs_from_previous: boolean;
   };
-  if (!issued.ok) throw refusal(issued.code);
+  if (!issued.ok) throw refusal(issued.code, caller.role === "owner" || caller.role === "admin");
 
   const master = await readMaster(issued.storage_path);
   if (!master) throw new HttpError("paper_unreadable", 422, FAILED);

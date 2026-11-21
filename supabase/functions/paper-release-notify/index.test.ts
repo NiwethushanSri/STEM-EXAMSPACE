@@ -51,6 +51,7 @@ async function replacePaper(fx: Fixture, v1: string) {
     storage_path: path,
     page_count: 2,
     byte_size: 1000,
+    pages_reviewed_at: new Date().toISOString(), // its page roles are checked: copies can be made
   });
   assertEquals(v2.error, null);
 }

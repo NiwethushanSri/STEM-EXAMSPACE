@@ -10,6 +10,7 @@
     "db:reset": "supabase db reset --remote --yes",
     "db:test": "node scripts/db-test.mjs",
     "db:test:local": "node scripts/db-test.mjs --local",
+    "proc:test": "docker compose -f services/processor/docker-compose.yml run --rm processor pytest -q",
     "fn:deploy": "supabase functions deploy --yes --import-map supabase/functions/deno.json",
     "fn:test": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=.env.dev.local supabase/functions",
     "fn:test:local": "deno test --config supabase/functions/deno.json --allow-net --allow-env --allow-read --env-file=supabase/functions/.env.test.local supabase/functions",

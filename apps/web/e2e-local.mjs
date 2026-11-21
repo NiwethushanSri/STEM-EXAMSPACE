@@ -1,7 +1,8 @@
 // Runs Playwright against the local Supabase stack (never the hosted project).
 // Cross-platform stand-in for cross-env: sets E2E_ENV_FILE, builds the app once into .next-e2e with the
-// local Supabase URL and anon key, then hands over to playwright (which serves it with next start).
-import { spawnSync } from "node:child_process";
+// local Supabase URL and anon key, starts the processing server (docker compose), then hands over to playwright
+// (which serves the app with next start) and stops the processing server when it is done (if it started it).
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -36,4 +37,58 @@ if (build !== 0) {
   console.error("e2e:local: next build failed; not running tests");
   process.exit(build);
 }
-process.exit(run(["playwright", "test", ...process.argv.slice(2)], {}));
+
+// The processing server (services/processor, in Docker) reads the uploads the browser tests make, against the same
+// local stack. Started after the build (memory is tight here) unless it is already running. One this script started
+// is stopped and removed afterwards, also when the run is interrupted (Ctrl+C) or terminated; one that was already
+// running is left as it was.
+const compose = resolve(import.meta.dirname, "../../services/processor/docker-compose.yml");
+const processor = (args, opts = {}) => spawnSync("docker", ["compose", "-f", compose, ...args], { stdio: "inherit", ...opts });
+const ps = processor(["ps", "--status", "running", "-q", "processor"], { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
+const wasRunning = ps.status === 0 && (ps.stdout ?? "").trim() !== "";
+let stopped = false;
+const stop = () => {
+  if (wasRunning || stopped) return;
+  stopped = true;
+  processor(["down"]);
+};
+
+// An interrupt (Ctrl+C) or a termination. The handlers are in place before the processing server is started, so one
+// that arrives while it starts still stops it (the signal is handled as soon as "docker compose up" returns).
+// Playwright runs as a child process (not spawnSync), so a signal during the tests reaches this script too:
+//   the first one is passed on to Playwright and, once Playwright has stopped, the processing server is stopped;
+//   a second one (or one while Playwright is not running) kills Playwright, stops the processing server and leaves
+//   at once.
+let child = null;
+let passedOn = false;
+const running = () => child !== null && child.exitCode === null && child.signalCode === null;
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    if (running() && !passedOn) {
+      passedOn = true;
+      child.kill(sig);
+      return;
+    }
+    if (running()) child.kill("SIGKILL");
+    stop();
+    process.exit(1);
+  });
+}
+
+if (!wasRunning && processor(["up", "-d", "processor"]).status !== 0) {
+  console.error("e2e:local: the processing server did not start; not running tests");
+  stop();
+  process.exit(1);
+}
+
+let status = 1;
+try {
+  status = await new Promise((done) => {
+    child = spawn("npx", ["playwright", "test", ...process.argv.slice(2)], { stdio: "inherit", shell: true, env: process.env });
+    child.on("error", () => done(1));
+    child.on("exit", (code) => done(code ?? 1));
+  });
+} finally {
+  stop();
+}
+process.exit(status);

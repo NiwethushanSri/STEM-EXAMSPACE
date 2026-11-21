@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, bookingMessageFor, examMessageFor, messageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -14,6 +14,7 @@ const table: Record<ErrorCode, string> = {
   internal: "Something went wrong. Please try again.",
   paper_missing: "Your paper is not ready yet. The institution has been told.",
   paper_held: "The paper is paused by the institution. Please wait.",
+  roles_not_reviewed: "Your paper is not ready yet. Please contact the institution.",
   paper_not_released: "Your paper is not ready to download yet.",
   paper_closed: "Downloads for this paper have closed.",
   wrong_sitting: "Your booking is for the centre; your paper is handed out in the exam room",
@@ -104,5 +105,118 @@ describe("attendanceMessageFor", () => {
   });
   it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
     expect(attendanceMessageFor(code, "mark")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("uploadMessageFor", () => {
+  it("maps the home upload codes", () => {
+    expect(uploadMessageFor("uploads_not_open")).toBe("You can upload your answers once the exam has started.");
+    expect(uploadMessageFor("uploads_closed")).toBe("Uploads for this exam have closed. Please contact the institution.");
+    expect(uploadMessageFor("too_many_files")).toContain("at most 60 files");
+    expect(uploadMessageFor("too_many_files_total")).toContain("120 at most");
+    expect(uploadMessageFor("too_many_files_total")).toContain("Press Submit");
+    expect(uploadMessageFor("file_too_large")).toContain("25 MB");
+    expect(uploadMessageFor("file_too_large")).toContain("100 MB");
+    expect(uploadMessageFor("wrong_file_type")).toContain("PDF");
+    expect(uploadMessageFor("still_uploading")).toContain("still uploading");
+    expect(uploadMessageFor("nothing_to_submit")).toContain("at least one");
+    expect(uploadMessageFor("wrong_sitting")).toContain("centre");
+    expect(uploadMessageFor("script_locked")).toBe("Your answers are already being marked.");
+    expect(uploadMessageFor("conflict")).toContain("Refresh");
+  });
+  it("falls back to the generic message", () => {
+    expect(uploadMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(uploadMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])("%s is not a code", (code) => {
+    expect(uploadMessageFor(code)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("collectionMessageFor", () => {
+  it("maps each code per context", () => {
+    expect(collectionMessageFor("not_present", "record")).toContain("present or late");
+    expect(collectionMessageFor("invalid_staff", "custody")).toContain("active account");
+    expect(collectionMessageFor("conflict", "manifest")).toContain("99");
+  });
+  it("says a removed centre takes nothing more", () => {
+    expect(collectionMessageFor("conflict", "manifest")).toContain("no longer part of this exam");
+    expect(collectionMessageFor("conflict", "record")).toContain("no longer part of this exam");
+    expect(collectionMessageFor("conflict", "custody")).toContain("no longer part of this exam");
+  });
+  it("falls back to the generic message", () => {
+    expect(collectionMessageFor("nope", "record")).toBe("Something went wrong. Please try again.");
+    expect(collectionMessageFor("not_present", "custody")).toBe("Something went wrong. Please try again.");
+    expect(collectionMessageFor("__proto__", "custody")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("scanMessageFor", () => {
+  it("maps each code per context", () => {
+    expect(scanMessageFor("unknown_manifest", "create")).toContain("No manifest has that number");
+    expect(scanMessageFor("other_manifest", "create")).toContain("another centre or exam");
+    expect(scanMessageFor("conflict", "create")).toContain("no longer part of this exam");
+    expect(scanMessageFor("wrong_file_type", "upload")).toContain("PDF, JPEG or PNG");
+    expect(scanMessageFor("file_too_large", "upload")).toContain("1 GB");
+    expect(scanMessageFor("conflict", "upload")).toContain("new scan batch");
+    expect(scanMessageFor("not_found", "upload")).toContain("did not arrive");
+    expect(scanMessageFor("nothing_to_submit", "submit")).toContain("at least one file");
+    expect(scanMessageFor("still_processing", "complete")).toContain("still uploading or being processed");
+    expect(scanMessageFor("forbidden", "complete")).toBe("You do not have permission to do that.");
+  });
+  it("falls back to the generic message", () => {
+    expect(scanMessageFor("nope", "create")).toBe("Something went wrong. Please try again.");
+    expect(scanMessageFor("still_processing", "create")).toBe("Something went wrong. Please try again.");
+    expect(scanMessageFor("__proto__", "upload")).toBe("Something went wrong. Please try again.");
+    expect(scanMessageFor(undefined, "submit")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("exceptionMessageFor", () => {
+  it("maps each code of the exception queue", () => {
+    expect(exceptionMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(exceptionMessageFor("other_exam")).toContain("another exam");
+    expect(exceptionMessageFor("not_present")).toContain("present or late");
+    expect(exceptionMessageFor("wrong_sitting")).toContain("at home");
+    expect(exceptionMessageFor("booking_not_active")).toContain("not paid");
+    expect(exceptionMessageFor("in_other_script")).toContain("another candidate");
+    expect(exceptionMessageFor("script_locked")).toContain("marked");
+    expect(exceptionMessageFor("page_replaced")).toContain("processed again");
+    expect(exceptionMessageFor("still_mixed")).toContain("two versions");
+    expect(exceptionMessageFor("not_late")).toContain("late");
+    expect(exceptionMessageFor("name_not_hidden")).toContain("There is no name on this page");
+    expect(exceptionMessageFor("name_area_required")).toBe("This page has a printed name box. Draw a box over the name before confirming.");
+    expect(exceptionMessageFor("other_family")).toContain("another family");
+    expect(exceptionMessageFor("wrong_kind")).toContain("does not fit");
+    expect(exceptionMessageFor("invalid_input")).toContain("copy");
+    expect(exceptionMessageFor("conflict")).toContain("already been resolved");
+    expect(exceptionMessageFor("forbidden")).toBe("You do not have permission to do that.");
+  });
+  it("falls back to the generic message", () => {
+    expect(exceptionMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(exceptionMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(exceptionMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("scriptMessageFor", () => {
+  it("maps each code of the script repository", () => {
+    expect(scriptMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(scriptMessageFor("script_locked")).toContain("being marked");
+    expect(scriptMessageFor("page_replaced")).toContain("processed again");
+    expect(scriptMessageFor("not_found")).toContain("Refresh");
+    expect(scriptMessageFor("invalid_input")).toContain("Check");
+    expect(scriptMessageFor("forbidden")).toBe("You do not have permission to do that.");
+  });
+  it("says why a conflict was refused", () => {
+    expect(scriptMessageFor("conflict", "busy")).toContain("already waiting");
+    expect(scriptMessageFor("conflict", "void")).toContain("already void");
+    expect(scriptMessageFor("conflict", "changed")).toContain("changed");
+    expect(scriptMessageFor("conflict")).toContain("changed");
+  });
+  it("falls back to the generic message", () => {
+    expect(scriptMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(scriptMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(scriptMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });

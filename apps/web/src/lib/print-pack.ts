@@ -12,7 +12,7 @@ export type PackCover = {
 };
 
 /** The standard PDF fonts only draw Latin-1; anything else (an exam named in another script) shows as "?". */
-const safe = (s: string) => s.replace(/[^ -~ -ÿ]/g, "?");
+export const safe = (s: string) => s.replace(/[^ -~ -ÿ]/g, "?");
 
 export type PackBuilder = {
   /** Adds one copy's pages after those already added. The caller can drop its bytes straight away. */

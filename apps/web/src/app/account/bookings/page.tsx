@@ -7,6 +7,7 @@ import { Frame } from "@/components/bookings/Frame";
 import { STATUS_LABEL, STATUS_TONE, type BookingStatus } from "@/components/bookings/status";
 import { Badge } from "@/components/AppShell";
 import { BookingPaper } from "@/components/papers/BookingPaper";
+import { SittingPanel } from "@/components/scripts/SittingPanel";
 import { PAPER_TEXT } from "@/lib/paper-state";
 import { SITTING_MODE_LABEL } from "@/lib/exam-form";
 import { formatLondon, formatPence } from "@/lib/money";
@@ -67,6 +68,9 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
     .sort((a, b) => startsAt(a)!.getTime() - startsAt(b)!.getTime());
   const past = rows.filter((r) => !upcoming.includes(r));
 
+  const paperLabel = (r: Row) =>
+    [r.exam?.title || one(r.exam?.subject)?.name || "Exam", r.exam?.paper, me.role === "parent" ? (names.get(r.student_id) ?? "your child") : ""].filter(Boolean).join(", ");
+
   const renderRow = (r: Row) => {
     const subject = one(r.exam?.subject)?.name ?? "Exam";
     const examCancelled = r.exam?.status === "cancelled";
@@ -91,7 +95,10 @@ async function Content({ searchParams }: { searchParams: Promise<{ booked?: stri
           <div className="text-slate-600">This exam is no longer on the timetable.</div>
         )}
         <div className="text-slate-600">{formatPence(r.amount_pence)}</div>
-        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && <BookingPaper bookingId={r.id} label={[r.exam.title || subject, r.exam.paper, me.role === "parent" ? (names.get(r.student_id) ?? "your child") : ""].filter(Boolean).join(", ")} />}
+        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && !examCancelled && r.sitting === "home" && (
+          <SittingPanel bookingId={r.id} label={paperLabel(r)} />
+        )}
+        {r.exam && (r.status === "paid" || r.status === "cancel_requested") && (examCancelled || r.sitting !== "home") && <BookingPaper bookingId={r.id} label={paperLabel(r)} />}
         {r.exam && !examCancelled && r.status === "awaiting_payment" && r.sitting === "home" && (
           <p data-testid="paper-unpaid" className="rounded-lg bg-slate-50 p-3 text-slate-700">{PAPER_TEXT.unpaid}</p>
         )}

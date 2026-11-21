@@ -1,0 +1,236 @@
+"""The whole server against the local Supabase: a home candidate's PDF of their 1A copy (fixture copy A) goes in,
+pictures and a received submission come out.
+
+Seeds through the service key an exam, a paper version, a paid home booking with copy A's code, a submitted
+submission and an upload of copy-a.pdf with a queued prepare job; runs main.run(once=True); checks the pages,
+the pictures in script-pages, the script and the submission. Skipped when SUPABASE_URL is unset. Everything it adds
+is removed afterwards, and rows left by an interrupted run (its exams are titled TITLE) are removed first, so it
+can run again and again. Its job is due in the year 2000, so it is claimed before any job left by other work.
+"""
+import hashlib
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import httpx
+import pytest
+
+import synth
+from processor import main, supa
+
+pytestmark = pytest.mark.skipif(not os.environ.get("SUPABASE_URL"), reason="needs the local Supabase (SUPABASE_URL)")
+
+TITLE = "ZZ Processor integration"
+
+
+class Rest:
+    """PostgREST and Storage with the service key, for seeding and cleaning up."""
+
+    def __init__(self):
+        key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+        self.http = httpx.Client(base_url=os.environ["SUPABASE_URL"].rstrip("/"), timeout=60,
+                                 headers={"apikey": key, "Authorization": f"Bearer {key}"})
+
+    def insert(self, table, row):
+        r = self.http.post(f"/rest/v1/{table}", json=row, headers={"Prefer": "return=representation"})
+        assert r.status_code == 201, f"insert {table}: HTTP {r.status_code}"
+        return r.json()[0]
+
+    def select(self, table, **filters):
+        r = self.http.get(f"/rest/v1/{table}", params={"select": "*", **filters})
+        assert r.status_code == 200, f"select {table}: HTTP {r.status_code}"
+        return r.json()
+
+    def delete(self, table, **filters):
+        r = self.http.delete(f"/rest/v1/{table}", params=filters)
+        assert r.status_code in (200, 204), f"delete {table}: HTTP {r.status_code}"
+
+    def listed(self, bucket, folder):
+        """The paths of the objects inside a folder of a bucket, its subfolders (a job's pictures) included."""
+        r = self.http.post(f"/storage/v1/object/list/{bucket}", json={"prefix": folder, "limit": 1000})
+        assert r.status_code == 200, f"list {bucket}: HTTP {r.status_code}"
+        found = []
+        for o in r.json():
+            if o.get("id"):
+                found.append(f"{folder}{o['name']}")
+            else:  # a folder
+                found += self.listed(bucket, f"{folder}{o['name']}/")
+        return found
+
+    def remove(self, bucket, paths):
+        if paths:
+            r = self.http.request("DELETE", f"/storage/v1/object/{bucket}", json={"prefixes": list(paths)})
+            assert r.status_code == 200, f"remove from {bucket}: HTTP {r.status_code}"
+
+
+def in_(ids):
+    return "in.(" + ",".join(ids) + ")"
+
+
+def cleanup(rest: Rest, exam_id: str) -> None:
+    """Removes an exam made by this test and everything hanging off it, pictures included (also those stored by a
+    run whose pages were never recorded)."""
+    bookings = [b["id"] for b in rest.select("bookings", exam_id=f"eq.{exam_id}")]
+    scripts = [s["id"] for s in rest.select("scripts", exam_id=f"eq.{exam_id}")]
+    uploads = rest.select("script_uploads", exam_id=f"eq.{exam_id}")
+    pictures = [p for u in uploads for p in rest.listed("script-pages", f"{exam_id}/{u['id']}/")]
+    rest.delete("script_exceptions", exam_id=f"eq.{exam_id}")
+    if scripts:
+        rest.delete("script_page_links", script_id=in_(scripts))
+        rest.delete("script_versions", script_id=in_(scripts))
+        rest.delete("scripts", id=in_(scripts))
+    rest.delete("script_pages", exam_id=f"eq.{exam_id}")
+    if uploads:
+        rest.delete("processing_jobs", upload_id=in_([u["id"] for u in uploads]))
+        rest.delete("script_uploads", exam_id=f"eq.{exam_id}")
+    if bookings:
+        rest.delete("home_submissions", booking_id=in_(bookings))
+        rest.delete("paper_copies", booking_id=in_(bookings))
+    rest.delete("exam_papers", exam_id=f"eq.{exam_id}")
+    rest.delete("bookings", exam_id=f"eq.{exam_id}")
+    subject = rest.select("exams", id=f"eq.{exam_id}")
+    rest.delete("exams", id=f"eq.{exam_id}")
+    if subject:
+        rest.delete("subjects", id=f"eq.{subject[0]['subject_id']}")
+    rest.remove("script-uploads", [u["storage_path"] for u in uploads])
+    rest.remove("script-pages", pictures)
+
+
+@pytest.fixture
+def rest():
+    r = Rest()
+    for exam in r.select("exams", title=f"eq.{TITLE}"):
+        cleanup(r, exam["id"])
+    if r.select("paper_copies", code=f"eq.{synth.CODE_A}"):
+        pytest.skip("copy A's code is in use by other local data")
+    yield r
+    r.http.close()
+
+
+def test_home_pdf_is_prepared_matched_and_received(rest):
+    tag = uuid.uuid4().hex[:8].upper()
+    starts = datetime.now(timezone.utc) - timedelta(hours=3)
+    subject = rest.insert("subjects", {"name": f"ZZ Processor {tag}", "kind": "school"})
+    exam = rest.insert("exams", {
+        "subject_id": subject["id"], "title": TITLE, "paper": "Paper 1", "format": "online",
+        "starts_at": starts.isoformat(), "duration_minutes": 90, "price_pence": 0, "price_confirmed": True,
+        "booking_deadline": starts.isoformat(), "status": "published", "exam_code": f"ZZP{tag}"})
+    exam_id = exam["id"]
+    try:
+        paper = rest.insert("exam_papers", {
+            "exam_id": exam_id, "kind": "paper", "title": "Question paper", "version": 1,
+            "storage_path": f"{exam_id}/{uuid.uuid4()}.pdf", "page_count": 3, "byte_size": 1000})
+        booking = rest.insert("bookings", {"exam_id": exam_id, "status": "paid", "amount_pence": 0, "sitting": "home"})
+        copy = rest.insert("paper_copies", {"code": synth.CODE_A, "booking_id": booking["id"], "paper_id": paper["id"],
+                                            "page_count": synth.CODES["pages"]["copy-a.pdf"]})
+        submission = rest.insert("home_submissions", {"booking_id": booking["id"], "seq": 1, "state": "checking",
+                                                      "submitted_at": datetime.now(timezone.utc).isoformat()})
+        data = synth.fixture_bytes("copy-a.pdf")
+        upload_id = str(uuid.uuid4())
+        path = f"home/{booking['id']}/{upload_id}.pdf"
+        r = rest.http.post(f"/storage/v1/object/script-uploads/{path}", content=data,
+                           headers={"Content-Type": "application/pdf"})
+        assert r.status_code == 200, f"store upload: HTTP {r.status_code}"
+        rest.insert("script_uploads", {
+            "id": upload_id, "exam_id": exam_id, "booking_id": booking["id"], "submission_id": submission["id"],
+            "kind": "home_pdf", "position": 1, "storage_path": path, "mime": "application/pdf", "byte_size": len(data),
+            "state": "queued", "uploaded_by": str(uuid.uuid4())})
+        job = rest.insert("processing_jobs", {"upload_id": upload_id, "kind": "prepare", "run_after": "2000-01-01T00:00:00Z"})
+
+        with supa.Client.from_env() as client:
+            assert main.run(client, f"itest-{tag}", once=True) == 1
+
+        assert rest.select("processing_jobs", id=f"eq.{job['id']}")[0]["state"] == "done"
+        recorded = rest.select("script_uploads", id=f"eq.{upload_id}")[0]
+        assert recorded["state"] == "processed"
+        assert recorded["sha256"] == hashlib.sha256(data).hexdigest()
+        pages = sorted(rest.select("script_pages", upload_id=f"eq.{upload_id}"), key=lambda p: p["source_index"])
+        assert [(p["state"], p["copy_page"], p["copy_id"], p["booking_id"]) for p in pages] == [
+            ("matched", i + 1, copy["id"], booking["id"]) for i in range(5)]
+        for p in pages:
+            assert p["full_path"] == f"{exam_id}/{upload_id}/{job['id']}-1/{p['source_index']}-full.jpg"
+            assert p["marking_path"] == f"{exam_id}/{upload_id}/{job['id']}-1/{p['source_index']}-marking.jpg"
+            for picture in (p["full_path"], p["marking_path"]):
+                got = rest.http.get(f"/storage/v1/object/script-pages/{picture}")
+                assert got.status_code == 200 and got.content[:2] == b"\xff\xd8"
+
+        sub = rest.select("home_submissions", id=f"eq.{submission['id']}")[0]
+        assert sub["state"] == "received" and sub["checked_at"]
+        script = rest.select("scripts", booking_id=f"eq.{booking['id']}")[0]
+        assert (script["source"], script["state"], script["complete"], script["version"]) == ("home", "verified", True, 1)
+        assert script["number"] == f"S-ZZP{tag}-0001"
+        links = rest.select("script_page_links", script_id=f"eq.{script['id']}")
+        assert sorted(link["copy_page"] for link in links) == [1, 2, 3, 4, 5]
+        assert rest.select("script_exceptions", exam_id=f"eq.{exam_id}") == []
+
+        # Prepared again (as staff will ask for): the claim carries the recorded SHA-256, the original still
+        # matches it, and the rerun leaves one set of pages and the same version.
+        again = rest.insert("processing_jobs", {"upload_id": upload_id, "kind": "prepare", "run_after": "2000-01-01T00:00:00Z"})
+        with supa.Client.from_env() as client:
+            assert main.run(client, f"itest-{tag}", once=True) == 1
+        assert rest.select("processing_jobs", id=f"eq.{again['id']}")[0]["state"] == "done"
+        rerun = rest.select("script_pages", upload_id=f"eq.{upload_id}")
+        assert len(rerun) == 5 and all(p["replaced_at"] is None for p in rerun)
+        assert {p["id"] for p in rerun}.isdisjoint({p["id"] for p in pages})
+        assert rest.select("script_uploads", id=f"eq.{upload_id}")[0]["sha256"] == hashlib.sha256(data).hexdigest()
+        script = rest.select("scripts", booking_id=f"eq.{booking['id']}")[0]
+        assert (script["state"], script["version"]) == ("verified", 1)
+        assert all(p["full_path"].startswith(f"{exam_id}/{upload_id}/{again['id']}-1/") for p in rerun)
+
+        # A remask job (as a hidden-area change or a turn queues one) re-makes the marking pictures from the stored
+        # full pictures, in its own folder; the full pictures stay as they were.
+        remask = rest.insert("processing_jobs", {"upload_id": upload_id, "kind": "remask", "run_after": "2000-01-01T00:00:00Z"})
+        with supa.Client.from_env() as client:
+            assert main.run(client, f"itest-{tag}", once=True) == 1
+        assert rest.select("processing_jobs", id=f"eq.{remask['id']}")[0]["state"] == "done"
+        remasked = {p["id"]: p for p in rest.select("script_pages", upload_id=f"eq.{upload_id}")}
+        assert set(remasked) == {p["id"] for p in rerun}
+        for p in rerun:
+            now = remasked[p["id"]]
+            assert now["full_path"] == p["full_path"] and now["rotation"] == p["rotation"]
+            assert now["marking_path"] == f"{exam_id}/{upload_id}/{remask['id']}-1/{p['source_index']}-marking.jpg"
+            got = rest.http.get(f"/storage/v1/object/script-pages/{now['marking_path']}")
+            assert got.status_code == 200 and got.content[:2] == b"\xff\xd8"
+        assert rest.select("scripts", booking_id=f"eq.{booking['id']}")[0]["state"] == "verified"
+    finally:
+        cleanup(rest, exam_id)
+
+
+def test_discarded_draft_file_is_removed_after_an_hour(rest):
+    """A family took a photo out of a draft: an hour after the discard the server deletes its object and marks the
+    upload purged; one discarded a minute ago is kept for now."""
+    tag = uuid.uuid4().hex[:8].upper()
+    starts = datetime.now(timezone.utc) - timedelta(hours=3)
+    subject = rest.insert("subjects", {"name": f"ZZ Processor {tag}", "kind": "school"})
+    exam = rest.insert("exams", {
+        "subject_id": subject["id"], "title": TITLE, "paper": "Paper 1", "format": "online",
+        "starts_at": starts.isoformat(), "duration_minutes": 90, "price_pence": 0, "price_confirmed": True,
+        "booking_deadline": starts.isoformat(), "status": "published", "exam_code": f"ZZP{tag}"})
+    exam_id = exam["id"]
+    try:
+        booking = rest.insert("bookings", {"exam_id": exam_id, "status": "paid", "amount_pence": 0, "sitting": "home"})
+        draft = rest.insert("home_submissions", {"booking_id": booking["id"], "seq": 1})
+        uploads = {}
+        for name, discarded_at in (("old", "2000-01-01T00:00:00Z"), ("new", datetime.now(timezone.utc).isoformat())):
+            upload_id = str(uuid.uuid4())
+            path = f"home/{booking['id']}/{upload_id}.jpg"
+            r = rest.http.post(f"/storage/v1/object/script-uploads/{path}", content=b"photo",
+                               headers={"Content-Type": "image/jpeg"})
+            assert r.status_code == 200, f"store upload: HTTP {r.status_code}"
+            rest.insert("script_uploads", {
+                "id": upload_id, "exam_id": exam_id, "booking_id": booking["id"], "submission_id": draft["id"],
+                "kind": "home_photo", "position": 1, "storage_path": path, "mime": "image/jpeg", "byte_size": 5,
+                "state": "discarded", "discarded_at": discarded_at, "uploaded_by": str(uuid.uuid4())})
+            uploads[name] = (upload_id, path)
+
+        with supa.Client.from_env() as client:
+            assert main.cleanup(client) >= 1
+
+        old_id, old_path = uploads["old"]
+        new_id, new_path = uploads["new"]
+        assert rest.select("script_uploads", id=f"eq.{old_id}")[0]["purged_at"]
+        assert rest.http.get(f"/storage/v1/object/script-uploads/{old_path}").status_code >= 400
+        assert rest.select("script_uploads", id=f"eq.{new_id}")[0]["purged_at"] is None
+        assert rest.http.get(f"/storage/v1/object/script-uploads/{new_path}").status_code == 200
+    finally:
+        cleanup(rest, exam_id)

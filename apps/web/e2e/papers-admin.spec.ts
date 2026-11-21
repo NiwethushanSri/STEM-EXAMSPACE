@@ -201,12 +201,26 @@ test("admin_uploads_paper_and_sees_version_1", async ({ page }) => {
   await expect(page.getByTestId("release-status")).toContainText("Scheduled");
 });
 
+/** The exam's current paper counts as checked: an admin saved its page roles (no pack or reprint is made before). */
+async function rolesChecked() {
+  const r = await svc().from("exam_papers").update({ pages_reviewed_at: new Date().toISOString() })
+    .eq("exam_id", examId).eq("kind", "paper").is("superseded_at", null);
+  if (r.error) throw new Error(`page roles could not be marked checked: ${r.error.message}`);
+}
+
 test("replace_requires_reason_after_download", async ({ page }) => {
   const paper = await svc().from("exam_papers").select("id").eq("exam_id", examId).eq("version", 1).maybeSingle();
   expect(paper.data).not.toBeNull();
   await book(students[1], "paid");
   await signInAdmin(page);
   await openExamPage(page);
+
+  // No pack is made before the page roles are checked: the screen says what to do.
+  await expect(page.getByTestId("print-roles-first")).toContainText("Check the page roles first");
+  await expect(page.getByRole("button", { name: "Print pack" })).toBeDisabled();
+  await rolesChecked();
+  await page.reload();
+  await expect(page.getByTestId("print-roles-first")).toHaveCount(0);
 
   // Make a copy (a print pack), so replacing the paper now needs a reason.
   await page.getByRole("button", { name: "Print pack" }).click();
@@ -241,7 +255,9 @@ test("replace_requires_reason_after_download", async ({ page }) => {
   await expect(versions.nth(1)).toContainText("v1");
   await expect(versions.nth(1)).not.toContainText("Current");
 
-  // A reprint now uses the corrected paper and the screen says so.
+  // A reprint now uses the corrected paper and the screen says so (the new version's roles are checked first).
+  await rolesChecked();
+  await page.reload();
   await page.getByText("Candidates and reprints").click();
   await page.getByRole("button", { name: `Reprint ${students[1].indexNumber}` }).click();
   await expect(page.getByText("This reprint uses the corrected paper (version 2) and differs from the pack you printed.")).toBeVisible();

@@ -2,3 +2,8 @@
 *.xlsx binary
 *.png binary
 *.jpg binary
+# Read by Linux tools whatever the checkout machine (psql in the database container, Python in Docker, Deno): always LF.
+*.sql text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
