@@ -1747,20 +1747,47 @@ isOneToOne: false
 "markers_list":
 { Args: Record<PropertyKey, never>; Returns: Json
                            },
+"marking_assign":
+{ Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_assign_some":
+{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_reason": string }; Returns: Json
+                           },
 "marking_close":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
 "marking_exam_get":
 { Args: { "p_exam": string,"p_now"?: string }; Returns: Json
                            },
+"marking_exam_overdue":
+{ Args: { "p_exam": string,"p_now": string }; Returns: boolean
+                           },
 "marking_exam_sync":
 { Args: { "p_exam": string,"p_now": string }; Returns: number
+                           },
+"marking_give_back":
+{ Args: { "p_reason"?: string,"p_unit": string }; Returns: Json
+                           },
+"marking_holds_expire":
+{ Args: { "p_now": string }; Returns: number
                            },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
                            },
+"marking_my_work":
+{ Args: { "p_now"?: string }; Returns: Json
+                           },
+"marking_next":
+{ Args: { "p_exam": string,"p_group"?: string,"p_now"?: string }; Returns: Json
+                           },
 "marking_open":
 { Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_progress":
+{ Args: { "p_exam"?: string,"p_now"?: string }; Returns: Json
+                           },
+"marking_reassign":
+{ Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
 "marking_reopen":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
@@ -1780,8 +1807,29 @@ isOneToOne: false
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
                            },
+"marking_take_back":
+{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
 "marking_tick":
 { Args: Record<PropertyKey, never>; Returns: undefined
+                           },
+"marking_unit_blocked":
+{ Args: { "p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
+                           },
+"marking_unit_pick":
+{ Args: { "p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: string
+                           },
+"marking_unit_take":
+{ Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_marker": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_unit_take_back":
+{ Args: { "p_unit": string }; Returns: boolean
+                           },
+"marking_units_list":
+{ Args: { "p_exam": string,"p_marker"?: string,"p_state"?: string }; Returns: Json
+                           },
+"marking_units_lock":
+{ Args: { "p_units": (string)[] }; Returns: undefined
                            },
 "money_totals":
 { Args: { "p_from": string,"p_to": string }; Returns: Json

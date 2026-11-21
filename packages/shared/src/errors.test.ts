@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, allocationMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -247,5 +247,28 @@ describe("markingMessageFor", () => {
     expect(markingMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(markingMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("allocationMessageFor", () => {
+  it("maps each code a marker sees", () => {
+    expect(allocationMessageFor("nothing_left", "marker")).toBe("Nothing left to mark for now.");
+    expect(allocationMessageFor("hold_expired", "marker")).toBe("Your hold on this script has ended. Press Next script to carry on.");
+    expect(allocationMessageFor("not_approved", "marker")).toBe("You are not approved to mark this subject. Ask an admin.");
+    expect(allocationMessageFor("marking_closed", "marker")).toBe("Marking has closed for this exam.");
+  });
+  it("maps each code an admin sees, including the codes of skipped scripts", () => {
+    expect(allocationMessageFor("not_approved", "admin")).toBe("This marker is not approved to mark this subject.");
+    expect(allocationMessageFor("conflict_of_interest", "admin")).toBe("This marker cannot mark this candidate.");
+    expect(allocationMessageFor("taken", "admin")).toBe("A marker already has this script. Take it back or reassign it.");
+    expect(allocationMessageFor("submitted", "admin")).toBe("This script has been marked. Take it back or reassign it.");
+    expect(allocationMessageFor("on_hold", "admin")).toBe("This script is on hold.");
+    expect(allocationMessageFor("not_ready", "admin")).toBe("This script cannot be handed out yet.");
+    expect(allocationMessageFor("reason_required", "admin")).toBe("Give a reason of 3 to 300 characters.");
+  });
+  it("falls back to the generic message", () => {
+    expect(allocationMessageFor("nothing_left", "admin")).toBe("Something went wrong. Please try again.");
+    expect(allocationMessageFor("__proto__", "marker")).toBe("Something went wrong. Please try again.");
+    expect(allocationMessageFor(null, "admin")).toBe("Something went wrong. Please try again.");
   });
 });

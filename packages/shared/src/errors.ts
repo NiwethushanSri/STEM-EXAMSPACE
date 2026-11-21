@@ -399,3 +399,43 @@ const markingMessages: Record<string, string> = {
 export function markingMessageFor(code: string | null | undefined): string {
   return code && Object.hasOwn(markingMessages, code) ? markingMessages[code] : messages.internal;
 }
+
+/** Who a marking allocation code is shown to: a marker ("Next script", giving a script back, their own list; the
+ * marking screen's hold_expired) or an admin (assigning, taking back and reassigning scripts, and the codes of the
+ * scripts an assignment skipped). */
+export type AllocationContext = "marker" | "admin";
+
+const allocationMessages: Record<AllocationContext, Record<string, string>> = {
+  marker: {
+    forbidden: FORBIDDEN,
+    invalid_input: "Check the details. A reason can be 3 to 300 characters.",
+    not_found: "This could not be found. Refresh the page.",
+    not_approved: "You are not approved to mark this subject. Ask an admin.",
+    marking_not_open: "Marking has not opened for this exam.",
+    marking_closed: "Marking has closed for this exam.",
+    nothing_left: "Nothing left to mark for now.",
+    hold_expired: "Your hold on this script has ended. Press Next script to carry on.",
+  },
+  admin: {
+    forbidden: FORBIDDEN,
+    reason_required: "Give a reason of 3 to 300 characters.",
+    invalid_input: "Choose 1 to 200 scripts and a marker.",
+    not_found: "This could not be found. Refresh the page.",
+    not_approved: "This marker is not approved to mark this subject.",
+    conflict_of_interest: "This marker cannot mark this candidate.",
+    marking_not_open: "Marking has not opened for this exam.",
+    marking_closed: "Marking has closed for this exam.",
+    taken: "A marker already has this script. Take it back or reassign it.",
+    submitted: "This script has been marked. Take it back or reassign it.",
+    on_hold: "This script is on hold.",
+    not_ready: "This script cannot be handed out yet.",
+  },
+};
+
+/** Message for a marking allocation RPC failure code (marking_next, marking_give_back, marking_assign,
+ * marking_assign_some, marking_take_back, marking_reassign, marking_my_work, marking_units_list, marking_progress), or
+ * the code of a script an assignment skipped; unknown codes get the generic message. */
+export function allocationMessageFor(code: string | null | undefined, context: AllocationContext): string {
+  const table = allocationMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}
