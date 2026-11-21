@@ -54,7 +54,30 @@ const ALERT_KINDS: Record<string, string> = {
   uncoded_family_page: "A page without a code in a family upload",
   not_expected: "A script that was not expected",
   other_exam: "A page from another exam",
+  needs_attention: "A home script needs attention",
 };
+
+/** One sentence saying how many problems a staff alert is about (the database counts them per file and kind). */
+export function staffAlertLine(kind: string, count: number): string {
+  const n = Number.isInteger(count) && count > 0 ? count : 1;
+  const one = n === 1;
+  switch (kind) {
+    case "not_expected":
+      return one ? "1 page of one file was not expected for this exam." : `${n} pages of one file were not expected for this exam.`;
+    case "other_exam":
+      return one ? "1 page of one file belongs to another exam." : `${n} pages of one file belong to another exam.`;
+    case "uncoded_family_page":
+      return one ? "1 page without a code is in a family's hand-in." : `${n} pages without a code are in a family's hand-in.`;
+    case "processing_failed":
+      return "A file could not be processed.";
+    case "late":
+      return one ? "1 script was handed in late." : `${n} scripts were handed in late.`;
+    case "needs_attention":
+      return one ? "1 home script needs attention." : `${n} home scripts need attention.`;
+    default:
+      return "A script needs staff attention.";
+  }
+}
 
 /** "We have received your answers": to the student and linked parents when a home submission is received. */
 export function scriptReceiptEmail(data: Record<string, string>): Mail {
@@ -95,12 +118,14 @@ export function scriptRejectedEmail(data: Record<string, string>): Mail {
 /** To owner and admin accounts. Exam, kind and script number only: no candidate name. */
 export function scriptStaffAlertEmail(data: Record<string, string>): Mail {
   const kind = esc(ALERT_KINDS[data.kind ?? ""] ?? "Needs attention");
-  const number = plain(data.script_number);
+  const count = Number.parseInt(data.count ?? "1", 10);
+  // One email may be about many pages or scripts: a script number is only named when it is about one.
+  const number = count > 1 ? "" : plain(data.script_number);
   return {
     subject: `${SUBJECTS.script_staff_alert}: ${plain(data.exam) || "exam"}`,
-    html: `<p>A script needs staff attention.</p><ul><li>Exam: ${esc(plain(data.exam) || "unknown")}</li><li>Kind: ${kind}</li><li>Script: ${
-      number ? esc(number) : "none yet"
-    }</li></ul><p>Sign in to Stem Examspace and open the exceptions list.</p>`,
+    html: `<p>${esc(staffAlertLine(data.kind ?? "", count))}</p><ul><li>Exam: ${esc(plain(data.exam) || "unknown")}</li><li>Kind: ${kind}</li>${
+      count > 1 ? "" : `<li>Script: ${number ? esc(number) : "none yet"}</li>`
+    }</ul><p>Sign in to Stem Examspace and open the exceptions list.</p>`,
   };
 }
 

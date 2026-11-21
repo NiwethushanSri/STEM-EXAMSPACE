@@ -2,7 +2,8 @@
 // received, a note when pages need attention or the submission is rejected (to the student and linked parents),
 // and an alert to staff when a script exception needs them. The database decides what is due and who each notice
 // is for (script_notice_next claims notices before they are sent, so two runs never send the same one); this
-// function only sends.
+// function only sends. The database hands out the families' notices before staff alerts, and one staff alert per
+// kind of problem and file, with how many problems it is about (migration 076).
 //
 // Rules:
 // - Without EMAIL_PROVIDER nothing is sent and nothing is claimed or marked, so turning email on later cannot
@@ -42,6 +43,8 @@ export interface Notice {
   page_count: number | null;
   pages: number[] | null;
   exception_kind: string | null;
+  /** How many problems a staff alert is about (pages of one file, or scripts of one exam). */
+  count?: number | null;
 }
 
 const TEMPLATES: Record<Notice["kind"], ScriptTemplate> = {
@@ -73,7 +76,7 @@ export function londonTime(iso: string | null): string {
 /** The email data of a notice (strings only). Staff data never includes a name. */
 export function dataFor(n: Notice, firstName: string | null): Record<string, string> {
   const d: Record<string, string> = { exam: n.exam ?? "", script_number: n.script_number ?? "" };
-  if (n.kind === "staff_alert") return { ...d, kind: n.exception_kind ?? "" };
+  if (n.kind === "staff_alert") return { ...d, kind: n.exception_kind ?? "", count: String(n.count && n.count > 0 ? n.count : 1) };
   d.name = firstName?.trim() || "there";
   if (n.kind === "receipt") {
     d.seq = n.submission_seq == null ? "" : String(n.submission_seq);

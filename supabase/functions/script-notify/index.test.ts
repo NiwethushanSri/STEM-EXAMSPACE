@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { _renderForTest } from "../_shared/email.ts";
+import { _renderForTest, staffAlertLine } from "../_shared/email.ts";
 import { type Deps, makeHandler, type Notice } from "./handler.ts";
 
 const quiet = async (fn: () => Promise<void>) => {
@@ -34,7 +34,9 @@ function fakeDb(notices: Notice[], clock: () => number = () => 0) {
   const svc = {
     rpc: (name: string, args: Record<string, unknown> = {}) => {
       if (name === "script_notice_next") {
-        for (const n of notices) {
+        // As the SQL hands them out (migration 076): the families' notices first, then staff alerts.
+        const ordered = [...notices.filter((n) => n.kind !== "staff_alert"), ...notices.filter((n) => n.kind === "staff_alert")];
+        for (const n of ordered) {
           const s = state.get(n.id)!;
           if (s.sent || s.attempts >= 3 || (s.claimedAt >= 0 && s.claimedAt > clock() - s.attempts * 5 * MIN)) continue;
           s.attempts++;
@@ -164,11 +166,52 @@ Deno.test("staff_alert_has_no_candidate_name", async () => {
     await h(req());
     assertEquals(sent.length, 1);
     assertEquals(sent[0].template, "script_staff_alert");
-    assertEquals(Object.keys(sent[0].data).sort(), ["exam", "kind", "script_number"]);
+    assertEquals(Object.keys(sent[0].data).sort(), ["count", "exam", "kind", "script_number"]);
+    assertEquals(sent[0].data.count, "1");
     const mail = _renderForTest("script_staff_alert", { ...sent[0].data, name: "Zanzibar Smith", student_name: "Zanzibar Smith" });
     assert(!mail.html.includes("Zanzibar") && !mail.subject.includes("Zanzibar"));
     assert(mail.html.includes("GCSE Maths Paper 1") && mail.html.includes("Handed in late") && mail.html.includes("S-ABC-0001"));
   });
+});
+
+Deno.test("family notices are sent before staff alerts, and an alert says how many pages it is about", async () => {
+  await quiet(async () => {
+    // Queued first: an alert about 12 pages of one file. The family's receipt still goes out before it.
+    const many: Notice = { ...alert, id: 5, exception_kind: "not_expected", script_number: null, count: 12 };
+    const db = fakeDb([many, receipt]);
+    const sent: { to: string; template: string; data: Record<string, string> }[] = [];
+    const h = makeHandler(deps({
+      svc: () => db.svc,
+      send: (to, template, data) => (sent.push({ to, template, data }), Promise.resolve(true)),
+    }));
+    const body = await (await h(req())).json();
+    assertEquals(body, { notices: 2, sent: 3, failed: 0, given_up: 0 });
+    assertEquals(sent.map((s) => s.template), ["script_receipt", "script_receipt", "script_staff_alert"]);
+    assertEquals(db.marks, [{ id: 1, ok: true }, { id: 5, ok: true }]);
+
+    const d = sent[2].data;
+    assertEquals([d.kind, d.count], ["not_expected", "12"]);
+    const mail = _renderForTest("script_staff_alert", d);
+    assert(mail.html.includes("12 pages of one file were not expected for this exam."), mail.html);
+    assert(!mail.html.includes("Script:")); // an email about many pages names no one script
+  });
+});
+
+Deno.test("the count wording of each kind of staff alert", () => {
+  assertEquals(staffAlertLine("not_expected", 1), "1 page of one file was not expected for this exam.");
+  assertEquals(staffAlertLine("not_expected", 50), "50 pages of one file were not expected for this exam.");
+  assertEquals(staffAlertLine("other_exam", 3), "3 pages of one file belong to another exam.");
+  assertEquals(staffAlertLine("uncoded_family_page", 2), "2 pages without a code are in a family's hand-in.");
+  assertEquals(staffAlertLine("processing_failed", 4), "A file could not be processed.");
+  assertEquals(staffAlertLine("late", 1), "1 script was handed in late.");
+  assertEquals(staffAlertLine("late", 7), "7 scripts were handed in late.");
+  assertEquals(staffAlertLine("needs_attention", 1), "1 home script needs attention.");
+  assertEquals(staffAlertLine("needs_attention", 5), "5 home scripts need attention.");
+  assertEquals(staffAlertLine("something_else", 0), "A script needs staff attention.");
+  const one = _renderForTest("script_staff_alert", { exam: "GCSE Maths", kind: "late", count: "1", script_number: "S-ABC-0001" });
+  assert(one.html.includes("1 script was handed in late.") && one.html.includes("Script: S-ABC-0001") && one.html.includes("Handed in late"));
+  const old = _renderForTest("script_staff_alert", { exam: "GCSE Maths", kind: "late", script_number: "S-ABC-0001" });
+  assert(old.html.includes("1 script was handed in late.")); // a notice with no count is about one
 });
 
 Deno.test("one of several recipients failing: only that one is retried", async () => {
