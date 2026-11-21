@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(130);
+select plan(142);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -17,6 +17,7 @@ insert into c values
   ('teacher2', tests.create_user('teacher', 'active')),
   ('m1', tests.create_user('corrector', 'active')),
   ('m2', tests.create_user('corrector', 'active')),
+  ('m3', tests.create_user('corrector', 'active')),
   ('s1', tests.create_user('student', 'active'));
 create temp table kv (name text primary key, id uuid);
 grant all on kv to public;
@@ -259,7 +260,9 @@ select is(pg_temp.code('e', pg_temp.edit(pg_temp.draft(pg_temp.get('e')), pg_tem
 -- ---------------------------------------------------------------------------------------------
 -- Marking opens. The locked structure: groups G1 (1, 3, 4) and G2 (2 with parts (a) 2 and (b) 5); answer 1 of 3 and 4
 -- (4 marks each). Two verified scripts x1 and x2, one unit per group each. On x1 both units are submitted by m1 (2(a) 2,
--- 2(b) 4, 1 given 3) and x1 is marked; on x2, m1 holds the G1 unit (in progress) and the G2 unit is open.
+-- 2(b) 4, 1 given 3) and x1 is marked; on x2, m1 holds the G1 unit (in progress) and the G2 unit is open. Three more
+-- scripts have a submitted G2 piece only: x3 by m1, withdrawn since (its piece on hold, as Task 4's trigger leaves it);
+-- x4 by m3, who is no longer approved; x5 by m1, who has since declared a conflict with its candidate.
 -- ---------------------------------------------------------------------------------------------
 create function pg_temp.locked_structure() returns jsonb language sql immutable as $$
   select pg_temp.st(jsonb_build_array(
@@ -309,6 +312,26 @@ values (pg_temp.k('u11'), pg_temp.uid('m1'), 'next', now() + interval '1 hour', 
        (pg_temp.k('u21'), pg_temp.uid('m1'), 'next', now() + interval '1 hour', now(), null, null);
 insert into public.question_marks (marking_id, question_id, mark)
 values (pg_temp.k('mk11'), pg_temp.k('L1'), 3), (pg_temp.k('mk12'), pg_temp.k('L2a'), 2), (pg_temp.k('mk12'), pg_temp.k('L2b'), 4);
+insert into kv values ('x3', tests.verified_script(pg_temp.k('e')));
+insert into kv values ('x4', tests.verified_script(pg_temp.k('e')));
+insert into kv values ('x5', tests.verified_script(pg_temp.k('e')));
+update public.scripts set state = 'withdrawn' where id = pg_temp.k('x3');
+update public.scripts set state = 'marked' where id in (pg_temp.k('x4'), pg_temp.k('x5'));
+with i as (insert into public.marking_units (script_id, exam_id, group_id, state, on_hold, hold_reason)
+           select s, pg_temp.k('e'), pg_temp.k('g2'), 'submitted', s = pg_temp.k('x3'), case when s = pg_temp.k('x3') then 'withdrawn' end
+           from unnest(array[pg_temp.k('x3'), pg_temp.k('x4'), pg_temp.k('x5')]) s returning id, script_id)
+insert into kv select case script_id when pg_temp.k('x3') then 'u32' when pg_temp.k('x4') then 'u42' else 'u52' end, id from i;
+with i as (insert into public.markings (unit_id, marker_id, status, rev, total, submitted_at)
+           values (pg_temp.k('u32'), pg_temp.uid('m1'), 'submitted', 2, 6, now()),
+                  (pg_temp.k('u42'), pg_temp.uid('m3'), 'submitted', 2, 6, now()),
+                  (pg_temp.k('u52'), pg_temp.uid('m1'), 'submitted', 2, 6, now()) returning id, unit_id)
+insert into kv select case unit_id when pg_temp.k('u32') then 'mk32' when pg_temp.k('u42') then 'mk42' else 'mk52' end, id from i;
+insert into public.marking_assignments (unit_id, marker_id, how, hold_until, created_at, ended_at, end_reason)
+select v.u, v.m, 'next', now() + interval '1 hour', now() - interval '1 hour', now(), 'submitted'
+from (values (pg_temp.k('u32'), pg_temp.uid('m1')), (pg_temp.k('u42'), pg_temp.uid('m3')), (pg_temp.k('u52'), pg_temp.uid('m1'))) v(u, m);
+insert into public.marker_conflicts (marker_id, student_id, note, recorded_by, recorded_at)
+select pg_temp.uid('m1'), b.student_id, 'Neighbour', pg_temp.uid('admin'), now()
+from public.scripts s join public.bookings b on b.id = s.booking_id where s.id = pg_temp.k('x5');
 insert into res values ('v_locked', to_jsonb(pg_temp.version('e')));
 create function pg_temp.locked_draft() returns jsonb language sql as $$ select pg_temp.draft(pg_temp.get('e')) $$;
 grant execute on function pg_temp.locked_draft() to public;
@@ -394,6 +417,18 @@ select is((select m.status || ' ' || u.state from public.markings m join public.
   'submitted submitted', 'the G1 piece does not have the new part and stays submitted');
 select is((select string_agg(u.state || ':' || (select count(*) from public.marking_assignments a where a.unit_id = u.id and a.ended_at is null), ',' order by u.group_id = pg_temp.k('g2'))
            from public.marking_units u where u.script_id = pg_temp.k('x2')), 'taken:1,open:0', 'the other script''s pieces are untouched');
+select is((select m.status || ' ' || u.state || ' ' || u.on_hold from public.markings m join public.marking_units u on u.id = m.unit_id where m.id = pg_temp.k('mk32')),
+  'submitted submitted true', 'a submitted piece of a withdrawn script stays submitted');
+select is((select count(*)::int from public.marking_assignments where unit_id = pg_temp.k('u32') and ended_at is null), 0, 'and gets no assignment');
+select is((select m.status || ' ' || m.set_aside_reason || ' ' || u.state from public.markings m join public.marking_units u on u.id = m.unit_id where m.id = pg_temp.k('mk42')),
+  'set_aside unapproved open', 'the piece of a marker no longer approved is open again, and their marking set aside');
+select is((select count(*)::int from public.marking_assignments where unit_id = pg_temp.k('u42') and ended_at is null), 0, 'with no holder');
+select is((select m.status || ' ' || m.set_aside_reason || ' ' || u.state from public.markings m join public.marking_units u on u.id = m.unit_id where m.id = pg_temp.k('mk52')),
+  'set_aside conflict open', 'the piece of a marker now blocked for the candidate likewise, as a conflict');
+select is((select count(*)::int from public.marking_assignments where unit_id = pg_temp.k('u52') and ended_at is null), 0, 'with no holder either');
+select is(array[(select state::text from public.scripts where id = pg_temp.k('x3')), (select state::text from public.scripts where id = pg_temp.k('x4')),
+                (select state::text from public.scripts where id = pg_temp.k('x5'))],
+  array['withdrawn', 'marking', 'marking'], 'the withdrawn script stays withdrawn; the other two are being marked again');
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code('e', pg_temp.plus(pg_temp.locked_draft(), pg_temp.q('new5', null, '5', 2, jsonb_build_object('group_key', pg_temp.k('g1')))),
   'Question 5 was left out'), 'ok', 'a new question in G1');
@@ -402,6 +437,32 @@ select is((select m.status || ' ' || u.state from public.markings m join public.
   'in_progress taken', 'reopens the submitted G1 piece');
 select is((select count(*)::int from public.marking_assignments where unit_id = pg_temp.k('u21') and ended_at is null), 1,
   'and the piece being marked keeps its one holder');
+
+-- Marked as whole scripts: exam e3 has the test structure and is opened; script x6 is submitted by m1 and marked.
+select tests.as_postgres();
+insert into kv values ('e3', tests.marking_exam(pg_temp.subj('subj')));
+select tests.as_user(pg_temp.uid('teacher'));
+select is(pg_temp.code('e3', pg_temp.base()), 'ok', 'whole scripts: the test structure is saved before marking opens');
+select tests.as_postgres();
+update public.exam_marking set opened_at = now(), opened_by = pg_temp.uid('admin') where exam_id = pg_temp.k('e3');
+insert into kv values ('x6', tests.verified_script(pg_temp.k('e3')));
+update public.scripts set state = 'marked' where id = pg_temp.k('x6');
+with i as (insert into public.marking_units (script_id, exam_id, state) values (pg_temp.k('x6'), pg_temp.k('e3'), 'submitted') returning id)
+insert into kv select 'u6', id from i;
+with i as (insert into public.markings (unit_id, marker_id, status, rev, total, submitted_at)
+           values (pg_temp.k('u6'), pg_temp.uid('m1'), 'submitted', 2, 10, now()) returning id) insert into kv select 'mk6', id from i;
+insert into public.marking_assignments (unit_id, marker_id, how, hold_until, created_at, ended_at, end_reason)
+values (pg_temp.k('u6'), pg_temp.uid('m1'), 'next', now() + interval '1 hour', now() - interval '1 hour', now(), 'submitted');
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code('e3', pg_temp.plus(pg_temp.draft(pg_temp.get('e3')), pg_temp.q('new3', null, '3', 2, '{"pages": [3]}')), 'Question 3 was left out'),
+  'ok', 'whole scripts: an admin adds question 3, with no group');
+select tests.as_postgres();
+select is((select m.status || ' ' || u.state from public.markings m join public.marking_units u on u.id = m.unit_id where m.id = pg_temp.k('mk6')),
+  'in_progress taken', 'the whole-script piece is open again');
+select is((select jsonb_agg(jsonb_build_array(a.marker_id = pg_temp.uid('m1'), a.how, a.hold_until))
+           from public.marking_assignments a where a.unit_id = pg_temp.k('u6') and a.ended_at is null),
+  '[[true, "assigned", null]]'::jsonb, 'for the same marker, with no time limit');
+select is((select state::text from public.scripts where id = pg_temp.k('x6')), 'marking', 'and the script is being marked again');
 
 -- ----- mark_scheme_file_only_at_its_pending_path -----
 select tests.as_user(pg_temp.uid('teacher'));

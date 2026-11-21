@@ -9,9 +9,10 @@
 -- those not sent are deleted. Groups and optional questions are matched by their label. Once exam_marking.opened_at is
 -- set (Task 4's marking_open; Ruling R1) only an admin may change it, with a reason, and only as Builder's call 11
 -- allows: wording, marking points, guidance and pages; a maximum, never below a mark already given; and new questions.
--- A question added then reopens every submitted live piece that includes it, for the same marker (Task 4 replaces the
--- script state line with marking_script_state). Every save adds 1 to exam_marking.structure_version (the row is made
--- when it is missing) and writes an audit row.
+-- A question added then reopens every submitted live piece that includes it on a script not withdrawn or void: for the
+-- same marker when they may still mark it, else open for anyone with that marking set aside (Task 4 replaces the
+-- script state line with marking_script_state). Every save holds the exam's marking row, adds 1 to
+-- exam_marking.structure_version (the row is made when it is missing) and writes an audit row.
 --
 -- The mark scheme PDF lives in the private mark-schemes bucket at <exam>/<file id>.pdf (Builder's call 18): one stored
 -- file per exam, which editors of the structure and the subject's approved markers may read.
@@ -332,9 +333,11 @@ begin
     return jsonb_build_object('ok', false, 'code', 'forbidden');
   end if;
 
-  -- One save of an exam's structure at a time.
+  -- One save of an exam's structure at a time. The exam's marking row (when there is one) is held from here, before
+  -- the lock rules and the maximum check: a mark saved at the same moment (marking saves hold it for share), a submit
+  -- and marking opening wait until this save ends.
   perform pg_advisory_xact_lock(hashtextextended('exam_structure:' || p_exam::text, 0));
-  select * into v_m from public.exam_marking m where m.exam_id = p_exam;
+  select * into v_m from public.exam_marking m where m.exam_id = p_exam for update;
   v_locked := v_m.opened_at is not null;
   if v_locked then
     if not exists (select 1 from public.profiles a where a.id = v_actor and a.status = 'active' and a.role in ('owner', 'admin')) then
@@ -490,7 +493,10 @@ begin
   end loop;
 
   -- A question added once marking has opened: the submitted live pieces that include it (the whole script, or the
-  -- group of its top-level question) are marked again by the same marker, and their scripts are being marked again.
+  -- group of its top-level question) of scripts still being marked (not withdrawn or void) are reopened, and their
+  -- scripts are being marked again. A piece goes back to the same marker when they may still mark it (is_marker_for:
+  -- an active, approved marker of the subject; and not blocked for the candidate). Otherwise the piece is open again
+  -- for anyone and that marking is set aside (unapproved, or conflict when blocked), so no hold is left stranded.
   if v_locked and cardinality(v_added) > 0 then
     with recursive up as (
       select q.id, q.parent_id, q.group_id from public.exam_questions q where q.id = any (v_added)
@@ -499,16 +505,35 @@ begin
     )
     select coalesce(array_agg(u.id), '{}') into v_units
     from public.marking_units u
+    join public.scripts s on s.id = u.script_id
     where u.exam_id = p_exam
+      and s.state not in ('withdrawn', 'void')
       and (u.group_id is null or u.group_id in (select up.group_id from up where up.parent_id is null));
 
-    with reopened as (
-      update public.markings m set status = 'in_progress', submitted_at = null
+    with pieces as (
+      select m.id as marking_id, m.unit_id, m.marker_id, u.script_id,
+        public.is_marker_for(m.marker_id, v_e.subject_id) as approved,
+        public.marking_marker_blocked(m.marker_id, b.student_id) as blocked
+      from public.markings m
+      join public.marking_units u on u.id = m.unit_id
+      join public.scripts s on s.id = u.script_id
+      join public.bookings b on b.id = s.booking_id
       where m.unit_id = any (v_units) and m.kind = 'live' and m.status = 'submitted'
+    ),
+    reopened as (
+      update public.markings m set status = 'in_progress', submitted_at = null
+      from pieces p where m.id = p.marking_id and p.approved and not p.blocked
       returning m.unit_id, m.marker_id
     ),
+    set_aside as (
+      update public.markings m
+      set status = 'set_aside', set_aside_at = now(), set_aside_reason = case when p.blocked then 'conflict' else 'unapproved' end
+      from pieces p where m.id = p.marking_id and not (p.approved and not p.blocked)
+      returning m.id
+    ),
     units as (
-      update public.marking_units u set state = 'taken' from reopened ro where u.id = ro.unit_id
+      update public.marking_units u set state = case when p.approved and not p.blocked then 'taken' else 'open' end
+      from pieces p where u.id = p.unit_id
       returning u.script_id
     ),
     assigned as (
