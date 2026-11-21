@@ -1,4 +1,5 @@
-"""The processing server: claim a job, prepare its upload, store the pictures, record the pages, finish the job.
+"""The processing server: claim a job, prepare its upload (or re-make its pages' marking pictures from their stored
+full pictures: a remask job), store the pictures in the job's own folder, record them, finish the job.
 Between jobs, at most once a minute, it also deletes the files families never handed in (discarded from a draft, or
 left in a draft or unfinished after the booking's late window).
 
@@ -43,7 +44,7 @@ class OriginalChanged(Exception):
 
 
 class UnsupportedJob(Exception):
-    """A job kind this server does not run yet (remask jobs come with the script repository)."""
+    """A job kind this server does not run (it runs prepare and remask jobs)."""
 
 
 def job_context(claimed: dict) -> JobContext:
@@ -64,10 +65,17 @@ def job_context(claimed: dict) -> JobContext:
     return JobContext(copies=copies, papers=papers)
 
 
-def page_paths(upload: dict, index: int) -> tuple[str, str]:
-    """Where page `index` of an upload's pictures go in script-pages: <exam>/<upload>/<index>-full.jpg and -marking.jpg."""
-    base = f"{upload['exam_id']}/{upload['id']}/{index}"
+def page_paths(upload: dict, job_id: int, index: int) -> tuple[str, str]:
+    """Where the job's pictures of page `index` of an upload go in script-pages, in the job's own folder:
+    <exam>/<upload>/<job>/<index>-full.jpg and -marking.jpg. A rerun or a remask writes new paths, so the pictures of
+    a page kept with an earlier version are never overwritten."""
+    base = f"{upload['exam_id']}/{upload['id']}/{job_id}/{index}"
     return f"{base}-full.jpg", f"{base}-marking.jpg"
+
+
+def areas_of(items: list[dict], page: int = 0) -> list[Area]:
+    """Hidden areas as the claim lists them ({x, y, w, h}, fractions)."""
+    return [Area(page=page, x=float(a["x"]), y=float(a["y"]), w=float(a["w"]), h=float(a["h"])) for a in items]
 
 
 def page_record(page: PreparedPage, full_path: str, marking_path: str | None) -> dict:
@@ -117,11 +125,70 @@ class _Heartbeat:
         self._thread.join()
 
 
+def _prepare(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> int:
+    """A prepare job: downloads the original and hashes it (SHA-256, recorded with the pages; a hash that differs from
+    the one an earlier run recorded fails the job before any picture is stored, and the database checks it again),
+    prepares and stores the pages in the job's folder and records them. Returns the page count."""
+    job, upload = claimed["job"], claimed["upload"]
+    data = client.download(UPLOADS, upload["storage_path"])
+    sha256 = hashlib.sha256(data).hexdigest()
+    if upload.get("sha256") and upload["sha256"] != sha256:
+        raise OriginalChanged()  # before any picture is stored
+    beat.check()
+    pages = []
+    for page in pipeline.iter_prepare(data, upload["kind"], upload["mime"], job_context(claimed)):
+        beat.check()
+        full_path, marking_path = page_paths(upload, job["id"], page.source_index)
+        client.upload(PAGES, full_path, page.full, "image/jpeg")
+        if page.marking is not None:
+            client.upload(PAGES, marking_path, page.marking, "image/jpeg")
+        pages.append(page_record(page, full_path, marking_path if page.marking is not None else None))
+    beat.check()
+    result = client.record_pages(job["id"], pages, worker=worker_id, attempt=job["attempts"], sha256=sha256)
+    if not result or not result.get("ok"):
+        if result and result.get("code") == "conflict":
+            if result.get("reason") == "sha256_mismatch":
+                raise OriginalChanged()
+            raise LostJob()
+        raise RecordRefused()
+    return len(pages)
+
+
+def _remask(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> int:
+    """A remask job: for each of the file's answer pages the claim lists, downloads its stored full picture (never the
+    original), makes a new marking picture with the page's turn and hidden areas (pipeline.remask; None when none may
+    be made), stores it in the job's folder (no full picture is ever written) and records them all
+    (script_pages_remasked, which checks each page's key against its context now). Returns the page count."""
+    job, upload = claimed["job"], claimed["upload"]
+    items = []
+    for p in claimed.get("pages") or []:
+        beat.check()
+        full = client.download(PAGES, p["full_path"])
+        marking = pipeline.remask(
+            full, int(p["turn"]), areas_of(p.get("paper_areas") or [], int(p["copy_page"] or 0)),
+            staff_areas=areas_of(p.get("staff_areas") or []), code=p.get("code"), copy_page=p.get("copy_page"),
+            provable=bool(p.get("provable")), confirmed=bool(p.get("confirmed")))
+        marking_path = None
+        if marking is not None:
+            marking_path = page_paths(upload, job["id"], int(p["source_index"]))[1]
+            client.upload(PAGES, marking_path, marking, "image/jpeg")
+        items.append({"page_id": p["page_id"], "marking_path": marking_path, "rotation": int(p["rotation"]), "key": p["key"]})
+    beat.check()
+    result = client.record_remask(job["id"], items, worker=worker_id, attempt=job["attempts"])
+    if not result or not result.get("ok"):
+        if result and result.get("code") == "conflict":
+            raise LostJob()
+        raise RecordRefused()
+    return len(items)
+
+
+RUNS = {"prepare": _prepare, "remask": _remask}
+
+
 def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: float = HEARTBEAT_SECONDS) -> str:
-    """Runs one claimed job to its end: downloads the original and hashes it (SHA-256, recorded with the pages; a
-    hash that differs from the one an earlier run recorded fails the job before any picture is stored, and the
-    database checks it again), prepares and stores the pages, records them and finishes the job. Returns the outcome: the job's state after finishing ('done', 'queued'
-    for a retry, 'failed'), 'lost' when another worker took the job over, or 'unfinished' when finishing failed
+    """Runs one claimed job to its end (a prepare or a remask job, see _prepare and _remask) and finishes it. Returns
+    the outcome: the job's state after finishing ('done', 'queued' for a retry, 'failed', 'superseded' when a newer
+    job of the file waits), 'lost' when another worker took the job over, or 'unfinished' when finishing failed
     (the job is then claimed again after 15 minutes)."""
     job, upload = claimed["job"], claimed["upload"]
     job_id, attempt = job["id"], job["attempts"]
@@ -130,30 +197,10 @@ def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: fl
     ok, error = True, None
     try:
         with _Heartbeat(client, job_id, worker_id, attempt, heartbeat_seconds) as beat:
-            if job["kind"] != "prepare":
+            run = RUNS.get(job["kind"])
+            if run is None:
                 raise UnsupportedJob()
-            data = client.download(UPLOADS, upload["storage_path"])
-            sha256 = hashlib.sha256(data).hexdigest()
-            if upload.get("sha256") and upload["sha256"] != sha256:
-                raise OriginalChanged()  # before any picture is stored over the earlier run's
-            beat.check()
-            pages = []
-            for page in pipeline.iter_prepare(data, upload["kind"], upload["mime"], job_context(claimed)):
-                beat.check()
-                full_path, marking_path = page_paths(upload, page.source_index)
-                client.upload(PAGES, full_path, page.full, "image/jpeg")
-                if page.marking is not None:
-                    client.upload(PAGES, marking_path, page.marking, "image/jpeg")
-                pages.append(page_record(page, full_path, marking_path if page.marking is not None else None))
-            count = len(pages)
-            beat.check()
-            result = client.record_pages(job_id, pages, worker=worker_id, attempt=attempt, sha256=sha256)
-            if not result or not result.get("ok"):
-                if result and result.get("code") == "conflict":
-                    if result.get("reason") == "sha256_mismatch":
-                        raise OriginalChanged()
-                    raise LostJob()
-                raise RecordRefused()
+            count = run(client, worker_id, claimed, beat)
     except LostJob:
         log.warning("job %s upload %s attempt %s: lost to another worker after %.1f s",
                     job_id, upload["id"], attempt, time.monotonic() - started)

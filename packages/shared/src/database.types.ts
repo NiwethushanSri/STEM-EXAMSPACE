@@ -805,14 +805,14 @@ isOneToOne: false
                   ]
                 },"script_pages": {
                   Row: {
-                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"id": string,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"full_rotation": number,"id": string,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"full_rotation"?: number,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   Update: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"full_rotation"?: number,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
                   }
                   Relationships: [
                     {
@@ -1517,6 +1517,9 @@ isOneToOne: false
         isOneToOne: true
         isSetofReturn: false
       } },
+"script_detail":
+{ Args: { "p_script": string }; Returns: Json
+                           },
 "script_discarded_take":
 { Args: { "p_limit": number,"p_now"?: string }; Returns: Json
                            },
@@ -1558,6 +1561,11 @@ isOneToOne: false
                            },
 "script_exceptions_list":
 { Args: { "p_exam"?: string,"p_kind"?: Database["public"]['Enums']["exception_kind"],"p_state"?: string }; Returns: Json
+                           },
+"script_extra_pages":
+{ Args: { "p_script": string }; Returns: {
+              "file_position": number,"page_id": string,"placed_after": number,"source_index": number
+            }[]
                            },
 "script_home_reject":
 { Args: { "p_actor": string,"p_booking": string,"p_now": string,"p_reason": string,"p_subs": (string)[] }; Returns: undefined
@@ -1601,11 +1609,20 @@ isOneToOne: false
 "script_page_bookings":
 { Args: { "p_page": string }; Returns: (string)[]
                            },
+"script_page_confirmed":
+{ Args: { "p_page": string }; Returns: boolean
+                           },
+"script_page_copy":
+{ Args: { "p_page": string }; Returns: Record<string, unknown>
+                           },
 "script_page_is_answer":
 { Args: { "p_copy": string,"p_page": number }; Returns: boolean
                            },
 "script_page_json":
 { Args: { "p_page": string }; Returns: Json
+                           },
+"script_page_lock":
+{ Args: { "p_extra": (string)[],"p_page": string }; Returns: (string)[]
                            },
 "script_page_locked":
 { Args: { "p_page": string }; Returns: boolean
@@ -1619,6 +1636,18 @@ isOneToOne: false
 "script_page_remask":
 { Args: { "p_page": string }; Returns: undefined
                            },
+"script_page_remask_context":
+{ Args: { "p_page": string }; Returns: Json
+                           },
+"script_page_remask_key":
+{ Args: { "p_page": string }; Returns: string
+                           },
+"script_page_remove":
+{ Args: { "p_copy_page": number,"p_reason": string,"p_script": string }; Returns: Json
+                           },
+"script_page_rotate":
+{ Args: { "p_page": string,"p_quarter_turns": number,"p_reason": string }; Returns: Json
+                           },
 "script_page_set_aside":
 { Args: { "p_actor": string,"p_now": string,"p_page": string,"p_reason": string }; Returns: undefined
                            },
@@ -1628,6 +1657,9 @@ isOneToOne: false
 "script_pages_record":
 { Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_sha256": string,"p_worker": string }; Returns: Json
                            },
+"script_pages_remasked":
+{ Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_worker": string }; Returns: Json
+                           },
 "script_pages_valid":
 { Args: { "p_pages": Json,"p_prefix": string }; Returns: boolean
                            },
@@ -1636,6 +1668,9 @@ isOneToOne: false
                            },
 "script_reject_targets":
 { Args: { "p_exception": string }; Returns: (string)[]
+                           },
+"script_remask_queue":
+{ Args: { "p_upload": string }; Returns: boolean
                            },
 "script_resolution_lock":
 { Args: { "p_exception": string,"p_extra": (string)[] }; Returns: (string)[]
@@ -1664,11 +1699,20 @@ isOneToOne: false
 "script_upload_reorder":
 { Args: { "p_submission": string,"p_uploads": (string)[] }; Returns: Json
                            },
+"script_upload_reprocess":
+{ Args: { "p_reason": string,"p_upload": string }; Returns: Json
+                           },
 "script_upload_stored":
 { Args: { "p_upload": string }; Returns: Json
                            },
 "script_version_write":
 { Args: { "p_links": Json,"p_now": string,"p_reason": string,"p_script": string,"p_submission": string,"p_upload": string }; Returns: boolean
+                           },
+"script_void":
+{ Args: { "p_reason": string,"p_script": string }; Returns: Json
+                           },
+"scripts_list":
+{ Args: { "p_exam"?: string,"p_late"?: boolean,"p_source"?: Database["public"]['Enums']["script_source"],"p_state"?: Database["public"]['Enums']["script_state"] }; Returns: Json
                            },
 "set_account_status_tx":
 { Args: { "p_action": string,"p_actor": string,"p_target": string }; Returns: string

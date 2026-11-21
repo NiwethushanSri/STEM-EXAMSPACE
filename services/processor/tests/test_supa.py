@@ -64,3 +64,18 @@ def test_a_failed_remove_names_the_status_not_the_paths():
         with pytest.raises(supa.SupabaseError) as err:
             c.remove("script-uploads", ["home/b/u-1.jpg"])
     assert "500" in str(err.value) and "home/" not in str(err.value)
+
+
+def test_record_remask_sends_the_pages_to_script_pages_remasked():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True, "pages": 1})
+
+    pages = [{"page_id": "p-1", "marking_path": "e/u/9/0-marking.jpg", "rotation": 90, "key": "k"}]
+    with client_with(handler) as c:
+        assert c.record_remask(9, pages, worker="w-1", attempt=2) == {"ok": True, "pages": 1}
+    (r,) = seen
+    assert (r.method, r.url.path) == ("POST", "/rest/v1/rpc/script_pages_remasked")
+    assert json.loads(r.content) == {"p_job": 9, "p_worker": "w-1", "p_attempt": 2, "p_pages": pages}

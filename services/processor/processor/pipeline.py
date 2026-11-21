@@ -1,12 +1,13 @@
-"""Prepares the pages of one upload: the orchestration of imaging.py, with the job's context.
+"""Prepares the pages of one upload, and re-makes a stored page's marking picture (remask): the orchestration of
+imaging.py, with the job's context.
 
-Pure: no network, no database. Task 4 builds the JobContext from processing_job_claim's result, stores the
+Pure: no network, no database. main.py builds the JobContext from processing_job_claim's result, stores the
 pictures and records the pages.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Iterator
+from typing import Iterator, Sequence
 
 import numpy as np
 
@@ -15,7 +16,7 @@ from processor.imaging import Area, Quality, UnreadableFile
 
 __all__ = [
     "Area", "CopyRef", "JobContext", "PaperLayout", "PreparedPage", "Quality", "UnreadableFile",
-    "is_answer_page", "iter_prepare", "prepare",
+    "is_answer_page", "iter_prepare", "prepare", "remask",
 ]
 
 KINDS = ("home_photo", "home_pdf", "scan_file")
@@ -196,6 +197,58 @@ def _home_pdf_page(img: np.ndarray) -> _Shot:
     inside = not imaging.touches_edge(quad, img.shape)
     shots = [photographed, scanned] if inside else [scanned, photographed]
     return next((s for s in shots if s.layout_ok), shots[0])
+
+
+def remask(
+    full: bytes,
+    rotation: int,
+    areas: list[Area],
+    *,
+    staff_areas: Sequence[Area] = (),
+    code: str | None = None,
+    copy_page: int | None = None,
+    provable: bool = True,
+    confirmed: bool = False,
+) -> bytes | None:
+    """A new marking picture for a stored page, made from its stored full picture only: the original and the full
+    picture are never read back or changed. Raises UnreadableFile when the full picture cannot be decoded.
+
+    `rotation` is the clockwise quarter turn staff gave the page since its full picture was made; `areas` are its
+    paper version's hidden areas on its copy page (fractions of the A4 copy page); `staff_areas` the areas staff
+    drew on the full picture (fractions of the stored full picture, so they are painted before the turn).
+
+    The picture is turned first. Then, as one union painted white: the nominal name band, the paper's areas and the
+    staff areas; and, only when the page's geometry is proved again from the full picture with a prepare's checks
+    (its code read again as `code` page `copy_page`, then fit_page: both rules found along their length, the printed
+    rectangle, the code's scale, its aspect and its vertical scale, nothing in the identity box), the band and areas
+    placed through that fit and everything above the measured top rule (marking_image). A page whose geometry is not
+    proved gets a marking picture only when staff confirmed it (`confirmed`: they hid the name, or said there is
+    none): the nominal band, the paper's areas and the staff areas. Otherwise None: no marking picture. `provable` is
+    False for a page whose prepare flagged layout_unexpected (placed by its code alone, or its fit not proved): it is
+    never proved here."""
+    if rotation not in (0, 90, 180, 270):
+        raise ValueError("rotation must be a quarter turn")
+    img = imaging.load_photo(full)
+    painted = img.copy()
+    imaging.paint_areas(painted, list(staff_areas))
+    clean = imaging.to_a4(_turned(img, rotation))
+    page = imaging.to_a4(_turned(painted, rotation))
+    if provable and code is not None and copy_page is not None:
+        # Proved on the picture without the staff areas (they may cover the identity line the fit looks for); the
+        # painted picture has the same geometry.
+        read = imaging.read_code(clean)
+        if read is not None and (read.code, read.page) == (code, copy_page):
+            fit = imaging.fit_page(clean, read)
+            if fit.expected:
+                return imaging.encode_jpeg(imaging.marking_image(page, areas, fit))
+    if confirmed:
+        return imaging.encode_jpeg(imaging.nominal_marking_image(page, areas))
+    return None
+
+
+def _turned(img: np.ndarray, rotation: int) -> np.ndarray:
+    """The picture turned clockwise by `rotation` degrees (a quarter-turn multiple)."""
+    return np.ascontiguousarray(np.rot90(img, -(rotation // 90)))
 
 
 def _prepare_page(index: int, img: np.ndarray, kind: str, ctx: JobContext) -> PreparedPage:

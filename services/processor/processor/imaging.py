@@ -960,14 +960,8 @@ def marking_image(page: np.ndarray, areas: list[Area], fit: PageFit) -> np.ndarr
     expected. Raises ValueError for a fit without a perspective or a line to paint down to."""
     if fit.homography is None or fit.paint_rule is None:
         raise ValueError("no page fit")
-    out = page.copy()
+    out = nominal_marking_image(page, areas)
     h, w = out.shape[:2]
-    out[: math.ceil(TOP_BAND_FRACTION * h)] = 255
-    for a in areas:
-        x0, y0 = max(0, math.floor(a.x * w)), max(0, math.floor(a.y * h))
-        x1, y1 = min(w, math.ceil((a.x + a.w) * w)), min(h, math.ceil((a.y + a.h) * h))
-        if x1 > x0 and y1 > y0:
-            out[y0:y1, x0:x1] = 255
     slope, intercept = fit.paint_rule
     below = BELOW_TOP_RULE_PT * fit.scale * w / PAGE_PT[0]
     _fill(out, np.array([[0, 0], [w, 0], [w, slope * w + intercept + below], [0, intercept + below]]))
@@ -979,6 +973,26 @@ def marking_image(page: np.ndarray, areas: list[Area], fit: PageFit) -> np.ndarr
         corners = np.array([[x - e, y - e], [x + bw + e, y - e], [x + bw + e, y + bh + e], [x - e, y + bh + e]])
         _fill(out, cv2.perspectiveTransform(corners[None].astype(np.float64), fit.homography)[0])
     return out
+
+
+def nominal_marking_image(page: np.ndarray, areas: list[Area]) -> np.ndarray:
+    """A copy of a page picture with the nominal name band (the picture's top TOP_BAND_FRACTION) and every given area
+    (fractions of the picture) painted white: part (a) of marking_image, and on its own the marking picture of a page
+    whose geometry was not proved but whose name staff confirmed hidden (the remask decision)."""
+    out = page.copy()
+    out[: math.ceil(TOP_BAND_FRACTION * out.shape[0])] = 255
+    paint_areas(out, areas)
+    return out
+
+
+def paint_areas(out: np.ndarray, areas: list[Area]) -> None:
+    """Paints each area (fractions of the picture, from its top-left) white, rounded outwards to whole pixels."""
+    h, w = out.shape[:2]
+    for a in areas:
+        x0, y0 = max(0, math.floor(a.x * w)), max(0, math.floor(a.y * h))
+        x1, y1 = min(w, math.ceil((a.x + a.w) * w)), min(h, math.ceil((a.y + a.h) * h))
+        if x1 > x0 and y1 > y0:
+            out[y0:y1, x0:x1] = 255
 
 
 def _fill(out: np.ndarray, polygon: np.ndarray) -> None:

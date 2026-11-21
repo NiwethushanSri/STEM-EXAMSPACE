@@ -99,7 +99,20 @@ export async function removeInsertAction(examId: string, paperId: string, reason
 }
 
 type Rpc = { data: unknown; error: unknown };
-const codeOf = (r: Rpc) => (!r.error && r.data && typeof r.data === "object" && !Array.isArray(r.data) ? (r.data as { ok?: unknown; code?: unknown }) : null);
+const codeOf = (r: Rpc) =>
+  !r.error && r.data && typeof r.data === "object" && !Array.isArray(r.data) ? (r.data as { ok?: unknown; code?: unknown; pages?: unknown; reviewed_at?: unknown }) : null;
+
+/** Whether these roles are the ones saved (paper_page_layout's answer) and were already checked. */
+function rolesUnchanged(saved: ReturnType<typeof codeOf>, roles: { page: number; role: string }[]): boolean {
+  if (saved?.ok !== true || !saved.reviewed_at || !Array.isArray(saved.pages)) return false;
+  const byPage = new Map(
+    saved.pages.flatMap((p: unknown) => {
+      const r = p as { page?: unknown; role?: unknown };
+      return typeof r?.page === "number" && typeof r.role === "string" ? [[r.page, r.role] as const] : [];
+    }),
+  );
+  return byPage.size === roles.length && roles.every((r) => byPage.get(r.page) === r.role);
+}
 
 /**
  * Saves the page roles and the hidden areas of a paper version, each through its own database function (both are
@@ -115,7 +128,12 @@ export async function savePageLayoutAction(
   await requireStaff(["admin", "owner"]);
   if (!isUuid(examId) || !isUuid(paperId) || !Array.isArray(roles) || !Array.isArray(areas)) return { ok: false, message: GENERIC };
   const supabase = await createClient();
-  const rolesRes = await supabase.rpc("set_paper_page_roles", { p_paper: paperId, p_roles: roles });
+  // The roles are sent only when they change (or are confirmed for the first time): once scripts exist they are
+  // locked, and an areas-only save must still go through.
+  const saved = codeOf(await supabase.rpc("paper_page_layout", { p_paper: paperId }));
+  const rolesRes = rolesUnchanged(saved, roles)
+    ? { data: { ok: true }, error: null }
+    : await supabase.rpc("set_paper_page_roles", { p_paper: paperId, p_roles: roles });
   const areasRes = await supabase.rpc("set_paper_hidden_areas", { p_paper: paperId, p_areas: areas });
   refresh(examId);
   const r = codeOf(rolesRes);

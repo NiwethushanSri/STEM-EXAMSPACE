@@ -46,10 +46,16 @@ class Rest:
         assert r.status_code in (200, 204), f"delete {table}: HTTP {r.status_code}"
 
     def listed(self, bucket, folder):
-        """The paths of the objects directly inside a folder of a bucket."""
+        """The paths of the objects inside a folder of a bucket, its subfolders (a job's pictures) included."""
         r = self.http.post(f"/storage/v1/object/list/{bucket}", json={"prefix": folder, "limit": 1000})
         assert r.status_code == 200, f"list {bucket}: HTTP {r.status_code}"
-        return [f"{folder}{o['name']}" for o in r.json() if o.get("id")]
+        found = []
+        for o in r.json():
+            if o.get("id"):
+                found.append(f"{folder}{o['name']}")
+            else:  # a folder
+                found += self.listed(bucket, f"{folder}{o['name']}/")
+        return found
 
     def remove(self, bucket, paths):
         if paths:
@@ -142,8 +148,8 @@ def test_home_pdf_is_prepared_matched_and_received(rest):
         assert [(p["state"], p["copy_page"], p["copy_id"], p["booking_id"]) for p in pages] == [
             ("matched", i + 1, copy["id"], booking["id"]) for i in range(5)]
         for p in pages:
-            assert p["full_path"] == f"{exam_id}/{upload_id}/{p['source_index']}-full.jpg"
-            assert p["marking_path"] == f"{exam_id}/{upload_id}/{p['source_index']}-marking.jpg"
+            assert p["full_path"] == f"{exam_id}/{upload_id}/{job['id']}/{p['source_index']}-full.jpg"
+            assert p["marking_path"] == f"{exam_id}/{upload_id}/{job['id']}/{p['source_index']}-marking.jpg"
             for picture in (p["full_path"], p["marking_path"]):
                 got = rest.http.get(f"/storage/v1/object/script-pages/{picture}")
                 assert got.status_code == 200 and got.content[:2] == b"\xff\xd8"
@@ -169,6 +175,23 @@ def test_home_pdf_is_prepared_matched_and_received(rest):
         assert rest.select("script_uploads", id=f"eq.{upload_id}")[0]["sha256"] == hashlib.sha256(data).hexdigest()
         script = rest.select("scripts", booking_id=f"eq.{booking['id']}")[0]
         assert (script["state"], script["version"]) == ("verified", 1)
+        assert all(p["full_path"].startswith(f"{exam_id}/{upload_id}/{again['id']}/") for p in rerun)
+
+        # A remask job (as a hidden-area change or a turn queues one) re-makes the marking pictures from the stored
+        # full pictures, in its own folder; the full pictures stay as they were.
+        remask = rest.insert("processing_jobs", {"upload_id": upload_id, "kind": "remask", "run_after": "2000-01-01T00:00:00Z"})
+        with supa.Client.from_env() as client:
+            assert main.run(client, f"itest-{tag}", once=True) == 1
+        assert rest.select("processing_jobs", id=f"eq.{remask['id']}")[0]["state"] == "done"
+        remasked = {p["id"]: p for p in rest.select("script_pages", upload_id=f"eq.{upload_id}")}
+        assert set(remasked) == {p["id"] for p in rerun}
+        for p in rerun:
+            now = remasked[p["id"]]
+            assert now["full_path"] == p["full_path"] and now["rotation"] == p["rotation"]
+            assert now["marking_path"] == f"{exam_id}/{upload_id}/{remask['id']}/{p['source_index']}-marking.jpg"
+            got = rest.http.get(f"/storage/v1/object/script-pages/{now['marking_path']}")
+            assert got.status_code == 200 and got.content[:2] == b"\xff\xd8"
+        assert rest.select("scripts", booking_id=f"eq.{booking['id']}")[0]["state"] == "verified"
     finally:
         cleanup(rest, exam_id)
 

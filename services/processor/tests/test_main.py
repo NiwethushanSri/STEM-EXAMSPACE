@@ -1,11 +1,14 @@
 """main.run and main.process against a fake Supabase client: what is stored, recorded and finished for a job."""
 import hashlib
+import io
 import logging
 import signal
 import threading
 import time
 
+import numpy as np
 import pytest
+from PIL import Image
 
 import synth
 from processor import main, pipeline, supa
@@ -31,10 +34,13 @@ class FakeClient:
     """Records every call. `data` is the upload's bytes; `beats` answers heartbeats; `record` answers record_pages;
     `discarded` is what script_discarded_take lists (each item taken once); `remove_error` is raised by remove."""
 
-    def __init__(self, jobs=(), data=b"", record=None, beats=True, on_download=None, discarded=(), remove_error=None):
+    def __init__(self, jobs=(), data=b"", record=None, beats=True, on_download=None, discarded=(), remove_error=None,
+                 pictures=None, remasked=None):
         self.jobs = list(jobs)
         self.data = data
         self.record = record or {"ok": True, "pages": 0}
+        self.pictures = dict(pictures or {})  # script-pages objects already stored, by path
+        self.remasked = remasked or {"ok": True, "pages": 0}
         self.beats = beats
         self.on_download = on_download
         self.discarded = list(discarded)
@@ -59,7 +65,7 @@ class FakeClient:
         self._log("download", bucket, path)
         if self.on_download:
             self.on_download(self)
-        return self.data
+        return self.pictures[path] if bucket == "script-pages" else self.data
 
     def upload(self, bucket, path, data, content_type):
         self._log("upload", bucket, path, content_type)
@@ -68,6 +74,10 @@ class FakeClient:
     def record_pages(self, job_id, pages, *, worker, attempt, sha256):
         self._log("record_pages", job_id, pages, worker, attempt, sha256)
         return self.record
+
+    def record_remask(self, job_id, pages, *, worker, attempt):
+        self._log("record_remask", job_id, pages, worker, attempt)
+        return self.remasked
 
     def finish(self, job_id, ok, error=None, *, worker, attempt):
         self._log("finish", job_id, ok, error, worker, attempt)
@@ -117,13 +127,13 @@ def test_prepare_job_stores_pictures_and_records_pages():
     assert sha256 == hashlib.sha256(synth.fixture_bytes("copy-a.pdf")).hexdigest()
     assert [(p["source_index"], p["code"], p["copy_page"]) for p in pages] == [(i, synth.CODE_A, i + 1) for i in range(5)]
     for p in pages:
-        assert p["full_path"] == f"{EXAM}/{UPLOAD}/{p['source_index']}-full.jpg"
+        assert p["full_path"] == f"{EXAM}/{UPLOAD}/7/{p['source_index']}-full.jpg"  # the job's own folder
         assert set(p["quality"]) == {"sharpness", "brightness", "cut_off", "flags"} and p["blank"] is False
         assert p["rotation"] == 0
         assert client.stored[p["full_path"]][:2] == b"\xff\xd8"
     # The cover is not an answer page, so it has no marking picture; the answer and spare pages do.
     assert pages[0]["marking_path"] is None
-    assert [p["marking_path"] for p in pages[1:]] == [f"{EXAM}/{UPLOAD}/{i}-marking.jpg" for i in range(1, 5)]
+    assert [p["marking_path"] for p in pages[1:]] == [f"{EXAM}/{UPLOAD}/7/{i}-marking.jpg" for i in range(1, 5)]
     assert all(client.stored[p["marking_path"]][:2] == b"\xff\xd8" for p in pages[1:])
     assert all(c[1] == "script-pages" and c[3] == "image/jpeg" for c in client.named("upload"))
     assert client.named("finish") == [("finish", 7, True, None, "w-1", 2)]
@@ -209,13 +219,122 @@ def test_page_without_marking_picture_records_null(monkeypatch):
     client = FakeClient()
     main.process(client, "w-1", claimed())
     (_, _, pages, _, _, _), = client.named("record_pages")
-    assert [p["marking_path"] for p in pages] == [f"{EXAM}/{UPLOAD}/0-marking.jpg", None]
-    assert f"{EXAM}/{UPLOAD}/1-marking.jpg" not in client.stored
+    assert [p["marking_path"] for p in pages] == [f"{EXAM}/{UPLOAD}/7/0-marking.jpg", None]
+    assert f"{EXAM}/{UPLOAD}/7/1-marking.jpg" not in client.stored
 
 
-def test_remask_jobs_are_not_run_yet():
+def test_page_paths_are_in_the_jobs_own_folder():
+    upload = claimed()["upload"]
+    assert main.page_paths(upload, 12, 3) == (f"{EXAM}/{UPLOAD}/12/3-full.jpg", f"{EXAM}/{UPLOAD}/12/3-marking.jpg")
+
+
+def test_a_rerun_never_overwrites_an_earlier_runs_pictures(monkeypatch):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient()
-    main.process(client, "w-1", claimed(kind="remask"))
+    main.process(client, "w-1", claimed(job_id=7))
+    main.process(client, "w-1", claimed(job_id=8))
+    first, second = ({c[2] for c in client.named("upload") if f"/{j}/" in c[2]} for j in (7, 8))
+    assert first and second and first.isdisjoint(second)
+    assert len(client.named("upload")) == len(first) + len(second)
+
+
+# Remask jobs ---------------------------------------------------------------------------------------------------
+
+FULL_0, FULL_1 = f"{EXAM}/{UPLOAD}/5/0-full.jpg", f"{EXAM}/{UPLOAD}/5/1-full.jpg"
+
+
+def remask_claim(job_id=9, attempts=1):
+    """A remask job's claim: the file's answer pages, each with what its marking picture is made from."""
+    job = claimed(kind="remask", attempts=attempts, job_id=job_id)
+    job["papers"], job["copies"] = [], {}
+    job["pages"] = [
+        {"page_id": "page-0", "source_index": 0, "full_path": FULL_0, "rotation": 90, "turn": 90, "code": synth.CODE_A,
+         "copy_page": 2, "answer": True, "provable": True, "confirmed": False, "key": "k0",
+         "paper_areas": [{"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.05}], "staff_areas": [{"x": 0.5, "y": 0.1, "w": 0.2, "h": 0.1}]},
+        {"page_id": "page-1", "source_index": 1, "full_path": FULL_1, "rotation": 0, "turn": 0, "code": None,
+         "copy_page": None, "answer": True, "provable": False, "confirmed": True, "key": "k1", "paper_areas": [], "staff_areas": []},
+    ]
+    return job
+
+
+def fake_remask(made):
+    calls = []
+
+    def remask(full, rotation, areas, *, staff_areas=(), code=None, copy_page=None, provable=True, confirmed=False):
+        calls.append((full, rotation, areas, list(staff_areas), code, copy_page, provable, confirmed))
+        return made.get(full)
+    return remask, calls
+
+
+def test_remask_job_makes_marking_pictures_from_the_full_pictures_only(monkeypatch):
+    remask, calls = fake_remask({b"full-0": b"new-marking-0"})
+    monkeypatch.setattr(pipeline, "remask", remask)
+    client = FakeClient(pictures={FULL_0: b"full-0", FULL_1: b"full-1"}, remasked={"ok": True, "pages": 2})
+    assert main.process(client, "w-1", remask_claim()) == "done"
+
+    # Only the full pictures are read: the original is never downloaded, and no full picture is written.
+    assert client.named("download") == [("download", "script-pages", FULL_0), ("download", "script-pages", FULL_1)]
+    assert client.named("upload") == [("upload", "script-pages", f"{EXAM}/{UPLOAD}/9/0-marking.jpg", "image/jpeg")]
+    assert client.stored == {f"{EXAM}/{UPLOAD}/9/0-marking.jpg": b"new-marking-0"}
+    assert client.pictures == {FULL_0: b"full-0", FULL_1: b"full-1"}
+    (_, job_id, pages, worker, attempt), = client.named("record_remask")
+    assert (job_id, worker, attempt) == (9, "w-1", 1)
+    assert pages == [
+        {"page_id": "page-0", "marking_path": f"{EXAM}/{UPLOAD}/9/0-marking.jpg", "rotation": 90, "key": "k0"},
+        {"page_id": "page-1", "marking_path": None, "rotation": 0, "key": "k1"},
+    ]
+    assert client.named("record_pages") == []
+    assert client.named("finish") == [("finish", 9, True, None, "w-1", 1)]
+
+
+def test_remask_passes_the_turn_and_every_area(monkeypatch):
+    remask, calls = fake_remask({})
+    monkeypatch.setattr(pipeline, "remask", remask)
+    main.process(FakeClient(pictures={FULL_0: b"full-0", FULL_1: b"full-1"}), "w-1", remask_claim())
+    assert calls[0] == (b"full-0", 90, [pipeline.Area(page=2, x=0.1, y=0.2, w=0.3, h=0.05)],
+                        [pipeline.Area(page=0, x=0.5, y=0.1, w=0.2, h=0.1)], synth.CODE_A, 2, True, False)
+    assert calls[1] == (b"full-1", 0, [], [], None, None, False, True)
+
+
+def test_remask_with_a_real_page_hides_the_band():
+    [page] = [p for p in pipeline.prepare(synth.fixture_bytes("copy-a.pdf"), "scan_file", "application/pdf",
+                                          main.job_context(claimed())) if p.copy_page == 2]
+    job = remask_claim()
+    job["pages"] = [dict(job["pages"][0], turn=0, rotation=0, staff_areas=[])]
+    client = FakeClient(pictures={FULL_0: page.full})
+    assert main.process(client, "w-1", job) == "done"
+    marking = np.asarray(Image.open(io.BytesIO(client.stored[f"{EXAM}/{UPLOAD}/9/0-marking.jpg"])).convert("RGB"))
+    full = np.asarray(Image.open(io.BytesIO(page.full)).convert("RGB"))
+    assert full[:90].min() < 100 and marking[:90].min() > 225 and marking[-300:].min() < 100
+
+
+def test_remask_conflict_is_a_lost_job(monkeypatch):
+    remask, _ = fake_remask({})
+    monkeypatch.setattr(pipeline, "remask", remask)
+    client = FakeClient(pictures={FULL_0: b"full-0", FULL_1: b"full-1"}, remasked={"ok": False, "code": "conflict"})
+    assert main.process(client, "w-1", remask_claim()) == "lost"
+    assert client.named("finish") == []
+
+
+def test_remask_refused_is_a_failure(monkeypatch):
+    remask, _ = fake_remask({})
+    monkeypatch.setattr(pipeline, "remask", remask)
+    client = FakeClient(pictures={FULL_0: b"full-0", FULL_1: b"full-1"}, remasked={"ok": False, "code": "invalid_input"})
+    main.process(client, "w-1", remask_claim())
+    assert client.named("finish") == [("finish", 9, False, "RecordRefused", "w-1", 1)]
+
+
+def test_remask_lost_lock_stops_before_recording(monkeypatch):
+    remask, _ = fake_remask({b"full-0": b"m"})
+    monkeypatch.setattr(pipeline, "remask", remask)
+    client = FakeClient(beats=False, pictures={FULL_0: b"full-0", FULL_1: b"full-1"}, on_download=lambda c: time.sleep(0.3))
+    assert main.process(client, "w-1", remask_claim(), heartbeat_seconds=0.05) == "lost"
+    assert client.named("record_remask") == [] and client.named("finish") == []
+
+
+def test_other_job_kinds_are_not_run():
+    client = FakeClient()
+    main.process(client, "w-1", claimed(kind="archive"))
     assert client.named("download") == []
     assert client.named("finish") == [("finish", 7, False, "UnsupportedJob", "w-1", 1)]
 

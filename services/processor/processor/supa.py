@@ -55,6 +55,11 @@ class Client:
         return self.rpc("script_pages_record", {"p_job": job_id, "p_worker": worker, "p_attempt": attempt,
                                                 "p_sha256": sha256, "p_pages": pages})
 
+    def record_remask(self, job_id: int, pages: list[dict], *, worker: str, attempt: int) -> dict:
+        """Hands a remask job's new marking pictures, [{page_id, marking_path|null, rotation, key}], to
+        script_pages_remasked. {ok:false, code:'conflict'} when the job was lost."""
+        return self.rpc("script_pages_remasked", {"p_job": job_id, "p_worker": worker, "p_attempt": attempt, "p_pages": pages})
+
     def finish(self, job_id: int, ok: bool, error: str | None = None, *, worker: str, attempt: int) -> dict:
         return self.rpc("processing_job_finish",
                         {"p_job": job_id, "p_worker": worker, "p_attempt": attempt, "p_ok": ok, "p_error": error})
@@ -77,7 +82,7 @@ class Client:
         return r.content
 
     def upload(self, bucket: str, path: str, data: bytes, content_type: str) -> None:
-        """Stores (or replaces: a rerun writes the same paths) one object."""
+        """Stores one object (replacing it: a retried attempt of a job writes its own paths again)."""
         r = self._http.post(f"/storage/v1/object/{bucket}/{quote(path)}", content=data,
                             headers={"Content-Type": content_type, "x-upsert": "true"})
         _check(r, "upload")

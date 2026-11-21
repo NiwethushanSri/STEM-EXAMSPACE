@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, messageFor, scanMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -191,5 +191,27 @@ describe("exceptionMessageFor", () => {
     expect(exceptionMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(exceptionMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(exceptionMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("scriptMessageFor", () => {
+  it("maps each code of the script repository", () => {
+    expect(scriptMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(scriptMessageFor("script_locked")).toContain("being marked");
+    expect(scriptMessageFor("page_replaced")).toContain("processed again");
+    expect(scriptMessageFor("not_found")).toContain("Refresh");
+    expect(scriptMessageFor("invalid_input")).toContain("Check");
+    expect(scriptMessageFor("forbidden")).toBe("You do not have permission to do that.");
+  });
+  it("says why a conflict was refused", () => {
+    expect(scriptMessageFor("conflict", "busy")).toContain("already waiting");
+    expect(scriptMessageFor("conflict", "void")).toContain("already void");
+    expect(scriptMessageFor("conflict", "changed")).toContain("changed");
+    expect(scriptMessageFor("conflict")).toContain("changed");
+  });
+  it("falls back to the generic message", () => {
+    expect(scriptMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(scriptMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(scriptMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });

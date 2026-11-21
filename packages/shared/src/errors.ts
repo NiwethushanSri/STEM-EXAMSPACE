@@ -302,3 +302,25 @@ const exceptionMessages: Record<string, string> = {
 export function exceptionMessageFor(code: string | null | undefined): string {
   return code && Object.hasOwn(exceptionMessages, code) ? exceptionMessages[code] : messages.internal;
 }
+
+/** Failure codes of the script repository (script_page_rotate, script_upload_reprocess, script_void,
+ * script_page_remove, scripts_list, script_detail). A conflict says why in `reason`. */
+const scriptMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  reason_required: "Give a reason of 3 to 300 characters.",
+  invalid_input: "Check the details and try again.",
+  not_found: "This could not be found. Refresh the page.",
+  page_replaced: "This file has been processed again. Refresh the page.",
+  script_locked: "This script is being marked or has been marked, so its pages can no longer change.",
+};
+const scriptConflicts: Record<string, string> = {
+  busy: "This file is already waiting to be processed, or is being processed now. Wait until it has finished.",
+  void: "This script is already void.",
+  changed: "This script changed while you were working. Refresh the page and try again.",
+};
+
+/** Message for a script repository RPC failure code (and a conflict's reason); unknown codes get the generic message. */
+export function scriptMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") return reason && Object.hasOwn(scriptConflicts, reason) ? scriptConflicts[reason] : scriptConflicts.changed;
+  return code && Object.hasOwn(scriptMessages, code) ? scriptMessages[code] : messages.internal;
+}

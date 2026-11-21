@@ -79,7 +79,8 @@ select is((select count(*)::int from public.paper_hidden_areas where paper_id = 
 
 -- A good call reports the pages that changed.
 select is(public.set_paper_hidden_areas(pg_temp.k('v1'), '[{"page":1,"x":0.1,"y":0.1,"w":0.3,"h":0.05},{"page":3,"x":0,"y":0.9,"w":1,"h":0.1}]'),
-  '{"ok": true, "changed_pages": [1, 3]}'::jsonb, 'areas are set and the changed pages reported');
+  '{"ok": true, "changed_pages": [1, 3], "remask_queued": 0}'::jsonb,
+  'areas are set and the changed pages reported (no script page to make again here)');
 select is(public.set_paper_hidden_areas(pg_temp.k('v1'), '[{"page":1,"x":0.1,"y":0.1,"w":0.3,"h":0.05}]') -> 'changed_pages', '[3]'::jsonb, 'only the page that changed is reported');
 select is(public.set_paper_hidden_areas(pg_temp.k('v1'), '[{"page":1,"x":0.1,"y":0.1,"w":0.3,"h":0.05}]') -> 'changed_pages', '[]'::jsonb, 'saving the same areas changes no pages');
 select is(public.paper_page_layout(pg_temp.k('v1')) -> 'pages', '[{"page":1,"role":"cover"},{"page":2,"role":"answer"},{"page":3,"role":"information"}]'::jsonb, 'the layout lists the pages');

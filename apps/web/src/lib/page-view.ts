@@ -1,5 +1,5 @@
 /** How the staff page viewer zooms and turns the view. Turning only changes the view: the stored picture and its
- * rotation stay as they are (rotating a page for good comes with the script repository). */
+ * rotation stay as they are (staff turn a page for good on the script page: script_page_rotate). */
 
 /** Signed links to page pictures last this long; the viewer asks for a new one when the picture fails to load. */
 export const SIGNED_URL_SECONDS = 300;

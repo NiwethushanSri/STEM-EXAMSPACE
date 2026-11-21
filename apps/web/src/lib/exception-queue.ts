@@ -186,6 +186,9 @@ function parseItem(v: unknown): QueueItem | null {
   };
 }
 
+/** One exception as the queue (and the script repository's detail) answers it, or null when it is not one. */
+export const parseQueueItem = (v: unknown): QueueItem | null => parseItem(v);
+
 /** script_exceptions_list's answer, or null for a failure or an answer that is not one. Malformed items are left out. */
 export function parseQueue(data: unknown): { items: QueueItem[]; more: boolean } | null {
   if (!isObject(data) || data.ok !== true || !Array.isArray(data.items)) return null;
@@ -314,7 +317,7 @@ const ACTIONS: Record<ExceptionKind, QueueAction[]> = {
   processing_failed: ["confirm", "reject"],
 };
 
-/** A remask job that failed (expected until the script repository makes marking pictures): not the family's file. */
+/** A remask job (re-making marking pictures) that failed for good: not the family's file. */
 export const isRemaskFailure = (item: QueueItem) => item.kind === "processing_failed" && item.details.kind === "remask";
 
 /** The actions that fit an open exception (none once resolved). A remask failure can only be noted. */
