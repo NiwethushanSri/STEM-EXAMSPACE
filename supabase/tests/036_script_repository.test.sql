@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(164);
+select plan(173);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -685,7 +685,219 @@ select is(pg_temp.scenario('s_xr'),
   '1:0@u4b,2:1@u4b,3:2@u4b,4:3@u4b ok recorded:4 1:0@u4b,2:1@u4b,3:2@u4b,4:3@u4b stale=0 | rejected 1:0@u4,2:1@u4,3:2@u4,4:3@u4 '
   || '1:home_submission:d4:sys,2:home_submission:d4b:sys,3:submission_rejected:-:staff stale=0/0 current=true stale=0 twice=0 bare=0 orphans=0',
   'R35 (xR): rejecting the later hand-in restores the earlier version with the file''s current pages, never the replaced ones');
-select is(concat_ws(' ', pg_temp.links('b1'), pg_temp.state('b1'), (select count(*) from kv where name in ('u2', 'u9', 'u11', 'u4b')),
+-- ---------------------------------------------------------------------------------------------
+-- R37: the record locks the file's pages before it checks for staff work; a page is never in two scripts; a script
+-- being marked does not change through a family; a slot a version write leaves out is told to staff.
+-- ---------------------------------------------------------------------------------------------
+-- A home script's extra pages as <source index>@<upload>><placed after>.
+create function pg_temp.extras(p_b text) returns text language sql stable as $$
+  select coalesce(string_agg(p.source_index || '@' || pg_temp.kname(p.upload_id) || '>' || x.placed_after, ',' order by x.placed_after, p.source_index), 'none')
+  from public.script_extra_pages(pg_temp.sid(p_b)) x join public.script_pages p on p.id = x.page_id $$;
+-- A booking's open exceptions as <kind>[:<reason>][:<pages>][@<source index>@<upload>], in order.
+create function pg_temp.opens(p_b text) returns text language sql stable as $$
+  select coalesce(string_agg(concat_ws(':', e.kind, e.details ->> 'reason', nullif(e.details ->> 'pages', ''))
+           || coalesce('@' || p.source_index || '@' || pg_temp.kname(p.upload_id), ''), ',' order by e.kind::text, p.source_index), 'none')
+  from public.script_exceptions e left join public.script_pages p on p.id = e.page_id
+  where e.booking_id = pg_temp.k(p_b) and e.state = 'open' $$;
+grant execute on function pg_temp.extras(text), pg_temp.opens(text) to public;
+
+-- R37 (1): staff may work on a file while its reprocess job waits. An area saved before the record is seen by its
+-- check (the record holds the page rows by then): the pages are kept, with the area.
+create function pg_temp.s_lock() returns text language plpgsql as $$
+declare
+  v_page uuid := pg_temp.pid('u1', 2);
+  v text;
+  r jsonb;
+begin
+  v := pg_temp.ask('u1');
+  r := pg_temp.as_admin($q$select public.script_page_set_hidden_areas(pg_temp.pid('u1', 2), '[{"x":0.02,"y":0.4,"w":0.05,"h":0.3}]', 'Name in the margin')$q$);
+  r := pg_temp.run('u1', pg_temp.u1pages());
+  return concat_ws(' ', v, 'kept=' || coalesce(r ->> 'kept', 'false') || ':' || coalesce(r ->> 'reason', '-'), 'same=' || (pg_temp.pid('u1', 2) = v_page),
+    pg_temp.seen(v_page), pg_temp.safe());
+end $$;
+-- R37 (1): a save that comes after the record lands on a page already replaced, and is refused.
+create function pg_temp.s_lock_after() returns text language plpgsql as $$
+declare
+  v_page uuid := pg_temp.pid('u1', 2);
+  v text;
+  r jsonb;
+begin
+  v := pg_temp.ask('u1');
+  r := pg_temp.run('u1', pg_temp.u1pages());
+  v := concat_ws(' ', v, 'recorded:' || (r ->> 'pages'), 'same=' || (pg_temp.pid('u1', 2) = v_page));
+  perform tests.as_user(pg_temp.uid('admin'));
+  r := public.script_page_set_hidden_areas(v_page, '[{"x":0.02,"y":0.4,"w":0.05,"h":0.3}]', 'Name in the margin');
+  perform tests.as_postgres();
+  return concat_ws(' ', v, 'save=' || (pg_temp.code(r) in ('page_replaced', 'not_found')),
+    'areas=' || (select count(*) from public.script_page_hidden_areas a join public.script_pages p on p.id = a.page_id where p.upload_id = pg_temp.k('u1')),
+    pg_temp.safe());
+end $$;
+
+-- R37 (2), probe xT: u2 holds b1's page 3 again, sharper, and takes slot 3 (u1's page 3 is set aside as a duplicate).
+-- Staff put that duplicate in b2's spare slot 6. u2 is then processed again and reads as page 5: its undo brings back
+-- b1's first version, which showed the page b2 now has.
+create function pg_temp.s_xt() returns text language plpgsql as $$
+declare
+  v text;
+  r jsonb;
+begin
+  perform pg_temp.scan_file('u2', 'e', 'bt');
+  perform pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 3), '{quality,sharpness}', '400')));
+  r := pg_temp.as_admin($q$select public.script_exception_assign(pg_temp.exc('u1', 2, 'duplicate'), pg_temp.k('b2'), 6, 'It is the other candidate''s')$q$);
+  v := concat_ws(' ', pg_temp.code(r), pg_temp.links('b1'), '/', pg_temp.links('b2'), pg_temp.ask('u2'));
+  r := pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 5), '{quality,sharpness}', '400')));
+  return concat_ws(' ', v, 'recorded:' || (r ->> 'pages'), pg_temp.links('b1'), '/', pg_temp.links('b2'), 'u1#2=' || (pg_temp.pg('u1', 2)).state,
+    'b1 open=' || pg_temp.opens('b1'),
+    'other=' || (select pg_temp.kname(s.booking_id) from public.script_exceptions e join public.scripts s on s.id = (e.details ->> 'other_script_id')::uuid
+                 where e.page_id = pg_temp.pid('u1', 2) and e.kind = 'duplicate' and e.state = 'open'),
+    'shared=' || public.script_shared_links(pg_temp.sid('b1')) + public.script_shared_links(pg_temp.sid('b2')), pg_temp.safe());
+end $$;
+-- R37 (2): the rule is central: whoever writes a version, a page another script shows is left out and raised.
+create function pg_temp.s_central() returns text language plpgsql as $$
+declare
+  v_other uuid := pg_temp.pid('u1', 5);  -- b2's page 3
+  v boolean;
+begin
+  v := public.script_version_write(pg_temp.sid('b1'), public.script_links(pg_temp.sid('b1')) || jsonb_build_object('6', v_other), null, null, 'test', now());
+  return concat_ws(' ', 'written=' || v, pg_temp.links('b1'), 'b1 open=' || pg_temp.opens('b1'), pg_temp.safe());
+end $$;
+
+-- R37 (3), probe hL: b3's script starts being marked while the family has a draft open. The family can start and hand
+-- in nothing more. Even a hand-in that got through at the same moment (forced here) changes nothing: the file is read,
+-- but its pages are not linked, its page with no code is not offered for placing, and the extra page markers had stays.
+create function pg_temp.s_hl() returns text language plpgsql as $$
+declare
+  v text;
+  v_before text;
+  v_page uuid;
+  r jsonb;
+begin
+  perform tests.as_user(pg_temp.uid('s3'));
+  r := public.home_submission_open(pg_temp.k('b3'), true, '2031-08-04 10:50Z');
+  insert into kv values ('d3b', (r ->> 'submission_id')::uuid);
+  r := public.script_upload_begin(pg_temp.k('d3b'), 'home_pdf', 'application/pdf', 5000, '2031-08-04 10:50Z');
+  insert into kv values ('u3b', (r ->> 'upload_id')::uuid);
+  perform tests.as_postgres();
+  insert into storage.objects (bucket_id, name, metadata)
+  values ('script-uploads', r ->> 'storage_path', jsonb_build_object('size', 5000, 'mimetype', 'application/pdf'));
+  perform tests.as_user(pg_temp.uid('s3'));
+  perform public.script_upload_stored(pg_temp.k('u3b'));
+  perform tests.as_postgres();
+
+  update public.scripts set state = 'marking' where booking_id = pg_temp.k('b3');
+  v_before := concat_ws('|', pg_temp.links('b3'), pg_temp.vers('b3'), pg_temp.extras('b3'));
+  v := 'extras=' || pg_temp.extras('b3');
+  perform tests.as_user(pg_temp.uid('s3'));
+  v := concat_ws(' ', v, 'open=' || pg_temp.code(public.home_submission_open(pg_temp.k('b3'), true, '2031-08-04 11:00Z')),
+    'submit=' || pg_temp.code(public.home_submission_submit(pg_temp.k('d3b'), '2031-08-04 11:00Z')));
+  perform tests.as_postgres();
+  -- The hand-in that slipped through: handed in and queued, as home_submission_submit would have left it.
+  update public.home_submissions set state = 'checking', submitted_by = pg_temp.uid('s3'), submitted_at = '2031-08-04 11:00Z' where id = pg_temp.k('d3b');
+  update public.script_uploads set state = 'queued' where id = pg_temp.k('u3b');
+  insert into public.processing_jobs (upload_id, kind) values (pg_temp.k('u3b'), 'prepare');
+  v := concat_ws(' ', v, 'forced extras=' || pg_temp.extras('b3'));
+  r := pg_temp.run('u3b', jsonb_build_array(pg_temp.pp('u3b', 0, 'q3', 1), pg_temp.pp('u3b', 1, 'q3', 2), pg_temp.pp('u3b', 2, 'q3', 3),
+    pg_temp.pp('u3b', 3, 'q3', 4), pg_temp.pp('u3b', 4, null, null)));
+  v_page := pg_temp.pid('u3b', 4);
+  v := concat_ws(' ', v, 'recorded:' || (r ->> 'pages') || '/' || (r ->> 'matched'),
+    'no code=' || (pg_temp.pg('u3b', 4)).state || ':' || (select e.kind || ':' || (e.details ->> 'reason') from public.script_exceptions e
+                                                         where e.page_id = v_page and e.state = 'open'));
+  perform tests.as_user(pg_temp.uid('s3'));
+  v := concat_ws(' ', v, 'place=' || pg_temp.code(public.home_page_place(v_page, 2)));
+  perform tests.as_postgres();
+  return concat_ws(' ', v, 'unchanged=' || (concat_ws('|', pg_temp.links('b3'), pg_temp.vers('b3'), pg_temp.extras('b3')) = v_before),
+    'extras=' || pg_temp.extras('b3'), pg_temp.state('b3'),
+    'extra mk=' || (select bool_and(p.marking_path is not null) from public.script_extra_pages(pg_temp.sid('b3')) x join public.script_pages p on p.id = x.page_id),
+    pg_temp.safe());
+end $$;
+-- R37 (3): a page the family placed before marking began (not yet confirmed) is not confirmed into the script, and
+-- cannot be placed again.
+create function pg_temp.s_hl2() returns text language plpgsql as $$
+declare
+  v text;
+  v_before text;
+  v_page uuid;
+  v_exc uuid;
+  r jsonb;
+begin
+  -- A second hand-in, read: its page with no code is placed by the family and waits for staff.
+  perform pg_temp.hand_in('s3', 'b3', 'd3b', 'u3b', '2031-08-04 10:50Z', '2031-08-04 10:55Z');
+  perform pg_temp.run('u3b', jsonb_build_array(pg_temp.pp('u3b', 0, 'q3', 1), pg_temp.pp('u3b', 1, 'q3', 2), pg_temp.pp('u3b', 2, 'q3', 3),
+    pg_temp.pp('u3b', 3, 'q3', 4), pg_temp.pp('u3b', 4, null, null)));
+  v_page := pg_temp.pid('u3b', 4);
+  perform tests.as_user(pg_temp.uid('s3'));
+  r := public.home_page_place(v_page, 3);
+  perform tests.as_postgres();
+  v_exc := pg_temp.exc('u3b', 4, 'uncoded_family_page');
+  v := 'placed=' || pg_temp.code(r);
+
+  update public.scripts set state = 'ready_to_mark' where booking_id = pg_temp.k('b3');
+  v_before := concat_ws('|', pg_temp.links('b3'), pg_temp.vers('b3'), pg_temp.extras('b3'));
+  perform tests.as_user(pg_temp.uid('s3'));
+  v := concat_ws(' ', v, 'place=' || pg_temp.code(public.home_page_place(v_page, 2)));
+  perform tests.as_postgres();
+  perform tests.as_user(pg_temp.uid('admin'));
+  v := concat_ws(' ', v, 'confirm=' || pg_temp.code(public.script_exception_confirm(v_exc, 'Working', true)));
+  perform tests.as_postgres();
+  -- Even a confirmation written straight into the table adds nothing to what markers see.
+  update public.script_exceptions set state = 'resolved', resolution = 'confirmed', resolved_at = now() where id = v_exc;
+  return concat_ws(' ', v, 'after=' || (select placed_after from public.script_pages where id = v_page),
+    'unchanged=' || (concat_ws('|', pg_temp.links('b3'), pg_temp.vers('b3'), pg_temp.extras('b3')) = v_before),
+    'extras=' || pg_temp.extras('b3'), pg_temp.state('b3'), pg_temp.safe());
+end $$;
+
+-- R37 (4), probe xR2: b4 hands in again (with a page of an unknown code); its first file is then processed again and
+-- reads only pages 1 to 3; staff reject the second hand-in. The first version comes back without page 4, and staff
+-- are told page 4 is missing.
+create function pg_temp.s_xr2() returns text language plpgsql as $$
+declare
+  v text;
+  r jsonb;
+begin
+  perform pg_temp.hand_in('s4', 'b4', 'd4b', 'u4b', '2031-08-04 13:10Z', '2031-08-04 13:15Z');
+  perform pg_temp.run('u4b', jsonb_build_array(pg_temp.pp('u4b', 0, 'q4', 1), pg_temp.pp('u4b', 1, 'q4', 2),
+    pg_temp.pp('u4b', 2, 'q4', 3), pg_temp.pp('u4b', 3, 'q4', 4),
+    jsonb_set(pg_temp.pp('u4b', 4, 'q4', 4), '{code}', '"ZZZZ-NOT-A-CODE"')));
+  v := pg_temp.ask('u4');
+  r := pg_temp.run('u4', jsonb_build_array(pg_temp.pp('u4', 0, 'q4', 1), pg_temp.pp('u4', 1, 'q4', 2), pg_temp.pp('u4', 2, 'q4', 3)));
+  v := concat_ws(' ', v, 'recorded:' || (r ->> 'pages'), pg_temp.links('b4'), '|');
+  v := concat_ws(' ', v, pg_temp.as_admin($q$select public.script_exception_reject(pg_temp.exc('u4b', 4, 'unknown_code'), 'Not her paper; the first hand-in stands')$q$) ->> 'resolution');
+  return concat_ws(' ', v, pg_temp.links('b4'), pg_temp.state('b4'), 'open=' || pg_temp.opens('b4'), pg_temp.safe());
+end $$;
+
+select is(pg_temp.scenario('s_lock'), 'ok kept=true:hidden_areas same=true areas=1 mk=true replaced=false shown=1 stale=0 twice=0 bare=0 orphans=0',
+  'R37 (1): an area staff saved while the reprocess job waited is seen by the record''s check: the pages are kept, with the area');
+select is(pg_temp.scenario('s_lock_after'), 'ok recorded:10 same=false save=true areas=0 stale=0 twice=0 bare=0 orphans=0',
+  'R37 (1): an area saved after the record lands on a replaced page and is refused');
+-- The lock order script_pages_record documents: the job's row, the file's row, the bookings' advisory locks, the file's
+-- current page rows (id order), and only then the check for staff work. script_page_set_hidden_areas takes the file's
+-- row before the page's row, so the two wait for each other in one order.
+select ok((select position('from public.script_uploads u where u.id = v_job.upload_id for update' in d) > 0
+             and position('from public.script_uploads u where u.id = v_job.upload_id for update' in d) < position('pg_advisory_xact_lock' in d)
+             and position('pg_advisory_xact_lock' in d) < position('order by p.id for update' in d)
+             and position('order by p.id for update' in d) < position('script_upload_staff_changes(v_up.id, false)' in d)
+           from (select pg_get_functiondef('public.script_pages_record(bigint,text,integer,text,jsonb,timestamptz)'::regprocedure) d) t)
+      and (select position('for no key update' in d) > 0 and position('for no key update' in d) < position('where p.id = p_page for update' in d)
+           from (select pg_get_functiondef('public.script_page_set_hidden_areas(uuid,jsonb,text)'::regprocedure) d) t),
+  'R37 (1): the record locks the file''s page rows before it checks for staff work; a staff area save takes the file''s row first');
+select is(pg_temp.scenario('s_xt'),
+  'ok 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 2:4@u1,3:5@u1,4:6@u1,6:2@u1 ok recorded:1 1:0@u1,2:1@u1,4:3@u1,5:0@u2 / 2:4@u1,3:5@u1,4:6@u1,6:2@u1 u1#2=duplicate '
+  || 'b1 open=duplicate:in_other_script@2@u1,missing_pages:in_other_script:[3] other=b2 shared=0 stale=0 twice=0 bare=0 orphans=0',
+  'R37 (2, xT): a rerun''s undo never puts a page back that staff have since placed in another script: it stays there, and staff are told');
+select is(pg_temp.scenario('s_central'),
+  'written=false 1:0@u1,2:1@u1,3:2@u1,4:3@u1 b1 open=duplicate:in_other_script@5@u1,missing_pages:in_other_script:[6] stale=0 twice=0 bare=0 orphans=0',
+  'R37 (2): whoever writes a version, a page another script shows is left out of it and raised as a duplicate');
+select is(pg_temp.scenario('s_hl'),
+  'extras=4@u3>2 open=script_locked submit=script_locked forced extras=4@u3>2 recorded:5/0 no code=rejected:not_expected:script_locked place=script_locked '
+  || 'unchanged=true extras=4@u3>2 marking extra mk=true stale=0 twice=0 bare=0 orphans=0',
+  'R37 (3, hL): a script being marked does not change through a family: no new hand-in, no placing, and its extra pages stay');
+select is(pg_temp.scenario('s_hl2'),
+  'placed=ok place=script_locked confirm=script_locked after=3 unchanged=true extras=none ready_to_mark stale=0 twice=0 bare=0 orphans=0',
+  'R37 (3): a page the family placed is not placed again or confirmed into a script being marked');
+select is(pg_temp.scenario('s_xr2'),
+  'ok recorded:3 1:0@u4b,2:1@u4b,3:2@u4b,4:3@u4b | rejected 1:0@u4,2:1@u4,3:2@u4 needs_attention open=late,missing_pages:reprocessed:[4] stale=0 twice=0 bare=0 orphans=0',
+  'R37 (4, xR2): a slot a restored version can no longer show is told to staff (missing_pages), whoever writes the version');
+select is(concat_ws(' ', pg_temp.links('b1'), pg_temp.state('b1'), (select count(*) from kv where name in ('u2', 'u9', 'u11', 'u4b', 'u3b')),
     (select count(*) from public.script_page_hidden_areas a join public.script_pages p on p.id = a.page_id where p.exam_id = pg_temp.k('e'))),
   '1:0@u1,2:1@u1,3:2@u1,4:3@u1 receiving 0 0', 'the scenarios left nothing behind');
 
@@ -715,6 +927,19 @@ select ok(not exists (select 1 from unnest(array[
     'public.script_version_write(uuid,jsonb,uuid,uuid,text,timestamp with time zone)', 'public.script_page_marking_made(uuid)']) f,
   unnest(array['anon', 'authenticated', 'service_role']) r where has_function_privilege(r, f, 'execute')),
   'R35: the reprocess helpers are internal, and the re-created ones keep their access');
+select ok(not exists (select 1 from unnest(array[
+    'public.script_booking_locked(uuid)', 'public.script_page_elsewhere(uuid,uuid)', 'public.script_shared_links(uuid)',
+    'public.script_slots_dropped(uuid,jsonb,jsonb,uuid)', 'public.script_extras_lock()', 'public.script_extra_pages(uuid)',
+    'public.script_links_current(uuid,jsonb)', 'public.script_version_write(uuid,jsonb,uuid,uuid,text,timestamp with time zone)']) f,
+  unnest(array['anon', 'authenticated', 'service_role']) r where has_function_privilege(r, f, 'execute'))
+  and not exists (select 1 from unnest(array[
+    'public.home_submission_open(uuid,boolean,timestamp with time zone)', 'public.home_submission_submit(uuid,timestamp with time zone)',
+    'public.home_page_place(uuid,integer)', 'public.script_exception_confirm(uuid,text,boolean)',
+    'public.script_page_set_hidden_areas(uuid,jsonb,text)']) f
+  where has_function_privilege('anon', f, 'execute') or not has_function_privilege('authenticated', f, 'execute'))
+  and has_function_privilege('service_role', 'public.script_pages_record(bigint,text,integer,text,jsonb,timestamp with time zone)', 'execute')
+  and not has_function_privilege('authenticated', 'public.script_pages_record(bigint,text,integer,text,jsonb,timestamp with time zone)', 'execute'),
+  'R37: the new helpers are internal, and the re-created functions keep their access');
 select ok(has_function_privilege('service_role', 'public.script_pages_record(bigint,text,integer,text,jsonb,timestamp with time zone)', 'execute')
       and not has_function_privilege('authenticated', 'public.script_pages_record(bigint,text,integer,text,jsonb,timestamp with time zone)', 'execute'),
   'script_pages_record stays the processing server''s');

@@ -114,6 +114,11 @@ describe("foundInWords", () => {
     expect(words[0]).toBe("Page 2 was scanned more than once. The clearer page was kept and this one set aside.");
     expect(words[1]).toBe("This page is from version 2 of the paper; the page kept is from version 1.");
   });
+  it("says when a page was left out because another script shows it", () => {
+    const words = foundInWords(item({ details: { copy_page: 3, reason: "in_other_script", other_script_id: "s-2" } }));
+    expect(words[0]).toBe("Page 3 is already in another candidate's script, so it was left out of this one.");
+    expect(words[1]).toContain("one script only");
+  });
   it("describes poor quality and a page sent as it is", () => {
     const words = foundInWords(
       item({ kind: "poor_quality", details: { flags: ["blurred", "dark"], copy_page: 4, marking_picture: true, from: "family" } }),

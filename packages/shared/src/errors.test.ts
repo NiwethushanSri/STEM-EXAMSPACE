@@ -118,6 +118,7 @@ describe("uploadMessageFor", () => {
     expect(uploadMessageFor("still_uploading")).toContain("still uploading");
     expect(uploadMessageFor("nothing_to_submit")).toContain("at least one");
     expect(uploadMessageFor("wrong_sitting")).toContain("centre");
+    expect(uploadMessageFor("script_locked")).toBe("Your answers are already being marked.");
     expect(uploadMessageFor("conflict")).toContain("Refresh");
   });
   it("falls back to the generic message", () => {

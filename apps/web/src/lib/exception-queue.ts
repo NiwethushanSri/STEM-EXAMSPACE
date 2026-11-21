@@ -248,6 +248,12 @@ function foundWords(item: QueueItem): string[] {
     case "not_expected":
       return [NOT_EXPECTED[str(d.reason) ?? ""] ?? "This page belongs to a candidate who was not expected in this file."];
     case "duplicate": {
+      if (str(d.reason) === "in_other_script") {
+        return [
+          `${pageWord} is already in another candidate's script, so it was left out of this one.`,
+          "A page can be in one script only: keep it where it is, or take it out of the other script first and then use it here.",
+        ];
+      }
       const out = [`${pageWord} was scanned more than once. The clearer page was kept and this one set aside.`];
       const a = item.page?.paperVersion ?? null;
       const b = item.keptPage?.paperVersion ?? null;

@@ -192,6 +192,7 @@ const uploadMessages: Record<string, string> = {
   still_uploading: "Some files are still uploading. Wait until every file shows as uploaded, or delete it.",
   nothing_to_submit: "Add at least one photo or PDF before you submit.",
   wrong_sitting: "Your booking is for the centre; your answers are collected in the exam room.",
+  script_locked: "Your answers are already being marked.",
   not_found: "The file did not arrive. Please try again.",
   invalid_input: "That did not work. Please check and try again.",
   conflict: "This has already changed. Refresh the page to see where it stands.",

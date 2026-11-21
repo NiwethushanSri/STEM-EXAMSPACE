@@ -223,6 +223,39 @@ def test_page_without_marking_picture_records_null(monkeypatch):
     assert f"{EXAM}/{UPLOAD}/7-1/1-marking.jpg" not in client.stored
 
 
+def test_kept_rerun_deletes_the_pictures_it_stored(monkeypatch):
+    """The database kept the file's pages as they were (staff worked on them while the job waited): no page row
+    names this job's pictures, so they are deleted again, and the job is done."""
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    client = FakeClient(record={"ok": True, "kept": True, "reason": "hidden_areas", "pages": 2})
+    assert main.process(client, "w-1", claimed()) == "done"
+    stored = [f"{EXAM}/{UPLOAD}/7-1/0-full.jpg", f"{EXAM}/{UPLOAD}/7-1/0-marking.jpg", f"{EXAM}/{UPLOAD}/7-1/1-full.jpg"]
+    assert [c[2] for c in client.named("upload")] == stored
+    assert client.named("remove") == [("remove", "script-pages", stored)]
+    names = [c[0] for c in client.calls]
+    assert names.index("record_pages") < names.index("remove") < names.index("finish")  # only once the database said so
+    assert client.named("finish") == [("finish", 7, True, None, "w-1", 1)]
+
+
+def test_kept_rerun_is_done_even_when_the_pictures_cannot_be_deleted(monkeypatch):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    client = FakeClient(record={"ok": True, "kept": True, "reason": "script_locked", "pages": 2},
+                        remove_error=RuntimeError("storage down"))
+    assert main.process(client, "w-1", claimed()) == "done"
+    assert len(client.named("remove")) == 1
+    assert client.named("finish") == [("finish", 7, True, None, "w-1", 1)]
+
+
+def test_recorded_pages_keep_their_pictures(monkeypatch):
+    """A record that replaced the pages (not kept), a refused one and a lost job delete nothing."""
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    for record in ({"ok": True, "pages": 2}, {"ok": True, "kept": False, "pages": 2}, {"ok": False, "code": "invalid_input"},
+                   {"ok": False, "code": "conflict"}):
+        client = FakeClient(record=record)
+        main.process(client, "w-1", claimed())
+        assert client.named("remove") == []
+
+
 def test_page_paths_are_in_the_folder_of_the_job_and_attempt():
     upload = claimed()["upload"]
     assert main.page_paths(upload, 12, 2, 3) == (f"{EXAM}/{UPLOAD}/12-2/3-full.jpg", f"{EXAM}/{UPLOAD}/12-2/3-marking.jpg")

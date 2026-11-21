@@ -128,7 +128,10 @@ class _Heartbeat:
 def _prepare(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> int:
     """A prepare job: downloads the original and hashes it (SHA-256, recorded with the pages; a hash that differs from
     the one an earlier run recorded fails the job before any picture is stored, and the database checks it again),
-    prepares and stores the pages in the job's folder and records them. Returns the page count."""
+    prepares and stores the pages in the job's folder and records them. When the database answers that it kept the
+    file's pages as they were (kept: staff worked on them, or a script being marked shows them, while the job waited),
+    no page row names this job's pictures, so they are deleted again (a failure to delete is logged, never fails the
+    job). Returns the page count."""
     job, upload = claimed["job"], claimed["upload"]
     data = client.download(UPLOADS, upload["storage_path"])
     sha256 = hashlib.sha256(data).hexdigest()
@@ -136,12 +139,15 @@ def _prepare(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> in
         raise OriginalChanged()  # before any picture is stored
     beat.check()
     pages = []
+    stored: list[str] = []
     for page in pipeline.iter_prepare(data, upload["kind"], upload["mime"], job_context(claimed)):
         beat.check()
         full_path, marking_path = page_paths(upload, job["id"], job["attempts"], page.source_index)
         client.upload(PAGES, full_path, page.full, "image/jpeg")
+        stored.append(full_path)
         if page.marking is not None:
             client.upload(PAGES, marking_path, page.marking, "image/jpeg")
+            stored.append(marking_path)
         pages.append(page_record(page, full_path, marking_path if page.marking is not None else None))
     beat.check()
     result = client.record_pages(job["id"], pages, worker=worker_id, attempt=job["attempts"], sha256=sha256)
@@ -151,6 +157,11 @@ def _prepare(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> in
                 raise OriginalChanged()
             raise LostJob()
         raise RecordRefused()
+    if result.get("kept") and stored:
+        try:
+            client.remove(PAGES, stored)
+        except Exception as exc:  # the pictures are named by no page row; they only take up room
+            log.warning("job %s: could not delete %d unused pictures: %s", job["id"], len(stored), type(exc).__name__)
     return len(pages)
 
 
