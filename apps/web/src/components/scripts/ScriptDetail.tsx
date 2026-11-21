@@ -19,6 +19,7 @@ import {
   pagesEditable,
   remaskPending,
   reprocessable,
+  reprocessRefusal,
   stateText,
   turnText,
   versionReason,
@@ -287,7 +288,17 @@ export function ScriptDetailView({ detail }: { detail: ScriptDetail }) {
                   </span>
                 </div>
                 {u.jobs.length > 0 && <p className="text-xs text-slate-500">Latest: {jobText(u.jobs[0])}</p>}
-                {reprocessable(u, s.state) && (
+                {reprocessable(u, s.state) && reprocessRefusal(u, s.state) && (
+                  <div className="rounded border border-slate-200 p-3">
+                    <button type="button" className="cursor-not-allowed text-sm font-medium text-slate-400" disabled aria-describedby={`no-reprocess-${u.id}`}>
+                      Process this file again
+                    </button>
+                    <p id={`no-reprocess-${u.id}`} className="mt-2 text-sm text-slate-600">
+                      {reprocessRefusal(u, s.state)}
+                    </p>
+                  </div>
+                )}
+                {reprocessable(u, s.state) && !reprocessRefusal(u, s.state) && (
                   <details className="rounded border border-slate-200 p-3">
                     <summary className="cursor-pointer text-sm font-medium text-blue-800">Process this file again</summary>
                     <p className="my-2 text-sm text-slate-600">

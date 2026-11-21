@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(162);
+select plan(164);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -597,6 +597,45 @@ begin
     'checks about it=' || (select count(*) from public.script_exceptions where page_id = v_old), pg_temp.links('b4'), pg_temp.safe());
 end $$;
 
+-- R36 (1): a slot staff filled keeps its page against a page scanned later for it. Staff place u1's page with no code
+-- in b1's spare slot 6; a new scanner file then holds b1's own page 6, sharper.
+create function pg_temp.s_slot() returns text language plpgsql as $$
+declare
+  v_staff uuid := pg_temp.pid('u1', 9);
+  v text;
+  r jsonb;
+begin
+  perform pg_temp.as_admin($q$select public.script_exception_assign(pg_temp.exc('u1', 9, 'no_code'), pg_temp.k('b1'), 6, 'Her spare page', false, true)$q$);
+  perform pg_temp.scan_file('u2', 'e', 'bt');
+  perform pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 6), '{quality,sharpness}', '400')));
+  v := concat_ws(' ', pg_temp.links('b1'), 'scanned=' || (pg_temp.pg('u2', 0)).state,
+    'raised=' || (select concat_ws(':', e.kind, pg_temp.kname(e.booking_id), (e.details ->> 'kept_page_id')::uuid = v_staff, e.details ->> 'copy_page')
+                  from public.script_exceptions e where e.page_id = pg_temp.pid('u2', 0) and e.state = 'open'),
+    pg_temp.vers('b1'), pg_temp.safe());
+  -- Staff decide: use the scanned page instead.
+  r := pg_temp.as_admin($q$select public.script_exception_assign(pg_temp.exc('u2', 0, 'duplicate'), pg_temp.k('b1'), 6, 'The scanned page is hers', true)$q$);
+  return concat_ws(' ', v, '|', pg_temp.code(r), pg_temp.links('b1'), pg_temp.safe());
+end $$;
+-- R36 (2): script_detail says for each file whether it may be processed again, and why not.
+create function pg_temp.s_detail() returns text language plpgsql as $$
+declare
+  v text;
+begin
+  v := 'untouched=' || coalesce((select x ->> 'reprocess_refused' from jsonb_array_elements(pg_temp.as_admin($q$select public.script_detail(pg_temp.sid('b1'))$q$) -> 'uploads') x
+                                 where (x ->> 'id')::uuid = pg_temp.k('u1')), 'null');
+  perform pg_temp.as_admin($q$select public.script_page_set_hidden_areas(pg_temp.pid('u1', 2), '[{"x":0.02,"y":0.4,"w":0.05,"h":0.3}]', 'Name in the margin')$q$);
+  v := v || ' areas=' || coalesce((select x ->> 'reprocess_refused' from jsonb_array_elements(pg_temp.as_admin($q$select public.script_detail(pg_temp.sid('b1'))$q$) -> 'uploads') x
+                                   where (x ->> 'id')::uuid = pg_temp.k('u1')), 'null');
+  update public.scripts set state = 'marking' where booking_id = pg_temp.k('b2');
+  v := v || ' marking=' || coalesce((select x ->> 'reprocess_refused' from jsonb_array_elements(pg_temp.as_admin($q$select public.script_detail(pg_temp.sid('b1'))$q$) -> 'uploads') x
+                                     where (x ->> 'id')::uuid = pg_temp.k('u1')), 'null');
+  return v || ' asked=' || pg_temp.ask('u1');
+end $$;
+
+select is(pg_temp.scenario('s_slot'), '1:0@u1,2:1@u1,3:2@u1,4:3@u1,6:9@u1 scanned=duplicate raised=duplicate:b1:t:6 1:scan_upload:u1:sys,2:staff_assign:-:staff stale=0 twice=0 bare=0 orphans=0 | ok 1:0@u1,2:1@u1,3:2@u1,4:3@u1,6:0@u2 stale=0 twice=0 bare=0 orphans=0',
+  'R36: a page staff placed keeps its slot against a sharper page scanned for it, which is raised as a duplicate; staff can use it instead');
+select is(pg_temp.scenario('s_detail'), 'untouched=null areas=hidden_areas marking=script_locked asked=script_locked',
+  'R36: the detail says per file whether it may be processed again (null), or why not, as the reprocess itself answers');
 select is(pg_temp.scenario('s_untouched'), 'ok recorded:4 1:0@u4,2:1@u4,3:2@u4,4:3@u4 needs_attention stale=0 twice=0 bare=0 orphans=0',
   'R35: an untouched file is processed again as before (b4''s home file: its script shows the new pages)');
 select is(pg_temp.scenario('s_turned'), 'ok', 'R35: a turn alone does not stop it (the rerun reads the page afresh)');
@@ -672,6 +711,7 @@ select ok(not exists (select 1 from unnest(array[
 select ok(not exists (select 1 from unnest(array[
     'public.script_page_staff_work(uuid)', 'public.script_upload_staff_changes(uuid,boolean)', 'public.script_links_current(uuid,jsonb)',
     'public.script_stale_links(uuid)', 'public.script_upload_stale_links(uuid)',
+    'public.script_slot_staff_placed(uuid,integer,uuid)', 'public.script_upload_reprocess_refused(uuid)',
     'public.script_version_write(uuid,jsonb,uuid,uuid,text,timestamp with time zone)', 'public.script_page_marking_made(uuid)']) f,
   unnest(array['anon', 'authenticated', 'service_role']) r where has_function_privilege(r, f, 'execute')),
   'R35: the reprocess helpers are internal, and the re-created ones keep their access');

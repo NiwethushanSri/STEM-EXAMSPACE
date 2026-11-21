@@ -210,6 +210,8 @@ export type DetailUpload = {
   submissionState: string | null;
   createdAt: string | null;
   pages: number;
+  /** Why the database would refuse to process the file again (script_locked, or a kind of staff work); null when it may. */
+  reprocessRefused: string | null;
   jobs: DetailJob[];
 };
 export type CustodyEvent = { step: string; at: string | null; location: string; note: string | null; manifest: string | null; byName: string | null; fromName: string | null; toName: string | null };
@@ -285,6 +287,7 @@ function parseUpload(v: unknown): DetailUpload | null {
     submissionState: str(v.submission_state),
     createdAt: str(v.created_at),
     pages: num(v.pages) ?? 0,
+    reprocessRefused: str(v.reprocess_refused),
     jobs: Array.isArray(v.jobs)
       ? v.jobs.flatMap((j): DetailJob[] =>
           isObject(j) && num(j.id) !== null
@@ -448,6 +451,14 @@ export function repoDoneMessage(input: RepoInput): string {
 
 /** Why a file staff have worked on is not processed again (the database answers staff_changes). */
 export const STAFF_CHANGES = "Staff have worked on pages of this file, so reprocessing it would undo that work and is not allowed.";
+
+/** Why the file cannot be processed again, as the detail says the database would refuse it (Ruling R36); null when
+ * it can, or when it is not at rest (then no control is shown at all: see reprocessable). */
+export function reprocessRefusal(u: DetailUpload, s: ScriptState): string | null {
+  if (!reprocessable(u, s) || !u.reprocessRefused) return null;
+  if (u.reprocessRefused === "script_locked") return "A script that shows pages of this file is being marked, so the file cannot be processed again.";
+  return STAFF_CHANGES;
+}
 
 /** What the screen says when a page tool was refused (`action`: the tool, for a message that fits it). */
 export function repoFailureMessage(a: { code?: unknown; reason?: unknown }, action?: RepoInput["action"]): string {

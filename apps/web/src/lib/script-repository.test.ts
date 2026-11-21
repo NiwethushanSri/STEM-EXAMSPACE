@@ -13,6 +13,7 @@ import {
   repoFailureMessage,
   repoRpc,
   reprocessable,
+  reprocessRefusal,
   stateText,
   turnText,
   voidable,
@@ -148,6 +149,20 @@ describe("the script detail", () => {
     expect(reprocessable(up, "verified")).toBe(true);
     expect(reprocessable(up, "marking")).toBe(false);
     expect(reprocessable({ ...up, state: "queued" }, "verified")).toBe(false);
+    // Ruling R36: the detail says per file whether it may be processed again; the control is disabled with the reason.
+    expect(up.reprocessRefused).toBeNull();
+    expect(reprocessRefusal(up, "verified")).toBeNull();
+    const d = detail();
+    const worked = parseScriptDetail({ ...d, uploads: [{ ...d.uploads[0], reprocess_refused: "hidden_areas" }] })!.uploads[0] as DetailUpload;
+    expect(worked.reprocessRefused).toBe("hidden_areas");
+    expect(reprocessRefusal(worked, "verified")).toBe(
+      "Staff have worked on pages of this file, so reprocessing it would undo that work and is not allowed.",
+    );
+    expect(reprocessRefusal({ ...worked, reprocessRefused: "extra_page" }, "needs_attention")).toContain("Staff have worked on pages");
+    expect(reprocessRefusal({ ...worked, reprocessRefused: "script_locked" }, "verified")).toContain("being marked");
+    // Not at rest, or the script itself being marked: no control at all, so no reason either.
+    expect(reprocessRefusal({ ...worked, state: "queued" }, "verified")).toBeNull();
+    expect(reprocessRefusal(worked, "marking")).toBeNull();
     expect(turnText(0)).toBe("");
     expect(turnText(90)).toContain("quarter turn right");
     expect(turnText(180)).toContain("half turn");
