@@ -57,5 +57,152 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------------------------------
+-- Marking fixtures (Phase 3A). Call them as postgres. They write the rows Phase 2 leaves behind, without running
+-- the hand-in and processing functions.
+-- ---------------------------------------------------------------------------------------------
+
+-- A published exam (both sittings, 90 minutes) that finished 2 days ago, with its exam code, its release notice
+-- sent, and a current 3-page question paper (every page an answer page) whose pages are reviewed.
+create or replace function tests.marking_exam(p_subject bigint default 1)
+returns uuid
+language plpgsql
+as $$
+declare
+  v_start timestamptz := now() - interval '2 days' - interval '90 minutes';
+  v_exam uuid;
+begin
+  insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence, price_confirmed,
+    booking_deadline, status, release_notified_at)
+  values (p_subject, 'ZZ Marking exam', 'Paper 1', 'both', v_start, 90, 0, true, v_start - interval '7 days', 'published',
+    v_start - interval '10 minutes')
+  returning id into v_exam;
+  insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size, pages_reviewed_at)
+  values (v_exam, 'paper', 'Question paper', 1, v_exam::text || '/' || gen_random_uuid()::text || '.pdf', 3, 1000, now());
+  return v_exam;
+end;
+$$;
+
+-- A verified, complete script of p_pages pages (copy pages 1..p_pages) for a new active student with a name and an
+-- index number: a paid booking, a copy of the current paper, a processed upload (home: a received hand-in's PDF;
+-- centre: a scan file of the exam's first centre's batch, both made with an admin on first use) whose prepare job is
+-- done, matched pages each with a full and a marking picture, and version 1 linking them. Handed in or scanned
+-- 15 minutes after the finish.
+create or replace function tests.verified_script(p_exam uuid, p_source public.script_source default 'home', p_pages int default 3)
+returns uuid
+language plpgsql
+as $$
+declare
+  v_e public.exams%rowtype;
+  v_paper public.exam_papers%rowtype;
+  v_at timestamptz;
+  v_student uuid := tests.create_user('student', 'active');
+  v_venue uuid;
+  v_centre uuid;
+  v_batch uuid;
+  v_staff uuid;
+  v_booking uuid;
+  v_copy uuid;
+  v_sub uuid;
+  v_upload uuid := gen_random_uuid();
+  v_job bigint;
+  v_dir text;
+  v_script uuid;
+begin
+  select * into strict v_e from public.exams e where e.id = p_exam;
+  select * into strict v_paper from public.exam_papers p where p.exam_id = p_exam and p.kind = 'paper' and p.superseded_at is null;
+  v_at := v_e.starts_at + make_interval(mins => v_e.duration_minutes) + interval '15 minutes';
+
+  update public.profiles set first_name = 'Wilhelmina', last_name = 'Quarterfield' where id = v_student;
+  update public.student_details
+  set index_number = (
+    select 'SE-2099-' || lpad((coalesce(max(substring(d.index_number from '^SE-2099-([0-9]+)$')::int), 0) + 1)::text, 4, '0')
+    from public.student_details d where d.index_number ~ '^SE-2099-[0-9]+$')
+  where profile_id = v_student;
+
+  if p_source = 'centre' then
+    select ec.id into v_centre from public.exam_centres ec
+    where ec.exam_id = p_exam and ec.removed_at is null order by ec.created_at, ec.id limit 1;
+    if v_centre is null then
+      insert into public.venues (name, rooms) values ('ZZ Marking hall', array['R1']) returning id into v_venue;
+      insert into public.exam_centres (exam_id, venue_id, room, seat_limit) values (p_exam, v_venue, 'R1', 1000)
+      returning id into v_centre;
+    end if;
+    select b.id, b.created_by into v_batch, v_staff from public.scan_batches b
+    where b.exam_id = p_exam and b.centre_id = v_centre and b.created_by is not null order by b.created_at, b.id limit 1;
+    if v_batch is null then
+      v_staff := tests.create_user('admin', 'active');
+      insert into public.scan_batches (exam_id, centre_id, number, created_by, created_at, submitted_at)
+      select p_exam, v_centre, 'B-' || v_e.exam_code || '-' || lpad((count(*) + 1)::text, 2, '0'), v_staff, v_at, v_at
+      from public.scan_batches b where b.exam_id = p_exam
+      returning id into v_batch;
+    end if;
+  end if;
+
+  insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
+  values (p_exam, v_student, v_student, 'paid', v_e.price_pence, p_source::text::public.sitting_mode, v_centre)
+  returning id into v_booking;
+  insert into public.paper_copies (code, booking_id, paper_id, page_count, created_at)
+  values (public.copy_code_new(), v_booking, v_paper.id, greatest(v_paper.page_count + v_e.spare_pages, p_pages), v_e.starts_at)
+  returning id into v_copy;
+
+  if p_source = 'home' then
+    insert into public.home_submissions (booking_id, seq, state, submitted_by, submitted_at, checked_at)
+    values (v_booking, 1, 'received', v_student, v_at, v_at)
+    returning id into v_sub;
+    insert into public.script_uploads (id, exam_id, booking_id, submission_id, kind, position, storage_path, mime, byte_size,
+      sha256, state, uploaded_by, created_at, stored_at)
+    values (v_upload, p_exam, v_booking, v_sub, 'home_pdf', 1, 'home/' || v_booking::text || '/' || v_upload::text || '.pdf',
+      'application/pdf', 100000, encode(sha256(convert_to(v_upload::text, 'UTF8')), 'hex'), 'processed', v_student, v_at, v_at);
+  else
+    insert into public.attendance (exam_id, student_id, status, marked_by, marked_at)
+    values (p_exam, v_student, 'present', v_staff, v_e.starts_at);
+    insert into public.script_uploads (id, exam_id, batch_id, kind, position, storage_path, mime, byte_size, sha256, state,
+      uploaded_by, created_at, stored_at)
+    select v_upload, p_exam, v_batch, 'scan_file', coalesce(max(u.position), 0) + 1,
+      'batch/' || v_batch::text || '/' || v_upload::text || '.pdf', 'application/pdf', 100000,
+      encode(sha256(convert_to(v_upload::text, 'UTF8')), 'hex'), 'processed', v_staff, v_at, v_at
+    from public.script_uploads u where u.batch_id = v_batch;
+  end if;
+
+  insert into public.processing_jobs (upload_id, kind, state, attempts, run_after, created_at, finished_at)
+  values (v_upload, 'prepare', 'done', 1, v_at, v_at, v_at)
+  returning id into v_job;
+  v_dir := p_exam::text || '/' || v_upload::text || '/' || v_job::text || '-1/';
+  insert into public.script_pages (upload_id, source_index, exam_id, copy_id, copy_page, booking_id, state, quality, rotation,
+    full_path, marking_path, created_at)
+  select v_upload, g.i - 1, p_exam, v_copy, g.i, v_booking, 'matched',
+    jsonb_build_object('sharpness', 200, 'brightness', 180, 'cut_off', false, 'flags', '[]'::jsonb), 0,
+    v_dir || (g.i - 1) || '-full.jpg', v_dir || (g.i - 1) || '-marking.jpg', v_at
+  from generate_series(1, p_pages) g(i);
+
+  insert into public.scripts (booking_id, exam_id, source, number, state, version, complete, received_at, created_at)
+  values (v_booking, p_exam, p_source, public.script_number_next(p_exam), 'verified', 1, true, v_at, v_at)
+  returning id into v_script;
+  insert into public.script_versions (script_id, version, created_at, reason, submission_id, upload_id)
+  values (v_script, 1, v_at, case when p_source = 'home' then 'home_submission' else 'scan_upload' end, v_sub,
+    case when p_source = 'centre' then v_upload end);
+  insert into public.script_page_links (script_id, version, copy_page, page_id)
+  select v_script, 1, p.copy_page, p.id from public.script_pages p where p.upload_id = v_upload;
+  return v_script;
+end;
+$$;
+
+-- The test structure: question 1 (3 marks, page 1) and question 2 with parts (a) (2 marks, page 2) and (b) (5 marks,
+-- page 3), entered directly as postgres.
+create or replace function tests.structure(p_exam uuid)
+returns void
+language plpgsql
+as $$
+declare
+  v_two uuid;
+begin
+  insert into public.exam_questions (exam_id, label, position, max_mark, pages) values (p_exam, '1', 1, 3, '{1}');
+  insert into public.exam_questions (exam_id, label, position, pages) values (p_exam, '2', 2, '{2,3}') returning id into v_two;
+  insert into public.exam_questions (exam_id, parent_id, label, position, max_mark, pages)
+  values (p_exam, v_two, 'a', 1, 2, '{2}'), (p_exam, v_two, 'b', 2, 5, '{3}');
+end;
+$$;
+
 grant usage on schema tests to anon, authenticated;
 grant execute on function tests.as_postgres() to anon, authenticated;
