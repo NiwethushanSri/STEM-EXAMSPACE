@@ -10,6 +10,11 @@
 -- unit is set aside (set_aside_reason 'unapproved' or 'conflict', as Task 2 does), so "Next script" cannot hand it back
 -- and another marker can take the unit; submitted markings stay.
 --
+-- Lock order (Ruling R9): approving, taking an approval away and declaring a conflict hold the marker's advisory lock
+-- ('marker:' || id) exclusively (every hand-out to that marker holds it shared, 20261122000006); taking an approval
+-- away and declaring a conflict then hold the rows of the scripts concerned, then their units, in id order, before the
+-- assignments and markings change.
+--
 -- No earlier function is changed.
 
 -- ---------------------------------------------------------------------------------------------
@@ -150,6 +155,23 @@ begin
 
   delete from public.marker_approvals a where a.marker_id = p_marker and a.subject_id = p_subject;
 
+  -- Ruling R9: the rows of the scripts whose pieces the marker holds for the subject, then those pieces, in id order,
+  -- before their assignments and markings change.
+  perform 1 from public.scripts s
+  where s.id in (select u.script_id from public.marking_assignments x
+                 join public.marking_units u on u.id = x.unit_id
+                 join public.exams e on e.id = u.exam_id
+                 where x.marker_id = p_marker and x.ended_at is null and e.subject_id = p_subject)
+  order by s.id
+  for no key update;
+  perform 1 from public.marking_units u
+  where u.id in (select x.unit_id from public.marking_assignments x
+                 join public.marking_units v on v.id = x.unit_id
+                 join public.exams e on e.id = v.exam_id
+                 where x.marker_id = p_marker and x.ended_at is null and e.subject_id = p_subject)
+  order by u.id
+  for update;
+
   with ended as (
     update public.marking_assignments x set ended_at = now(), end_reason = 'unapproved'
     from public.marking_units u
@@ -278,6 +300,25 @@ begin
   insert into public.marker_conflicts (marker_id, student_id, note, recorded_by, recorded_at)
   values (p_marker, p_student, v_note, v_actor, now())
   on conflict (marker_id, student_id) do update set note = excluded.note, recorded_by = excluded.recorded_by, recorded_at = excluded.recorded_at;
+
+  -- Ruling R9: the rows of the candidate's scripts whose pieces the marker holds, then those pieces, in id order, before
+  -- their assignments and markings change.
+  perform 1 from public.scripts s
+  where s.id in (select u.script_id from public.marking_assignments x
+                 join public.marking_units u on u.id = x.unit_id
+                 join public.scripts t on t.id = u.script_id
+                 join public.bookings b on b.id = t.booking_id
+                 where x.marker_id = p_marker and x.ended_at is null and b.student_id = p_student)
+  order by s.id
+  for no key update;
+  perform 1 from public.marking_units u
+  where u.id in (select x.unit_id from public.marking_assignments x
+                 join public.marking_units v on v.id = x.unit_id
+                 join public.scripts t on t.id = v.script_id
+                 join public.bookings b on b.id = t.booking_id
+                 where x.marker_id = p_marker and x.ended_at is null and b.student_id = p_student)
+  order by u.id
+  for update;
 
   with ended as (
     update public.marking_assignments x set ended_at = now(), end_reason = 'conflict'

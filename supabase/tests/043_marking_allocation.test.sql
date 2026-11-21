@@ -1,13 +1,14 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(158);
+select plan(180);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
 -- Fixtures. Subject s1 ('ZZ Allocation'), taught by the teacher: correctors m1 (Mara One), m2 (Milo Two), m3, the lead
 -- marker and fresh markers f1 to f6 are approved for it; susp is approved but suspended; corr is never approved. Subject
 -- s2 has its own lead, lead2. Each test uses its own exams (tests.marking_exam: finished 2 days ago, so home scripts may
--- be handed out), opened here as postgres; scripts are made where a test needs them. A unit is kept as 'u:<script>'.
+-- be handed out), opened here as postgres; scripts are made where a test needs them. A unit is kept as 'u:<script>',
+-- or 'u:<script>/<group label>' when marked by question.
 -- ---------------------------------------------------------------------------------------------
 create temp table c (name text primary key, id uuid not null);
 grant select on c to public;
@@ -33,7 +34,7 @@ create temp table res (name text primary key, j jsonb);
 grant all on res to public;
 create function pg_temp.uid(p text) returns uuid language sql stable as $$ select id from c where name = p $$;
 create function pg_temp.k(p text) returns uuid language sql stable as $$ select id from kv where name = p $$;
--- A script's unit (every exam here is marked as whole scripts).
+-- A script's unit, when marked as whole scripts.
 create function pg_temp.u(p text) returns uuid language sql stable as $$ select id from kv where name = 'u:' || p $$;
 create function pg_temp.r(p text) returns jsonb language sql stable as $$ select j from res where name = p $$;
 create function pg_temp.s1() returns bigint language sql stable as $$ select id from public.subjects where name = 'ZZ Allocation' $$;
@@ -66,7 +67,9 @@ begin
   insert into public.exam_marking (exam_id, opened_at, opened_by) values (pg_temp.k(p), now(), pg_temp.uid('admin'))
   on conflict (exam_id) do update set opened_at = excluded.opened_at, closed_at = null;
   perform public.marking_exam_sync(pg_temp.k(p), null);
-  insert into kv select 'u:' || x.name, u.id from kv x join public.marking_units u on u.script_id = x.id on conflict (name) do nothing;
+  insert into kv select 'u:' || x.name || coalesce('/' || g.label, ''), u.id
+  from kv x join public.marking_units u on u.script_id = x.id left join public.question_groups g on g.id = u.group_id
+  on conflict (name) do nothing;
 end $$;
 -- The candidate of a script.
 create function pg_temp.student(p text) returns uuid language sql stable as $$
@@ -104,8 +107,26 @@ begin
   perform public.marking_script_state(pg_temp.k(p));
   return v;
 end $$;
+-- A piece's question group.
+create function pg_temp.grp(p uuid) returns text language sql stable as $$
+  select g.label from public.marking_units u join public.question_groups g on g.id = u.group_id where u.id = p $$;
+-- The marker's advisory lock this transaction holds ('-' for none).
+create function pg_temp.marker_lock(p text) returns text language sql stable as $$
+  select coalesce(string_agg(l.mode, ',' order by l.mode), '-') from pg_locks l
+  where l.locktype = 'advisory' and l.pid = pg_backend_pid()
+    and ((l.classid::bigint << 32) | l.objid::bigint) = hashtextextended('marker:' || pg_temp.uid(p)::text, 0) $$;
+-- Runs a call that returns jsonb, keeping how long it took.
+create function pg_temp.timed(p_name text, p_sql text) returns jsonb language plpgsql as $$
+declare
+  v_t0 timestamptz := clock_timestamp();
+  v jsonb;
+begin
+  execute p_sql into v;
+  insert into res values (p_name, jsonb_build_object('ms', round(extract(epoch from clock_timestamp() - v_t0) * 1000)));
+  return v;
+end $$;
 grant execute on function pg_temp.uid(text), pg_temp.k(text), pg_temp.u(text), pg_temp.r(text), pg_temp.s1(), pg_temp.s2(),
-  pg_temp.code(jsonb), pg_temp.who(uuid) to public;
+  pg_temp.code(jsonb), pg_temp.who(uuid), pg_temp.timed(text, text) to public;
 
 insert into public.subjects (name, kind) values ('ZZ Allocation', 'school'), ('ZZ Allocation two', 'school');
 insert into public.teacher_subjects values (pg_temp.uid('teacher'), pg_temp.s1());
@@ -171,14 +192,14 @@ select is(pg_temp.holder('w1'), 'm1 next', 'only m1 holds it');
 insert into kv values ('e3b', tests.marking_exam(pg_temp.s1()));
 select pg_temp.script('w2', 'e3b');
 select pg_temp.open('e3b');
-select is(public.marking_unit_pick(pg_temp.k('e3b'), null, pg_temp.uid('m1'), null), pg_temp.u('w2'),
+select is((public.marking_units_pick(pg_temp.k('e3b'), null, pg_temp.uid('m1'), null, 1))[1], pg_temp.u('w2'),
   'the select of Next script (for update skip locked) offers m1 the piece');
 select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('w2_m1', public.marking_next(pg_temp.k('e3b')));
 select tests.as_postgres();
 select is(pg_temp.r('w2_m1') ->> 'unit_id', pg_temp.u('w2')::text, 'm1 takes it');
-select is(public.marking_unit_pick(pg_temp.k('e3b'), null, pg_temp.uid('m2'), null), null::uuid, 'the same select for m2 then returns no row');
-select ok(pg_get_functiondef('public.marking_unit_pick(uuid, uuid, uuid, timestamptz)'::regprocedure) ~* 'for update of u skip locked',
+select is((public.marking_units_pick(pg_temp.k('e3b'), null, pg_temp.uid('m2'), null, 1))[1], null::uuid, 'the same select for m2 then returns no row');
+select ok(pg_get_functiondef('public.marking_units_pick(uuid, uuid, uuid, timestamptz, integer)'::regprocedure) ~* 'for update of u skip locked',
   'the select skips a piece another marker''s Next script has locked');
 select throws_ok(format('insert into public.marking_assignments (unit_id, marker_id, how) values (%L, %L, %L)',
                         pg_temp.u('w2'), pg_temp.uid('m2'), 'next'), '23505', null,
@@ -225,7 +246,7 @@ select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('ec_m1', public.marking_next(pg_temp.k('ec')));
 select tests.as_postgres();
 select is(pg_temp.r('ec_m1') ->> 'unit_id', pg_temp.u('cz')::text, 'm1 is given the third piece');
-select is(public.marking_unit_pick(pg_temp.k('ec'), null, pg_temp.uid('m1'), null), null::uuid, 'and nothing more is offered to m1');
+select is((public.marking_units_pick(pg_temp.k('ec'), null, pg_temp.uid('m1'), null, 1))[1], null::uuid, 'and nothing more is offered to m1');
 select tests.as_user(pg_temp.uid('m2'));
 insert into res values ('ec_m2', public.marking_next(pg_temp.k('ec')));
 select tests.as_postgres();
@@ -279,7 +300,7 @@ select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('en1', public.marking_next(pg_temp.k('en')));
 select tests.as_postgres();
 select is(pg_temp.r('en1') ->> 'unit_id', pg_temp.u('nb')::text, 'Next script gives m1 the other one');
-select is(public.marking_unit_pick(pg_temp.k('en'), null, pg_temp.uid('m1'), null), null::uuid, 'and never that one');
+select is((public.marking_units_pick(pg_temp.k('en'), null, pg_temp.uid('m1'), null, 1))[1], null::uuid, 'and never that one');
 select tests.as_user(pg_temp.uid('m2'));
 insert into res values ('en2', public.marking_next(pg_temp.k('en')));
 select tests.as_postgres();
@@ -289,6 +310,23 @@ select is(public.marking_reassign(array[pg_temp.u('na')], pg_temp.uid('m1'), 'Th
   '{"ok": true, "taken_back": 1, "assigned": 1, "skipped": []}'::jsonb, 'an admin can still give it to m1 on purpose');
 select tests.as_postgres();
 select is(pg_temp.holder('na'), 'm1 assigned', 'm1 holds it, assigned');
+-- On resume: a piece m1 took through Next script and then saw a name on is not resumed; one an admin assigned is.
+insert into kv values ('ek', tests.marking_exam(pg_temp.s1()));
+select pg_temp.script('k1', 'ek');
+select pg_temp.open('ek');
+select tests.as_user(pg_temp.uid('m1'));
+insert into res values ('ek1', public.marking_next(pg_temp.k('ek')));
+select tests.as_postgres();
+insert into public.marking_unit_exclusions (unit_id, marker_id, reason) values (pg_temp.u('k1'), pg_temp.uid('m1'), 'name_seen');
+select tests.as_user(pg_temp.uid('m1'));
+select is(public.marking_next(pg_temp.k('ek')), '{"ok": false, "code": "nothing_left"}'::jsonb,
+  'Next script does not resume a piece m1 took through it and then saw a name on');
+select tests.as_postgres();
+insert into public.marking_unit_exclusions (unit_id, marker_id, reason) values (pg_temp.u('nb'), pg_temp.uid('m1'), 'name_seen');
+select tests.as_user(pg_temp.uid('m1'));
+select is(public.marking_next(pg_temp.k('en')), jsonb_build_object('ok', true, 'unit_id', pg_temp.u('na'), 'resumed', true),
+  'but it resumes the piece an admin assigned to m1 although they saw a name on it (and not the other, taken through it)');
+select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
 -- next_refused_when_not_approved_not_open_or_closed
@@ -694,6 +732,11 @@ select is((select x ->> 'waiting' from jsonb_array_elements(public.marking_units
 select is(array[pg_temp.code(public.marking_units_list(pg_temp.k('ea'), 'nope')), pg_temp.code(public.marking_units_list(null)),
                 pg_temp.code(public.marking_units_list(gen_random_uuid()))],
   array['invalid_input', 'invalid_input', 'not_found'], 'it needs an exam that exists and a state it knows');
+select is((select string_agg(distinct x ->> 'marker_name', ',') from jsonb_array_elements(public.marking_units_list(pg_temp.k('es')) -> 'units') x
+           where x ->> 'marker_id' = pg_temp.uid('m3')::text), 'Marker ' || left(pg_temp.uid('m3')::text, 8),
+  'a marker with no name on their account is shown as "Marker" and the start of their id');
+select is(position('@' in public.marking_units_list(pg_temp.k('es'))::text) + position('@' in public.marking_progress(pg_temp.k('es'))::text), 0,
+  'never by their email, in the list of pieces or in the progress');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('corr'));
 select is(public.marking_my_work(), '{"ok": true, "approved": false, "lead_subjects": [], "exams": [], "pieces": []}'::jsonb,
   'a corrector not approved to mark has no work');
@@ -779,6 +822,107 @@ select is(array[pg_temp.code(public.marking_progress()), pg_temp.code(public.mar
 select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
+-- by_question_next_keeps_to_the_group (and the pieces left per group)
+-- ---------------------------------------------------------------------------------------------
+insert into kv values ('eq', tests.marking_exam(pg_temp.s1()));
+with g as (insert into public.question_groups (exam_id, label, position) values (pg_temp.k('eq'), 'G1', 1), (pg_temp.k('eq'), 'G2', 2) returning id, label)
+insert into kv select 'eq' || label, id from g;
+select pg_temp.script('q1', 'eq');
+select pg_temp.script('q2', 'eq');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eq'), 'by_question');
+select pg_temp.open('eq');
+select is((select count(*)::int from public.marking_units where exam_id = pg_temp.k('eq') and state = 'open'), 4,
+  'by_question_next_keeps_to_the_group: two scripts marked by question in two groups: 4 pieces');
+select tests.as_user(pg_temp.uid('m1'));
+insert into res values ('q_g1', public.marking_next(pg_temp.k('eq'), pg_temp.k('eqG1')));
+select tests.as_postgres();
+insert into kv values ('qa', (pg_temp.r('q_g1') ->> 'unit_id')::uuid);
+select is(pg_temp.grp(pg_temp.k('qa')) || ' ' || (pg_temp.r('q_g1') ->> 'resumed'), 'G1 false', 'Next script for group G1 gives m1 a G1 piece');
+select tests.as_user(pg_temp.uid('m1'));
+insert into res values ('q_g2', public.marking_next(pg_temp.k('eq'), pg_temp.k('eqG2')));
+select tests.as_postgres();
+select is(pg_temp.grp((pg_temp.r('q_g2') ->> 'unit_id')::uuid) || ' ' || (pg_temp.r('q_g2') ->> 'resumed'), 'G2 false',
+  'for group G2, a G2 piece: not the G1 piece m1 holds');
+select tests.as_user(pg_temp.uid('m1'));
+select is(public.marking_next(pg_temp.k('eq'), pg_temp.k('eqG1')), jsonb_build_object('ok', true, 'unit_id', pg_temp.k('qa'), 'resumed', true),
+  'for G1 again, the G1 piece m1 holds');
+select tests.as_postgres();
+insert into public.markings (unit_id, marker_id) values (pg_temp.k('qa'), pg_temp.uid('m1'));
+select public.marking_holds_expire(now() + interval '3 hours');
+select tests.as_user(pg_temp.uid('m1'));
+insert into res values ('q_g2b', public.marking_next(pg_temp.k('eq'), pg_temp.k('eqG2'), now() + interval '3 hours'));
+select tests.as_postgres();
+select is(pg_temp.grp((pg_temp.r('q_g2b') ->> 'unit_id')::uuid) || ' ' || (pg_temp.r('q_g2b') ->> 'resumed'), 'G2 false',
+  'once both holds ran out, Next script for G2 does not resume m1''s marking of a G1 piece');
+select tests.as_user(pg_temp.uid('m1'));
+select is(public.marking_next(pg_temp.k('eq'), pg_temp.k('eqG1'), now() + interval '3 hours'),
+  jsonb_build_object('ok', true, 'unit_id', pg_temp.k('qa'), 'resumed', true), 'for G1 it does');
+insert into res values ('q_mw', public.marking_my_work());
+select tests.as_postgres();
+select is((select (e ->> 'mode') || ' ' || (e ->> 'left') from jsonb_array_elements(pg_temp.r('q_mw') -> 'exams') e where e ->> 'exam_id' = pg_temp.k('eq')::text),
+  'by_question 2', 'm1''s list: 2 pieces left of the exam');
+select is((select e -> 'groups' from jsonb_array_elements(pg_temp.r('q_mw') -> 'exams') e where e ->> 'exam_id' = pg_temp.k('eq')::text),
+  jsonb_build_array(jsonb_build_object('id', pg_temp.k('eqG1'), 'label', 'G1', 'left', 1), jsonb_build_object('id', pg_temp.k('eqG2'), 'label', 'G2', 'left', 1)),
+  'one in each group');
+
+-- ---------------------------------------------------------------------------------------------
+-- one_rule_for_next_and_left: the rule over a whole exam in one pass (marking_units_free: step 3, assigning the next n,
+-- the pieces left) agrees with the rule for one piece (marking_unit_blocked) on every open piece here, for each marker.
+-- ---------------------------------------------------------------------------------------------
+select is((with w(n) as (values ('m1'), ('m2'), ('m3'), ('lead'), ('corr'), ('susp')),
+                ex as (select id from kv where name ~ '^e[a-z0-9]*$'),
+                free as materialized (select w.n, f.unit_id from ex cross join w
+                                      cross join lateral public.marking_units_free(ex.id, null, pg_temp.uid(w.n), null) f)
+           select count(*)::int from public.marking_units u cross join w
+           where u.state = 'open' and u.exam_id in (select id from ex)
+             and (public.marking_unit_blocked(u.id, pg_temp.uid(w.n), null, true) is null)
+                 <> exists (select 1 from free where free.n = w.n and free.unit_id = u.id)), 0,
+  'one_rule_for_next_and_left: the one-pass rule and the rule for one piece agree on every open piece');
+select ok((select count(*) from public.marking_units u where u.state = 'open' and u.exam_id in (select id from kv where name ~ '^e[a-z0-9]*$')) > 50,
+  'over more than 50 open pieces');
+
+-- ---------------------------------------------------------------------------------------------
+-- next_and_assign_some_in_time_at_1500_pieces (a timing guard, as 037: the planner's statistics are those of the
+-- tables before this transaction). 300 candidates marked by question in 5 groups: 1500 open pieces. Each timed call
+-- runs under the statement_timeout it must meet (a call over it fails this file).
+-- ---------------------------------------------------------------------------------------------
+insert into c values ('big', tests.create_user('corrector', 'active')), ('big2', tests.create_user('corrector', 'active'));
+insert into public.marker_approvals (marker_id, subject_id, approved_at) select c.id, pg_temp.s1(), now() from c where c.name in ('big', 'big2');
+insert into kv values ('ebig', tests.marking_exam(pg_temp.s1()));
+insert into public.question_groups (exam_id, label, position) select pg_temp.k('ebig'), 'B' || i, i from generate_series(1, 5) i;
+do $$ begin for i in 1..300 loop perform pg_temp.script('bs' || i, 'ebig'); end loop; end $$;
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('ebig'), 'by_question');
+select pg_temp.open('ebig');
+select is((select count(*)::int from public.marking_units where exam_id = pg_temp.k('ebig') and state = 'open'), 1500,
+  'next_and_assign_some_in_time_at_1500_pieces: 300 candidates x 5 groups: 1500 open pieces');
+select is(pg_temp.marker_lock('big'), '-', 'the marker holds no lock yet');
+select tests.as_user(pg_temp.uid('admin'));
+set local statement_timeout = '5s';
+select is(pg_temp.timed('ms_some', format('select public.marking_assign_some(%L, null, %L, 200, %L)', pg_temp.k('ebig'), pg_temp.uid('big'), 'Start the big exam')),
+  '{"ok": true, "assigned": 200}'::jsonb, 'an admin assigns 200 of the 1500 pieces within 5 s');
+reset statement_timeout;
+select tests.as_postgres();
+select is(pg_temp.marker_lock('big'), 'ShareLock', 'it held the marker''s lock, shared (marker_unapprove and marker_conflict_set take it exclusively)');
+select tests.as_user(pg_temp.uid('big2'));
+set local statement_timeout = '1s';
+insert into res values ('big_next', pg_temp.timed('ms_next', format('select public.marking_next(%L)', pg_temp.k('ebig'))));
+select is(pg_temp.code(pg_temp.r('big_next')) || ' ' || (pg_temp.r('big_next') ->> 'resumed'), 'ok false',
+  'Next script hands out one of the 1300 free pieces within 1 s');
+reset statement_timeout;
+set local statement_timeout = '2s';
+select is((select e ->> 'left' from jsonb_array_elements(pg_temp.timed('ms_work', 'select public.marking_my_work()') -> 'exams') e
+           where e ->> 'exam_id' = pg_temp.k('ebig')::text), '1299',
+  'and the marker''s list counts the 1299 left within 2 s');
+reset statement_timeout;
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+set local statement_timeout = '2s';
+select is(jsonb_array_length(pg_temp.timed('ms_list', format('select public.marking_units_list(%L)', pg_temp.k('ebig'))) -> 'units'), 1500,
+  'the admin''s list of the 1500 pieces comes within 2 s');
+reset statement_timeout;
+select tests.as_postgres();
+select is(pg_temp.marker_lock('big2'), 'ShareLock', 'Next script held the marker''s lock, shared');
+
+-- ---------------------------------------------------------------------------------------------
 -- corrector_cannot_assign_or_take_back
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('m1'));
@@ -803,7 +947,9 @@ select is(array[pg_temp.code(public.marking_assign(array[pg_temp.u('a5')], pg_te
 select tests.as_postgres();
 select is(pg_temp.holder('a2') || ' ' || pg_temp.holder('a5'), 'm2 assigned -', 'nothing changed');
 select is(array(select f from unnest(array[
-    'public.marking_unit_blocked(uuid, uuid, timestamptz, boolean)', 'public.marking_unit_pick(uuid, uuid, uuid, timestamptz)',
+    'public.marking_unit_blocked(uuid, uuid, timestamptz, boolean)', 'public.marking_units_candidates(uuid, uuid, uuid)',
+    'public.marking_units_free(uuid, uuid, uuid, timestamptz)',
+    'public.marking_units_pick(uuid, uuid, uuid, timestamptz, integer)',
     'public.marking_unit_take(uuid, uuid, text, uuid, timestamptz)', 'public.marking_unit_take_back(uuid)', 'public.marking_units_lock(uuid[])',
     'public.marking_holds_expire(timestamptz)', 'public.marking_exam_overdue(uuid, timestamptz)', 'public.marking_tick()']) f
   where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')

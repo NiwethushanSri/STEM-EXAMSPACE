@@ -9,7 +9,10 @@
 -- step checks again that the piece may be handed to them now (marking_unit_blocked): it is not on hold; its script is
 -- ready to mark or being marked and nothing holds it back (marking_script_blocked); the marker is approved for the
 -- subject and not blocked for the candidate (a declared conflict or a tutor link); and, for Next script only, the
--- marker did not see a name on it. A hold from Next script lasts 2 hours; a piece an admin assigns has no time limit.
+-- marker did not see a name on it (a piece an admin assigned is resumed all the same). A hold from Next script lasts 2
+-- hours; a piece an admin assigns has no time limit. The same rule over a whole exam (marking_units_candidates, then
+-- marking_script_blocked once per script) chooses step 3's piece and the next n an admin assigns (marking_units_pick),
+-- and counts the pieces "left" on a marker's list (marking_units_free).
 --
 -- Taking a piece sets aside any other marker's marking in progress on it (set_aside_reason: how their hold ended), and
 -- brings the taker's own earlier marking on it (in progress or set aside) back into progress: there is never a second
@@ -22,10 +25,13 @@
 -- A hold on a piece that is on hold does not run out: lifting the hold gives the piece back to its marker (Task 7).
 -- Closing marking stops hand-out and giving back; an admin may still take pieces back.
 --
--- Lock order (Ruling R9, as 20261122000005): the exams' marking rows (for share), then the bookings' locks where taken
--- (the sync), then the scripts' rows in id order (for no key update), then the units, then assignments and markings.
--- Next script, assigning the next n and the hold expiry take script, unit and assignment rows with skip locked, after
--- the exam's marking row and the sync's locks, so they never wait for a row another transaction holds.
+-- Lock order (Ruling R9, as 20261122000005): the marker's advisory lock where taken (hashtextextended('marker:' ||
+-- marker id, 0): shared by every hand-out to that marker, exclusive in marker_approve, marker_unapprove and
+-- marker_conflict_set, so an approval taken away or a conflict declared meanwhile is seen), then the exams' marking rows
+-- (for share), then the bookings' locks where taken (the sync), then the scripts' rows in id order (for no key update),
+-- then the units, then assignments and markings. Next script, assigning the next n and the hold expiry take script, unit
+-- and assignment rows with skip locked, after the exam's marking row and the sync's locks, so they never wait for a row
+-- another transaction holds.
 --
 -- Changed: marking_tick, from its latest definition (20261122000005): after the syncs it also ends the holds that ran
 -- out (marking_holds_expire). Nothing else in it changed.
@@ -83,30 +89,103 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- Internal: one free piece of the exam (of the group, when given) that Next script may hand to p_marker at p_now, at
--- random, with its script's row and its own held (Ruling R9). A piece whose rows another transaction holds is skipped,
--- so two markers never get the same piece and nobody waits. Null when there is none.
+-- Internal: marking_unit_blocked with p_next over a whole exam (of the group, when given), for its open pieces, in one
+-- pass, all but what holds a script back. The exam's marking and the marker's approval are read once; the conflict,
+-- tutor link and name seen are joins. Each piece comes with its script, for marking_script_blocked.
 -- ---------------------------------------------------------------------------------------------
-create function public.marking_unit_pick(p_exam uuid, p_group uuid, p_marker uuid, p_now timestamptz)
-returns uuid
+create function public.marking_units_candidates(p_exam uuid, p_group uuid, p_marker uuid)
+returns table (unit_id uuid, group_id uuid, script_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select u.id, u.group_id, u.script_id
+  from public.marking_units u
+  join public.scripts s on s.id = u.script_id
+  join public.bookings b on b.id = s.booking_id
+  where u.exam_id = p_exam and u.state = 'open' and not u.on_hold
+    and (p_group is null or u.group_id = p_group)
+    and s.state in ('ready_to_mark', 'marking') and s.taken_back_at is null
+    and exists (select 1 from public.exams e join public.exam_marking m on m.exam_id = e.id
+                where e.id = p_exam and m.opened_at is not null and m.closed_at is null
+                  and public.is_marker_for(p_marker, e.subject_id))
+    -- marking_marker_blocked: a declared conflict or a tutor link.
+    and not exists (select 1 from public.marker_conflicts c where c.marker_id = p_marker and c.student_id = b.student_id)
+    and not exists (select 1 from public.tutor_students t where t.tutor_id = p_marker and t.student_id = b.student_id)
+    and not exists (select 1 from public.marking_unit_exclusions x where x.unit_id = u.id and x.marker_id = p_marker)
+    -- 3B: not the marker of the unit's other pass.
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- Internal: the free pieces of the exam (of the group, when given) that Next script may hand to p_marker at p_now: the
+-- candidates whose script nothing holds back, marking_script_blocked running once per script. The pieces left on a
+-- marker's list. marking_units_pick reads the same two parts.
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_units_free(p_exam uuid, p_group uuid, p_marker uuid, p_now timestamptz)
+returns table (unit_id uuid, group_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with pieces as materialized (
+    select c.unit_id, c.group_id, c.script_id from public.marking_units_candidates(p_exam, p_group, p_marker) c
+  ),
+  scripts as materialized (
+    select distinct p.script_id from pieces p
+  ),
+  ready as materialized (
+    select x.script_id from scripts x where public.marking_script_blocked(x.script_id, p_now) is null
+  )
+  select p.unit_id, p.group_id from pieces p where p.script_id in (select r.script_id from ready r)
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- Internal: up to p_count free pieces at random (step 3 of Next script, and the next n an admin assigns). The
+-- candidates are read once, in random order; each script is checked once (marking_script_blocked), when one of its
+-- pieces comes up; each piece is taken with its script's row and its own (Ruling R9), skip locked, so two markers never
+-- get the same piece and nobody waits. The state of the piece and of its script are read again on the locked rows: a
+-- change committed meanwhile (taken, taken back, on hold) leaves the piece out.
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_units_pick(p_exam uuid, p_group uuid, p_marker uuid, p_now timestamptz, p_count int)
+returns uuid[]
 language plpgsql
 security definer
 set search_path = ''
 as $$
 declare
+  v_units uuid[] := '{}';
+  v_ready uuid[] := '{}';
+  v_held_back uuid[] := '{}';
   v_unit uuid;
+  r record;
 begin
-  select u.id into v_unit
-  from public.marking_units u
-  join public.scripts s on s.id = u.script_id
-  where u.exam_id = p_exam and u.state = 'open' and not u.on_hold
-    and (p_group is null or u.group_id = p_group)
-    and public.marking_unit_blocked(u.id, p_marker, p_now, true) is null
-  order by random()
-  limit 1
-  for no key update of s skip locked
-  for update of u skip locked;
-  return v_unit;
+  for r in
+    select c.unit_id, c.script_id from public.marking_units_candidates(p_exam, p_group, p_marker) c order by random()
+  loop
+    exit when cardinality(v_units) >= p_count;
+    continue when r.script_id = any (v_held_back);
+    if not r.script_id = any (v_ready) then
+      if public.marking_script_blocked(r.script_id, p_now) is null then
+        v_ready := v_ready || r.script_id;
+      else
+        v_held_back := v_held_back || r.script_id;
+        continue;
+      end if;
+    end if;
+    select u.id into v_unit
+    from public.marking_units u
+    join public.scripts s on s.id = u.script_id
+    where u.id = r.unit_id and u.state = 'open' and not u.on_hold
+      and s.state in ('ready_to_mark', 'marking') and s.taken_back_at is null
+    for no key update of s skip locked
+    for update of u skip locked;
+    if found then
+      v_units := v_units || v_unit;
+    end if;
+  end loop;
+  return v_units;
 end;
 $$;
 
@@ -293,12 +372,15 @@ declare
   v_now timestamptz := public.paper_clock(p_now);
   v_subject bigint;
   v_m public.exam_marking%rowtype;
+  v_held uuid[];
   v_unit uuid;
   v_resumed boolean := true;
 begin
   if p_exam is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
+  -- First of all the marker's lock (shared): an approval taken away or a conflict declared at this moment is seen.
+  perform pg_advisory_xact_lock_shared(hashtextextended('marker:' || v_actor::text, 0));
   select e.subject_id into v_subject from public.exams e where e.id = p_exam;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
@@ -322,35 +404,59 @@ begin
   end if;
   perform public.marking_holds_expire(v_now);
 
-  -- (1) A piece of this exam the caller holds, oldest first, while it may still be handed to them.
-  select u.id into v_unit
-  from public.marking_assignments a
-  join public.marking_units u on u.id = a.unit_id
-  join public.scripts s on s.id = u.script_id
-  where a.marker_id = v_actor and a.kind = 'live' and a.ended_at is null
-    and (a.hold_until is null or a.hold_until >= v_now)
-    and u.exam_id = p_exam and u.state = 'taken' and (p_group is null or u.group_id = p_group)
-    and public.marking_unit_blocked(u.id, v_actor, v_now, false) is null
-  order by a.created_at, a.id
-  limit 1
-  for no key update of s skip locked
-  for update of u, a skip locked;
-  if v_unit is not null then
+  -- (1) A piece of this exam the caller holds, oldest first, while it may still be handed to them: a name they saw
+  -- stops a piece held by Next script, not one an admin assigned. Its hold is renewed on the locked rows; should
+  -- another transaction hold them at this moment (their own save on another screen, say), the piece is resumed as it
+  -- is rather than a second one handed out. (The caller's own pieces are found first, so the rule runs on those only.)
+  with mine as materialized (
+    select u.id, a.how, a.created_at, a.id as aid
+    from public.marking_assignments a
+    join public.marking_units u on u.id = a.unit_id
+    where a.marker_id = v_actor and a.kind = 'live' and a.ended_at is null
+      and (a.hold_until is null or a.hold_until >= v_now)
+      and u.exam_id = p_exam and u.state = 'taken' and (p_group is null or u.group_id = p_group)
+  )
+  select array_agg(t.id order by t.created_at, t.aid) into v_held
+  from mine t
+  where public.marking_unit_blocked(t.id, v_actor, v_now, t.how = 'next') is null;
+  if v_held is not null then
+    select u.id into v_unit
+    from public.marking_assignments a
+    join public.marking_units u on u.id = a.unit_id
+    join public.scripts s on s.id = u.script_id
+    where u.id = any (v_held) and a.marker_id = v_actor and a.kind = 'live' and a.ended_at is null
+      and u.state = 'taken' and not u.on_hold and s.state in ('ready_to_mark', 'marking') and s.taken_back_at is null
+    order by a.created_at, a.id
+    limit 1
+    for no key update of s skip locked
+    for update of u, a skip locked;
+    if v_unit is null then
+      return jsonb_build_object('ok', true, 'unit_id', v_held[1], 'resumed', true);
+    end if;
     update public.marking_assignments a set hold_until = v_now + interval '2 hours'
     where a.unit_id = v_unit and a.kind = 'live' and a.ended_at is null and a.how = 'next';
     return jsonb_build_object('ok', true, 'unit_id', v_unit, 'resumed', true);
   end if;
 
   -- (2) A free piece of this exam on which the caller's marking is in progress: their hold ran out and nobody has
-  -- taken it since.
+  -- taken it since. The caller's own markings are found first, so the rule runs on those only; the states are read
+  -- again on the locked rows.
+  with mine as materialized (
+    select u.id, m.started_at, m.id as mid
+    from public.markings m
+    join public.marking_units u on u.id = m.unit_id
+    where m.marker_id = v_actor and m.kind = 'live' and m.status = 'in_progress'
+      and u.exam_id = p_exam and u.state = 'open' and not u.on_hold and (p_group is null or u.group_id = p_group)
+  )
+  select array_agg(t.id order by t.started_at, t.mid) into v_held
+  from mine t
+  where public.marking_unit_blocked(t.id, v_actor, v_now, true) is null;
   select u.id into v_unit
-  from public.markings m
-  join public.marking_units u on u.id = m.unit_id
+  from public.marking_units u
   join public.scripts s on s.id = u.script_id
-  where m.marker_id = v_actor and m.kind = 'live' and m.status = 'in_progress'
-    and u.exam_id = p_exam and u.state = 'open' and not u.on_hold and (p_group is null or u.group_id = p_group)
-    and public.marking_unit_blocked(u.id, v_actor, v_now, true) is null
-  order by m.started_at, m.id
+  where u.id = any (coalesce(v_held, '{}')) and u.state = 'open' and not u.on_hold
+    and s.state in ('ready_to_mark', 'marking') and s.taken_back_at is null
+  order by array_position(v_held, u.id)
   limit 1
   for no key update of s skip locked
   for update of u skip locked;
@@ -358,7 +464,7 @@ begin
   -- (3) One free piece at random.
   if v_unit is null then
     v_resumed := false;
-    v_unit := public.marking_unit_pick(p_exam, p_group, v_actor, v_now);
+    v_unit := (public.marking_units_pick(p_exam, p_group, v_actor, v_now, 1))[1];
     if v_unit is null then
       return jsonb_build_object('ok', false, 'code', 'nothing_left');
     end if;
@@ -458,6 +564,8 @@ begin
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
 
+  -- The marker's lock (shared) first: an approval taken away or a conflict declared at this moment is seen.
+  perform pg_advisory_xact_lock_shared(hashtextextended('marker:' || p_marker::text, 0));
   perform public.marking_units_lock(v_units);
   for r in
     select x.id, u.state from unnest(v_units) x(id) left join public.marking_units u on u.id = x.id
@@ -507,6 +615,8 @@ begin
   if v_reason is null then
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
+  -- The marker's lock (shared) first: an approval taken away or a conflict declared at this moment is seen.
+  perform pg_advisory_xact_lock_shared(hashtextextended('marker:' || p_marker::text, 0));
   select e.subject_id into v_subject from public.exams e where e.id = p_exam;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
@@ -529,9 +639,8 @@ begin
   end if;
   perform public.marking_holds_expire(null);
 
-  while v_n < p_count loop
-    v_unit := public.marking_unit_pick(p_exam, p_group, p_marker, null);
-    exit when v_unit is null;
+  -- Every piece is chosen in one pass, then each is taken.
+  foreach v_unit in array public.marking_units_pick(p_exam, p_group, p_marker, null, p_count) loop
     perform public.marking_unit_take(v_unit, p_marker, 'assigned', v_actor, null);
     insert into public.audit_log (actor_id, action, target_type, target_id, reason)
     values (v_actor, 'marking_assigned', 'marking_unit', v_unit, v_reason);
@@ -615,6 +724,8 @@ begin
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
 
+  -- The marker's lock (shared) first: an approval taken away or a conflict declared at this moment is seen.
+  perform pg_advisory_xact_lock_shared(hashtextextended('marker:' || p_marker::text, 0));
   perform public.marking_units_lock(v_units);
   for r in
     select x.id, u.id as unit_id from unnest(v_units) x(id) left join public.marking_units u on u.id = x.id
@@ -699,15 +810,12 @@ begin
         'exam_id', e.id, 'title', e.title, 'paper', e.paper, 'subject', sj.name, 'mode', m.mode,
         'groups', case when m.mode = 'by_question' then coalesce((
             select jsonb_agg(jsonb_build_object('id', g.id, 'label', g.label,
-              'left', (select count(*)::int from public.marking_units u
-                       where u.exam_id = e.id and u.group_id = g.id and u.state = 'open'
-                         and public.marking_unit_blocked(u.id, v_actor, v_now, true) is null)) order by g.position)
+              'left', (select count(*)::int from unnest(f.groups) x where x = g.id)) order by g.position)
             from public.question_groups g where g.exam_id = e.id), '[]'::jsonb) else '[]'::jsonb end,
         'deadline', m.deadline,
         'overdue', public.marking_exam_overdue(e.id, v_now),
         'closed', m.closed_at is not null,
-        'left', (select count(*)::int from public.marking_units u
-                 where u.exam_id = e.id and u.state = 'open' and public.marking_unit_blocked(u.id, v_actor, v_now, true) is null),
+        'left', coalesce(cardinality(f.groups), 0),
         'mine', jsonb_build_object(
           'taken', (select count(*)::int from public.marking_assignments a join public.marking_units u on u.id = a.unit_id
                     where u.exam_id = e.id and a.kind = 'live' and a.ended_at is null and a.marker_id = v_actor),
@@ -717,6 +825,8 @@ begin
       from public.exams e
       join public.exam_marking m on m.exam_id = e.id
       join public.subjects sj on sj.id = e.subject_id
+      -- The pieces Next script could give the caller now (their groups), in one pass per exam.
+      cross join lateral (select array_agg(x.group_id) as groups from public.marking_units_free(e.id, null, v_actor, v_now) x) f
       where e.id = any (v_exams)), '[]'::jsonb),
     'pieces', coalesce((
       select jsonb_agg(jsonb_build_object(
@@ -745,7 +855,8 @@ $$;
 -- taken, submitted or on_hold; p_marker keeps the pieces that marker holds or has marked. Each: {unit_id, script_number,
 -- index_number, source, group_label, state, on_hold, hold_reason, marker_id, marker_name (the holder, else the marker
 -- of its marking in progress or submitted), how, hold_until, last_saved_at, submitted_at, total, waiting (what holds a
--- piece not yet submitted back: marking_script_blocked)}. No candidate name.
+-- piece not yet submitted back: marking_script_blocked)}. No candidate name. A marker with no name on their account is
+-- "Marker" and the first 8 characters of their id, never their email.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_units_list(p_exam uuid, p_state text default null, p_marker uuid default null)
 returns jsonb
@@ -774,17 +885,25 @@ begin
   end if;
 
   return jsonb_build_object('ok', true, 'units', coalesce((
+    -- What holds each script back, once per script with a piece not yet submitted.
+    with held as materialized (
+      select distinct u.script_id from public.marking_units u where u.exam_id = p_exam and u.state <> 'submitted'
+    ),
+    waiting as materialized (
+      select h.script_id, public.marking_script_blocked(h.script_id, null) as why from held h
+    )
     select jsonb_agg(t.j order by t.number, t.position nulls first, t.id)
     from (
       select u.id, s.number, g.position, jsonb_build_object(
         'unit_id', u.id, 'script_number', s.number, 'index_number', d.index_number, 'source', s.source, 'group_label', g.label,
         'state', u.state, 'on_hold', u.on_hold, 'hold_reason', u.hold_reason,
         'marker_id', p.id,
-        'marker_name', coalesce(nullif(btrim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), ''), p.email::text),
+        'marker_name', case when p.id is not null then coalesce(nullif(btrim(p.first_name || ' ' || p.last_name), ''), 'Marker ' || left(p.id::text, 8)) end,
         'how', a.how, 'hold_until', a.hold_until, 'last_saved_at', x.last_saved_at, 'submitted_at', x.submitted_at, 'total', x.total,
-        'waiting', case when u.state <> 'submitted' then public.marking_script_blocked(s.id, null) end) as j
+        'waiting', case when u.state <> 'submitted' then w.why end) as j
       from public.marking_units u
       join public.scripts s on s.id = u.script_id
+      left join waiting w on w.script_id = u.script_id
       join public.bookings b on b.id = s.booking_id
       left join public.student_details d on d.profile_id = b.student_id
       left join public.question_groups g on g.id = u.group_id
@@ -805,7 +924,8 @@ $$;
 -- a lead marker: the exams of the subjects they lead. Per exam: {exam_id, title, paper, subject, mode, deadline,
 -- overdue (marking_exam_overdue), opened_at, closed_at, scripts: {waiting (verified, not yet ready), ready_to_mark,
 -- marking, marked}, units: {open, taken, submitted (not on hold), on_hold} of scripts not withdrawn or void, markers:
--- [{marker_id, name, taken, submitted, last_saved_at}], alerts_open}.
+-- [{marker_id, name, taken, submitted, last_saved_at}], alerts_open}. A marker's name is never their email (as
+-- marking_units_list).
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_progress(p_exam uuid default null, p_now timestamptz default null)
 returns jsonb
@@ -855,7 +975,7 @@ begin
                                             'last_saved_at', k.last_saved_at) order by k.name, k.marker_id)
         from (
           select w.marker_id,
-            coalesce(nullif(btrim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), ''), p.email::text) as name,
+            coalesce(nullif(btrim(p.first_name || ' ' || p.last_name), ''), 'Marker ' || left(p.id::text, 8)) as name,
             sum(w.taken)::int as taken, sum(w.submitted)::int as submitted, max(w.last_saved_at) as last_saved_at
           from (
             select a.marker_id, 1 as taken, 0 as submitted, null::timestamptz as last_saved_at
@@ -867,7 +987,7 @@ begin
             where u.exam_id = e.id and x.kind = 'live' and x.status <> 'set_aside'
           ) w
           join public.profiles p on p.id = w.marker_id
-          group by w.marker_id, p.first_name, p.last_name, p.email
+          group by w.marker_id, p.id, p.first_name, p.last_name
         ) k), '[]'::jsonb),
       'alerts_open', (select count(*)::int from public.marking_alerts al where al.exam_id = e.id and al.state = 'open'))
       order by e.starts_at, e.id)
@@ -882,7 +1002,9 @@ $$;
 -- Privileges.
 -- ---------------------------------------------------------------------------------------------
 revoke execute on function public.marking_unit_blocked(uuid, uuid, timestamptz, boolean) from public, anon, authenticated, service_role;
-revoke execute on function public.marking_unit_pick(uuid, uuid, uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_units_candidates(uuid, uuid, uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_units_free(uuid, uuid, uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_units_pick(uuid, uuid, uuid, timestamptz, int) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_unit_take(uuid, uuid, text, uuid, timestamptz) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_unit_take_back(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_units_lock(uuid[]) from public, anon, authenticated, service_role;

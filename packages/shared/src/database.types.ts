@@ -1816,20 +1816,30 @@ isOneToOne: false
 "marking_unit_blocked":
 { Args: { "p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
                            },
-"marking_unit_pick":
-{ Args: { "p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: string
-                           },
 "marking_unit_take":
 { Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_marker": string,"p_unit": string }; Returns: undefined
                            },
 "marking_unit_take_back":
 { Args: { "p_unit": string }; Returns: boolean
                            },
+"marking_units_candidates":
+{ Args: { "p_exam": string,"p_group": string,"p_marker": string }; Returns: {
+              "group_id": string,"script_id": string,"unit_id": string
+            }[]
+                           },
+"marking_units_free":
+{ Args: { "p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: {
+              "group_id": string,"unit_id": string
+            }[]
+                           },
 "marking_units_list":
 { Args: { "p_exam": string,"p_marker"?: string,"p_state"?: string }; Returns: Json
                            },
 "marking_units_lock":
 { Args: { "p_units": (string)[] }; Returns: undefined
+                           },
+"marking_units_pick":
+{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: (string)[]
                            },
 "money_totals":
 { Args: { "p_from": string,"p_to": string }; Returns: Json
