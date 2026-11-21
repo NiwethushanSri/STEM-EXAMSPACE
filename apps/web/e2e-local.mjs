@@ -1,6 +1,7 @@
 // Runs Playwright against the local Supabase stack (never the hosted project).
 // Cross-platform stand-in for cross-env: sets E2E_ENV_FILE, builds the app once into .next-e2e with the
-// local Supabase URL and anon key, then hands over to playwright (which serves it with next start).
+// local Supabase URL and anon key, starts the processing server (docker compose), then hands over to playwright
+// (which serves the app with next start) and stops the processing server when it is done.
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -36,4 +37,20 @@ if (build !== 0) {
   console.error("e2e:local: next build failed; not running tests");
   process.exit(build);
 }
-process.exit(run(["playwright", "test", ...process.argv.slice(2)], {}));
+
+// The processing server (services/processor, in Docker) reads the uploads the browser tests make, against the same
+// local stack. Started after the build (memory is tight here), stopped and removed afterwards whatever happens.
+const compose = resolve(import.meta.dirname, "../../services/processor/docker-compose.yml");
+const processor = (args) => spawnSync("docker", ["compose", "-f", compose, ...args], { stdio: "inherit" }).status ?? 1;
+if (processor(["up", "-d", "processor"]) !== 0) {
+  console.error("e2e:local: the processing server did not start; not running tests");
+  processor(["down"]);
+  process.exit(1);
+}
+let status = 1;
+try {
+  status = run(["playwright", "test", ...process.argv.slice(2)], {});
+} finally {
+  processor(["down"]);
+}
+process.exit(status);

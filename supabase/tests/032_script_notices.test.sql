@@ -2,6 +2,9 @@ begin;
 create extension if not exists pgtap with schema extensions;
 select plan(51);
 select tests.assert_no_owner();
+-- Notices left in a local database by other work (browser tests) are not part of this test: parked inside its
+-- transaction, which is rolled back.
+delete from public.script_notices;
 
 -- ---------------------------------------------------------------------------------------------
 -- Fixtures. Exam e. Student s1 (first name Zanzibar) with active parent p1 and suspended parent p2; booking b1 with

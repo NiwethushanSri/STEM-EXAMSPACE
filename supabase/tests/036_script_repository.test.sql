@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(176);
+select plan(179);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -974,6 +974,75 @@ select is(pg_temp.scenario('s_inc_after'),
 select is(pg_temp.scenario('s_dup_kept'),
   'recorded:1 1:0@u1,2:1@u1,3:2@u1,4:3@u1 u2#0=duplicate b5 open=duplicate:in_other_script@2@u1,poor_quality@8@u1 b1 open=duplicate@0@u2 stale=0 twice=0 bare=0 orphans=0',
   'R38: the slot decision never deletes an in_other_script duplicate about the page it keeps, unless staff placed the page in that slot');
+-- ---------------------------------------------------------------------------------------------
+-- Task 12, dashboard_counts: the scripts part of the operations dashboard. Exam e started 2031-08-04 09:00 UTC and
+-- f 2031-08-05 09:00 UTC (10:00 UK time, summer time); e expects b1, b2, b5 (present) and b3, b4 (home).
+-- ---------------------------------------------------------------------------------------------
+create function pg_temp.dash(p_now text) returns jsonb language sql as $$
+  select pg_temp.as_admin(format('select public.scripts_dashboard(%L::timestamptz)', p_now)) $$;
+-- An exam's row as expected/received/verified/needs attention/late ('-' when the exam is not listed).
+create function pg_temp.dash_exam(d jsonb, p_exam text) returns text language sql stable as $$
+  select coalesce((select concat_ws('/', x ->> 'expected', x ->> 'received', x ->> 'verified', x ->> 'needs_attention', x ->> 'late')
+                   from jsonb_array_elements(d -> 'exams') x where (x -> 'exam' ->> 'id')::uuid = pg_temp.k(p_exam)), '-') $$;
+-- The centres of e and f listed as not scanned, as <centre>:<candidates counted>.
+create function pg_temp.dash_centres(d jsonb) returns text language sql stable as $$
+  select coalesce(string_agg(pg_temp.kname((x ->> 'centre_id')::uuid) || ':' || (x ->> 'counted'), ','), 'none')
+  from jsonb_array_elements(d -> 'centres_without_scanned_custody') x where (x ->> 'exam_id')::uuid in (pg_temp.k('e'), pg_temp.k('f')) $$;
+create function pg_temp.s_dashboard() returns text language plpgsql as $$
+declare
+  d jsonb;
+  v text;
+  v_failed int;
+begin
+  -- Jobs left waiting by other work are not part of this.
+  update public.processing_jobs set state = 'done' where state = 'queued';
+  d := pg_temp.dash('2031-08-05 12:00Z');
+  v_failed := (d ->> 'failed_jobs')::int;
+  v := concat_ws(' ', 'e=' || pg_temp.dash_exam(d, 'e'), 'f=' || pg_temp.dash_exam(d, 'f'),
+    'open=' || ((d ->> 'open_exceptions')::int = (select count(*) from public.script_exceptions x where x.state = 'open')),
+    'queue=' || coalesce(d ->> 'oldest_queued_minutes', 'none'), 'centres=' || pg_temp.dash_centres(d));
+  -- A file has waited 30 minutes and another is not due yet; one failed for good, another failed and ran again.
+  perform pg_temp.scan_file('u2', 'e', 'bt', 'queued', false);
+  insert into public.processing_jobs (upload_id, kind, run_after) values (pg_temp.k('u2'), 'prepare', '2031-08-05 11:30Z');
+  perform pg_temp.scan_file('u9', 'e', 'bt', 'queued', false);
+  insert into public.processing_jobs (upload_id, kind, run_after) values (pg_temp.k('u9'), 'prepare', '2031-08-05 12:30Z');
+  perform pg_temp.scan_file('u11', 'e', 'bt', 'failed', false);
+  insert into public.processing_jobs (upload_id, kind, state, attempts, finished_at) values (pg_temp.k('u11'), 'prepare', 'failed', 3, '2031-08-05 11:00Z');
+  perform pg_temp.scan_file('ux', 'e', 'bt', 'processed', false);
+  insert into public.processing_jobs (upload_id, kind, state, attempts, finished_at)
+  values (pg_temp.k('ux'), 'prepare', 'failed', 3, '2031-08-05 10:00Z'), (pg_temp.k('ux'), 'prepare', 'done', 1, '2031-08-05 10:30Z');
+  -- A late script that staff later withdrew counts nowhere.
+  update public.scripts set state = 'withdrawn' where booking_id = pg_temp.k('b5');
+  d := pg_temp.dash('2031-08-05 12:00Z');
+  v := concat_ws(' ', v, '| e=' || pg_temp.dash_exam(d, 'e'), 'failed+' || ((d ->> 'failed_jobs')::int - v_failed),
+    'queue=' || coalesce(d ->> 'oldest_queued_minutes', 'none'));
+  -- Sheets were counted at centre ce for b1 and b2; its custody has "collected" only. Listed from 09:00 UK time the
+  -- next day until a "scanned" record exists.
+  insert into public.collection_counts (booking_id, exam_id, extra_sheets, recorded_by)
+  values (pg_temp.k('b1'), pg_temp.k('e'), 1, pg_temp.uid('admin')), (pg_temp.k('b2'), pg_temp.k('e'), 0, pg_temp.uid('admin'));
+  v := concat_ws(' ', v, '| 08:59=' || pg_temp.dash_centres(pg_temp.dash('2031-08-05 07:59Z')),
+    '09:00=' || pg_temp.dash_centres(pg_temp.dash('2031-08-05 08:00Z')));
+  insert into public.custody_events (exam_id, centre_id, step, location, recorded_by)
+  values (pg_temp.k('e'), pg_temp.k('ce'), 'scanned', 'Office', pg_temp.uid('admin'));
+  v := concat_ws(' ', v, 'scanned=' || pg_temp.dash_centres(pg_temp.dash('2031-08-05 08:00Z')));
+  -- Only exams that started in the last 14 days: on 18 August at 09:30 UTC, f but not e.
+  d := pg_temp.dash('2031-08-18 09:30Z');
+  v := concat_ws(' ', v, '| 14 days: e=' || pg_temp.dash_exam(d, 'e'), 'f=' || pg_temp.dash_exam(d, 'f'));
+  -- Before f starts, it is not listed.
+  return concat_ws(' ', v, 'not started: f=' || pg_temp.dash_exam(pg_temp.dash('2031-08-05 08:59Z'), 'f'));
+end $$;
+
+select is(pg_temp.scenario('s_dashboard'),
+  'e=5/5/1/3/1 f=1/1/0/0/0 open=true queue=none centres=none | e=5/4/1/2/1 failed+1 queue=30 | 08:59=none 09:00=ce:2 scanned=none '
+  || '| 14 days: e=- f=1/1/0/0/0 not started: f=-',
+  'dashboard_counts: expected, received, verified, needs attention and late per exam of the last 14 days; open problems, failed files, queue age and centres not scanned by 09:00 the next day');
+select tests.as_user(pg_temp.uid('teacher'));
+select is(public.scripts_dashboard() ->> 'code', 'forbidden', 'the scripts dashboard is for owners and admins: a teacher is refused');
+select tests.as_postgres();
+select ok(pg_temp.as_admin('select public.scripts_dashboard()') ->> 'ok' = 'true'
+      and not has_function_privilege('anon', 'public.scripts_dashboard(timestamptz)', 'execute')
+      and has_function_privilege('authenticated', 'public.scripts_dashboard(timestamptz)', 'execute'),
+  'an admin reads the scripts dashboard; anon cannot call it');
 select is(concat_ws(' ', pg_temp.links('b1'), pg_temp.state('b1'), (select count(*) from kv where name in ('u2', 'u9', 'u11', 'u4b', 'u3b', 'ux', 'bx')),
     (select count(*) from public.script_page_hidden_areas a join public.script_pages p on p.id = a.page_id where p.exam_id = pg_temp.k('e')),
     (select count(*) from public.bookings b where b.exam_id = pg_temp.k('e'))),

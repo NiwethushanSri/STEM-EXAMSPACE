@@ -895,14 +895,14 @@ isOneToOne: false
                   ]
                 },"scripts": {
                   Row: {
-                    "booking_id": string,"complete": boolean,"created_at": string,"exam_id": string,"id": string,"late": boolean,"late_decision": string | null,"number": string,"received_at": string | null,"source": Database["public"]['Enums']["script_source"],"state": Database["public"]['Enums']["script_state"],"state_reason": string | null,"updated_at": string,"version": number
+                    "booking_id": string,"complete": boolean,"created_at": string,"exam_id": string,"extras_locked": Json | null,"id": string,"late": boolean,"late_decision": string | null,"number": string,"received_at": string | null,"source": Database["public"]['Enums']["script_source"],"state": Database["public"]['Enums']["script_state"],"state_reason": string | null,"updated_at": string,"version": number
                   }
                   ComputedFields: never
                   Insert: {
-                    "booking_id": string,"complete"?: boolean,"created_at"?: string,"exam_id": string,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number": string,"received_at"?: string | null,"source": Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"updated_at"?: string,"version"?: number
+                    "booking_id": string,"complete"?: boolean,"created_at"?: string,"exam_id": string,"extras_locked"?: Json | null,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number": string,"received_at"?: string | null,"source": Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"updated_at"?: string,"version"?: number
                   }
                   Update: {
-                    "booking_id"?: string,"complete"?: boolean,"created_at"?: string,"exam_id"?: string,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number"?: string,"received_at"?: string | null,"source"?: Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"updated_at"?: string,"version"?: number
+                    "booking_id"?: string,"complete"?: boolean,"created_at"?: string,"exam_id"?: string,"extras_locked"?: Json | null,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number"?: string,"received_at"?: string | null,"source"?: Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"updated_at"?: string,"version"?: number
                   }
                   Relationships: [
                     {
@@ -1488,6 +1488,9 @@ isOneToOne: false
 "script_booking_json":
 { Args: { "p_booking": string }; Returns: Json
                            },
+"script_booking_locked":
+{ Args: { "p_booking": string }; Returns: boolean
+                           },
 "script_bookings_lock":
 { Args: { "p_bookings": (string)[] }; Returns: undefined
                            },
@@ -1500,6 +1503,7 @@ isOneToOne: false
 "complete": boolean,
 "created_at": string,
 "exam_id": string,
+"extras_locked": Json | null,
 "id": string,
 "late": boolean,
 "late_decision": string | null,
@@ -1579,6 +1583,9 @@ isOneToOne: false
 "script_links":
 { Args: { "p_script": string }; Returns: Json
                            },
+"script_links_current":
+{ Args: { "p_links": Json,"p_script": string }; Returns: Json
+                           },
 "script_links_write":
 { Args: { "p_actor": string,"p_links": Json,"p_now": string,"p_reason": string,"p_script": string }; Returns: boolean
                            },
@@ -1626,6 +1633,9 @@ isOneToOne: false
                            },
 "script_page_copy":
 { Args: { "p_page": string }; Returns: Record<string, unknown>
+                           },
+"script_page_elsewhere":
+{ Args: { "p_page": string,"p_script": string }; Returns: string
                            },
 "script_page_is_answer":
 { Args: { "p_copy": string,"p_page": number }; Returns: boolean
@@ -1678,6 +1688,9 @@ isOneToOne: false
 "script_page_slot_answer":
 { Args: { "p_page": string }; Returns: boolean
                            },
+"script_page_staff_work":
+{ Args: { "p_page": string }; Returns: string
+                           },
 "script_pages_record":
 { Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_sha256": string,"p_worker": string }; Returns: Json
                            },
@@ -1705,8 +1718,20 @@ isOneToOne: false
 "script_resolution_settle":
 { Args: { "p_actor": string,"p_booking": string,"p_reason": string }; Returns: undefined
                            },
+"script_shared_links":
+{ Args: { "p_script": string }; Returns: number
+                           },
 "script_slot_copy":
 { Args: { "p_script": string }; Returns: string
+                           },
+"script_slot_staff_placed":
+{ Args: { "p_copy_page": number,"p_page": string,"p_script": string }; Returns: boolean
+                           },
+"script_slots_dropped":
+{ Args: { "p_links": Json,"p_script": string,"p_upload": string,"p_written": Json }; Returns: undefined
+                           },
+"script_stale_links":
+{ Args: { "p_script": string }; Returns: number
                            },
 "script_upload_begin":
 { Args: { "p_bytes": number,"p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string,"p_now"?: string,"p_submission": string }; Returns: Json
@@ -1735,6 +1760,12 @@ isOneToOne: false
 "script_upload_reprocess":
 { Args: { "p_reason": string,"p_upload": string }; Returns: Json
                            },
+"script_upload_reprocess_refused":
+{ Args: { "p_upload": string }; Returns: string
+                           },
+"script_upload_staff_changes":
+{ Args: { "p_placed"?: boolean,"p_upload": string }; Returns: string
+                           },
 "script_upload_stale_links":
 { Args: { "p_upload": string }; Returns: number
                            },
@@ -1746,6 +1777,9 @@ isOneToOne: false
                            },
 "script_void":
 { Args: { "p_reason": string,"p_script": string }; Returns: Json
+                           },
+"scripts_dashboard":
+{ Args: { "p_now"?: string }; Returns: Json
                            },
 "scripts_list":
 { Args: { "p_exam"?: string,"p_late"?: boolean,"p_source"?: Database["public"]['Enums']["script_source"],"p_state"?: Database["public"]['Enums']["script_state"] }; Returns: Json

@@ -1,7 +1,9 @@
 // Notices, exam calendar and alerts for students and parents.
 // Everything is kept in this browser (localStorage) until a real backend exists.
 // Read these functions only in effects or event handlers, never while rendering on the server.
+// The staff alerts from the scripts dashboard (at the end) are pure and come from the database instead.
 
+import { formatLondon } from "@/lib/money";
 import { children, notices as defaultNotices, timetable as defaultTimetable } from "@/lib/site-data";
 
 export type Notice = {
@@ -177,4 +179,142 @@ export function runReminders(now: Date = new Date()): number {
 
   if (fresh.length > 0) write(KEYS.alerts, [...fresh, ...existing]);
   return fresh.length;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Staff alerts from the scripts dashboard (public.scripts_dashboard), shown on the admin home. Pure: the page reads
+// the dashboard on the server and shows these.
+
+/** One exam of the last 14 days: scripts expected (paid home bookings and centre candidates marked present or late),
+ * received, verified (or further on), needing attention, and handed in late. */
+export type ScriptsDashboardExam = {
+  id: string;
+  title: string;
+  paper: string | null;
+  startsAt: string;
+  expected: number;
+  received: number;
+  verified: number;
+  needsAttention: number;
+  late: number;
+};
+
+/** A centre whose sheets were counted but which has no "scanned" custody record by 09:00 the day after the exam. */
+export type CentreNotScanned = {
+  examId: string;
+  title: string;
+  paper: string | null;
+  centreId: string;
+  venue: string;
+  room: string;
+  counted: number;
+  scannedBy: string;
+};
+
+export type ScriptsDashboard = {
+  exams: ScriptsDashboardExam[];
+  openExceptions: number;
+  failedJobs: number;
+  /** How long the oldest file due to be processed has waited, or null when none waits. */
+  oldestQueuedMinutes: number | null;
+  centresNotScanned: CentreNotScanned[];
+};
+
+export type StaffAlert = { id: string; tone: "red" | "amber"; text: string; href: string | null };
+
+/** The processing server takes a file every few seconds and a file takes minutes at most: a file due this long ago
+ * means the server is stopped or stuck. */
+export const QUEUE_STUCK_MINUTES = 15;
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const counted = (v: unknown): number => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0);
+const text = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+
+function dashboardExam(x: unknown): ScriptsDashboardExam | null {
+  if (!isRecord(x) || !isRecord(x.exam)) return null;
+  const id = text(x.exam.id);
+  const title = text(x.exam.title);
+  const startsAt = text(x.exam.starts_at);
+  if (!id || !title || !startsAt) return null;
+  return {
+    id,
+    title,
+    paper: text(x.exam.paper),
+    startsAt,
+    expected: counted(x.expected),
+    received: counted(x.received),
+    verified: counted(x.verified),
+    needsAttention: counted(x.needs_attention),
+    late: counted(x.late),
+  };
+}
+
+function centreNotScanned(x: unknown): CentreNotScanned | null {
+  if (!isRecord(x)) return null;
+  const examId = text(x.exam_id);
+  const title = text(x.title);
+  const centreId = text(x.centre_id);
+  const venue = text(x.venue);
+  const room = text(x.room);
+  const scannedBy = text(x.scanned_by);
+  if (!examId || !title || !centreId || !venue || !room || !scannedBy) return null;
+  return { examId, title, paper: text(x.paper), centreId, venue, room, counted: counted(x.counted), scannedBy };
+}
+
+/** scripts_dashboard's answer, or null for a refusal or a broken answer. Malformed rows are left out. */
+export function parseScriptsDashboard(data: unknown): ScriptsDashboard | null {
+  if (!isRecord(data) || data.ok !== true) return null;
+  const minutes = data.oldest_queued_minutes;
+  return {
+    exams: (Array.isArray(data.exams) ? data.exams : []).map(dashboardExam).filter((e): e is ScriptsDashboardExam => e !== null),
+    openExceptions: counted(data.open_exceptions),
+    failedJobs: counted(data.failed_jobs),
+    oldestQueuedMinutes: typeof minutes === "number" && Number.isInteger(minutes) && minutes >= 0 ? minutes : null,
+    centresNotScanned: (Array.isArray(data.centres_without_scanned_custody) ? data.centres_without_scanned_custody : [])
+      .map(centreNotScanned)
+      .filter((c): c is CentreNotScanned => c !== null),
+  };
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** What staff should act on, the most urgent first: a stopped processing server, files that could not be processed,
+ * centres whose collected sheets were not scanned by 09:00 the next day, and problems in the exception queue. */
+export function scriptsDashboardAlerts(d: ScriptsDashboard): StaffAlert[] {
+  const out: StaffAlert[] = [];
+  if (d.oldestQueuedMinutes !== null && d.oldestQueuedMinutes >= QUEUE_STUCK_MINUTES) {
+    out.push({
+      id: "queue",
+      tone: "red",
+      text: `Files have waited ${d.oldestQueuedMinutes} minutes to be processed. Check that the processing server is running.`,
+      href: null,
+    });
+  }
+  if (d.failedJobs > 0) {
+    out.push({
+      id: "failed",
+      tone: "red",
+      text: `${plural(d.failedJobs, "file", "files")} could not be processed. ${d.failedJobs === 1 ? "It is" : "They are"} in the exception queue.`,
+      href: "/admin/scripts/exceptions?kind=processing_failed",
+    });
+  }
+  for (const c of d.centresNotScanned) {
+    out.push({
+      id: `custody-${c.examId}-${c.centreId}`,
+      tone: "amber",
+      text:
+        `${c.title}${c.paper ? ` (${c.paper})` : ""}, ${c.venue}, ${c.room}: sheets were collected for ${plural(c.counted, "candidate", "candidates")} ` +
+        `but no scan is recorded. It was due by ${formatLondon(c.scannedBy)}.`,
+      href: `/admin/exams/${c.examId}`,
+    });
+  }
+  if (d.openExceptions > 0) {
+    out.push({
+      id: "open",
+      tone: "amber",
+      text: `${plural(d.openExceptions, "problem is", "problems are")} waiting in the exception queue.`,
+      href: "/admin/scripts/exceptions",
+    });
+  }
+  return out;
 }

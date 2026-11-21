@@ -140,7 +140,9 @@ select is((select count(*)::int from jsonb_array_elements(pg_temp.man('ce2') -> 
 select is(pg_temp.code(public.collection_manifest_create(pg_temp.k('e'), pg_temp.k('cf'))), 'not_found', 'a centre of another exam is not found');
 select is(pg_temp.code(public.collection_manifest_create(pg_temp.k('e'), null)), 'invalid_input', 'no centre is refused');
 select tests.as_postgres();
-select is((select count(*)::int from public.audit_log where action = 'collection_manifest_created'), 4, 'each manifest is audited');
+-- Counted for this test's own staff: audit rows left by other work (browser tests) are not part of it.
+select is((select count(*)::int from public.audit_log where action = 'collection_manifest_created' and actor_id in (select id from c)), 4,
+  'each manifest is audited');
 
 -- ----- custody_steps_and_lengths_checked -----
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
@@ -174,7 +176,8 @@ select is((select string_agg(x ->> 'step', ',') from jsonb_array_elements(public
            where x ->> 'note' in ('Sealed bag 1', 'Locked away')), 'handed_over,archived', 'events come back in the order they happened');
 select is(pg_temp.code(public.custody_list(pg_temp.k('e'), pg_temp.k('ce2'))), 'ok', 'a centre with no events has an empty list');
 select tests.as_postgres();
-select is((select count(*)::int from public.audit_log where action = 'custody_recorded'), 7, 'each custody event is audited');
+select is((select count(*)::int from public.audit_log where action = 'custody_recorded' and actor_id in (select id from c)), 7,
+  'each custody event is audited');
 
 -- ----- what the screens read -----
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('teacher'));
