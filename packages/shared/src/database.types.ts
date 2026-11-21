@@ -1774,6 +1774,9 @@ isOneToOne: false
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
                            },
+"marking_missing":
+{ Args: { "p_marking": string,"p_unit": string }; Returns: Json
+                           },
 "marking_my_work":
 { Args: { "p_now"?: string }; Returns: Json
                            },
@@ -1782,6 +1785,15 @@ isOneToOne: false
                            },
 "marking_open":
 { Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_ops_apply":
+{ Args: { "p_actor": string,"p_after": boolean,"p_marking": string,"p_ops": Json,"p_reason": string,"p_script": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_pages_key":
+{ Args: { "p_script": string }; Returns: string
+                           },
+"marking_picture_allowed":
+{ Args: { "p_name": string }; Returns: boolean
                            },
 "marking_progress":
 { Args: { "p_exam"?: string,"p_now"?: string }; Returns: Json
@@ -1792,11 +1804,19 @@ isOneToOne: false
 "marking_reopen":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
+"marking_save":
+{ Args: { "p_active_seconds"?: number,"p_marking": string,"p_now"?: string,"p_ops": Json,"p_reason"?: string,"p_rev": number }; Returns: Json
+                           },
 "marking_script_blocked":
 { Args: { "p_now": string,"p_script": string }; Returns: string
                            },
 "marking_script_busy":
 { Args: { "p_script": string }; Returns: boolean
+                           },
+"marking_script_pages":
+{ Args: { "p_script": string }; Returns: {
+              "copy_page": number,"extra": boolean,"marking_path": string,"n": number,"page_id": string,"rotation": number
+            }[]
                            },
 "marking_script_state":
 { Args: { "p_script": string }; Returns: undefined
@@ -1807,14 +1827,31 @@ isOneToOne: false
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
                            },
+"marking_submit":
+{ Args: { "p_marking": string,"p_now"?: string,"p_rev": number }; Returns: Json
+                           },
 "marking_take_back":
 { Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
 "marking_tick":
 { Args: Record<PropertyKey, never>; Returns: undefined
                            },
+"marking_total":
+{ Args: { "p_marking": string }; Returns: number
+                           },
 "marking_unit_blocked":
 { Args: { "p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
+                           },
+"marking_unit_max_total":
+{ Args: { "p_unit": string }; Returns: number
+                           },
+"marking_unit_open":
+{ Args: { "p_now"?: string,"p_unit": string }; Returns: Json
+                           },
+"marking_unit_questions":
+{ Args: { "p_unit": string }; Returns: {
+              "label": string,"leaf": boolean,"mark_step": number,"max_mark": number,"parent_id": string,"path": (number)[],"question_id": string,"top_id": string
+            }[]
                            },
 "marking_unit_take":
 { Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_marker": string,"p_unit": string }; Returns: undefined
@@ -1840,6 +1877,9 @@ isOneToOne: false
                            },
 "marking_units_pick":
 { Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: (string)[]
+                           },
+"marking_work_blocked":
+{ Args: { "p_now": string,"p_unit": string,"p_user": string }; Returns: string
                            },
 "money_totals":
 { Args: { "p_from": string,"p_to": string }; Returns: Json

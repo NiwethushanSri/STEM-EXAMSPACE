@@ -439,3 +439,33 @@ export function allocationMessageFor(code: string | null | undefined, context: A
   const table = allocationMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
 }
+
+/** Failure codes of the marking screen (marking_unit_open, marking_save, marking_submit). A conflict says why in
+ * `reason`: rev (another screen saved first), set_aside (the script is no longer the marker's) or submitted (it
+ * already was). */
+const markingWorkMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input: "This change could not be saved. Reload to carry on.",
+  not_found: "This script could not be found. Go back to your list.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  hold_expired: "Your hold on this script has ended. Press Next script to carry on.",
+  on_hold: "This script is on hold. The lead marker has been told.",
+  pictures_updating: "This script's pictures are being updated. Your work is saved. Try again in a few minutes.",
+  marking_closed: "Marking has closed for this exam.",
+  incomplete: "Give every question a mark, or NR, before you submit.",
+  mark_out_of_range: "That mark is not allowed for this question.",
+};
+const markingWorkConflicts: Record<string, string> = {
+  rev: "This script was changed on another screen. Reload to carry on.",
+  set_aside: "This script is no longer yours to mark. Press Next script to carry on.",
+  submitted: "This script has already been submitted.",
+};
+
+/** Message for a marking screen RPC failure code (and a conflict's reason); unknown codes get the generic message, and
+ * a conflict without a known reason is read as another screen's save. */
+export function markingWorkMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") {
+    return reason && Object.hasOwn(markingWorkConflicts, reason) ? markingWorkConflicts[reason] : markingWorkConflicts.rev;
+  }
+  return code && Object.hasOwn(markingWorkMessages, code) ? markingWorkMessages[code] : messages.internal;
+}
