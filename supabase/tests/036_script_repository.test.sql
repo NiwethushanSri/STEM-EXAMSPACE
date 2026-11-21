@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(173);
+select plan(176);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -897,9 +897,87 @@ select is(pg_temp.scenario('s_hl2'),
 select is(pg_temp.scenario('s_xr2'),
   'ok recorded:3 1:0@u4b,2:1@u4b,3:2@u4b,4:3@u4b | rejected 1:0@u4,2:1@u4,3:2@u4 needs_attention open=late,missing_pages:reprocessed:[4] stale=0 twice=0 bare=0 orphans=0',
   'R37 (4, xR2): a slot a restored version can no longer show is told to staff (missing_pages), whoever writes the version');
-select is(concat_ws(' ', pg_temp.links('b1'), pg_temp.state('b1'), (select count(*) from kv where name in ('u2', 'u9', 'u11', 'u4b', 'u3b')),
-    (select count(*) from public.script_page_hidden_areas a join public.script_pages p on p.id = a.page_id where p.exam_id = pg_temp.k('e'))),
-  '1:0@u1,2:1@u1,3:2@u1,4:3@u1 receiving 0 0', 'the scenarios left nothing behind');
+
+-- ---------------------------------------------------------------------------------------------
+-- R38: a rerun's undo never takes back a page staff placed, whichever order the rerun writes the scripts in.
+-- ---------------------------------------------------------------------------------------------
+-- Probes inc1/inc2: as xT, but the rerun also reads a page of the candidate staff gave the page to (bx), so bx's script
+-- is written by the rerun too, while b1's undone version still shows the page. The rerun goes through its bookings in
+-- uuid order, so bx's booking is made to sort before b1's (p_before) or after it.
+create function pg_temp.s_inc(p_before boolean) returns text language plpgsql as $$
+declare
+  v_b uuid := (case when p_before then '00000000-0000-4000-8000-0000000000b7' else 'ffffffff-ffff-4fff-bfff-ffffffffffb7' end)::uuid;
+  v_s uuid := tests.create_user('student', 'active');
+  v text;
+  r jsonb;
+begin
+  insert into kv values ('bx', v_b);
+  insert into public.bookings (id, exam_id, student_id, booked_by, status, amount_pence, sitting, centre_id)
+  values (v_b, pg_temp.k('e'), v_s, v_s, 'paid', 0, 'centre', pg_temp.k('ce'));
+  insert into public.paper_copies (code, booking_id, paper_id, page_count) values (public.copy_code_new(), v_b, pg_temp.k('pv2'), 6);
+  insert into kv select 'qx', id from public.paper_copies where booking_id = v_b;
+  insert into public.attendance (exam_id, student_id, status, marked_by, marked_at)
+  values (pg_temp.k('e'), v_s, 'present', pg_temp.uid('admin'), '2031-08-04 09:00Z');
+  -- bx's pages 1-4 are scanned (file ux).
+  perform pg_temp.scan_file('ux', 'e', 'bt');
+  perform pg_temp.run('ux', jsonb_build_array(pg_temp.pp('ux', 0, 'qx', 1), pg_temp.pp('ux', 1, 'qx', 2), pg_temp.pp('ux', 2, 'qx', 3),
+    pg_temp.pp('ux', 3, 'qx', 4)));
+  -- u2 holds b1's page 3 again, sharper: it takes slot 3, and u1's page 3 is set aside as a duplicate.
+  perform pg_temp.scan_file('u2', 'e', 'bt');
+  perform pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 3), '{quality,sharpness}', '400')));
+  -- Staff put that duplicate in bx's spare slot 6.
+  r := pg_temp.as_admin($q$select public.script_exception_assign(pg_temp.exc('u1', 2, 'duplicate'), pg_temp.k('bx'), 6, 'It is the other candidate''s')$q$);
+  v := concat_ws(' ', pg_temp.code(r), pg_temp.links('b1'), '/', pg_temp.links('bx'), pg_temp.ask('u2'));
+  -- u2 is processed again and now reads as b1's page 5 and bx's page 5.
+  r := pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 5), '{quality,sharpness}', '400'),
+    pg_temp.pp('u2', 1, 'qx', 5)));
+  v := concat_ws(' ', v, 'recorded:' || (r ->> 'pages'), pg_temp.links('b1'), '/', pg_temp.links('bx'), 'u1#2=' || (pg_temp.pg('u1', 2)).state,
+    'placed=' || public.script_slot_staff_placed(pg_temp.sid('bx'), 6, pg_temp.pid('u1', 2)),
+    'b1 open=' || pg_temp.opens('b1'), 'bx open=' || pg_temp.opens('bx'),
+    'other=' || coalesce((select string_agg(pg_temp.kname(e.booking_id) || '>' || pg_temp.kname(s.booking_id), ',')
+                          from public.script_exceptions e join public.scripts s on s.id = (e.details ->> 'other_script_id')::uuid
+                          where e.page_id = pg_temp.pid('u1', 2) and e.kind = 'duplicate' and e.state = 'open'), '-'));
+  -- The centre's scans are checked for both candidates.
+  perform public.scan_booking_complete(pg_temp.k('bx'));
+  perform public.scan_booking_complete(pg_temp.k('b1'));
+  return concat_ws(' ', v, '|', pg_temp.state('b1'), pg_temp.state('bx'), 'b1 open=' || pg_temp.opens('b1'), 'bx open=' || pg_temp.opens('bx'),
+    pg_temp.safe());
+end $$;
+create function pg_temp.s_inc_before() returns text language sql as $$ select pg_temp.s_inc(true) $$;
+create function pg_temp.s_inc_after() returns text language sql as $$ select pg_temp.s_inc(false) $$;
+-- The slot decision keeps a page and clears the duplicates about it, but not one saying another script's version asked
+-- for that page (in_other_script) unless the page is kept in a slot staff placed it in. Here b5's version had asked
+-- for b1's page 3 (u1#2), which b1 shows; a blurrier scan of the same page leaves u1#2 where it is.
+create function pg_temp.s_dup_kept() returns text language plpgsql as $$
+declare
+  r jsonb;
+begin
+  insert into public.script_exceptions (exam_id, kind, booking_id, script_id, page_id, upload_id, details)
+  values (pg_temp.k('e'), 'duplicate', pg_temp.k('b5'), pg_temp.sid('b5'), pg_temp.pid('u1', 2), pg_temp.k('u1'),
+    jsonb_build_object('copy_page', 6, 'reason', 'in_other_script', 'other_script_id', pg_temp.sid('b1')));
+  perform pg_temp.scan_file('u2', 'e', 'bt');
+  r := pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 3), '{quality,sharpness}', '100')));
+  return concat_ws(' ', 'recorded:' || (r ->> 'pages'), pg_temp.links('b1'), 'u2#0=' || (pg_temp.pg('u2', 0)).state,
+    'b5 open=' || pg_temp.opens('b5'), 'b1 open=' || pg_temp.opens('b1'), pg_temp.safe());
+end $$;
+
+select is(pg_temp.scenario('s_inc_before'),
+  'ok 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,6:2@u1 ok recorded:2 1:0@u1,2:1@u1,4:3@u1,5:0@u2 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,5:1@u2,6:2@u1 '
+  || 'u1#2=duplicate placed=true b1 open=duplicate:in_other_script@2@u1,missing_pages:in_other_script:[3] bx open=none other=b1>bx '
+  || '| needs_attention verified b1 open=duplicate:in_other_script@2@u1,missing_pages:[3] bx open=none stale=0 twice=0 bare=0 orphans=0',
+  'R38 (inc1/inc2, the staff-chosen script sorts first): the undone script gives the page up before the rerun writes the scripts; it stays where staff put it and b1 is told');
+select is(pg_temp.scenario('s_inc_after'),
+  'ok 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,6:2@u1 ok recorded:2 1:0@u1,2:1@u1,4:3@u1,5:0@u2 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,5:1@u2,6:2@u1 '
+  || 'u1#2=duplicate placed=true b1 open=duplicate:in_other_script@2@u1,missing_pages:in_other_script:[3] bx open=none other=b1>bx '
+  || '| needs_attention verified b1 open=duplicate:in_other_script@2@u1,missing_pages:[3] bx open=none stale=0 twice=0 bare=0 orphans=0',
+  'R38 (inc1/inc2, the staff-chosen script sorts last): the same outcome');
+select is(pg_temp.scenario('s_dup_kept'),
+  'recorded:1 1:0@u1,2:1@u1,3:2@u1,4:3@u1 u2#0=duplicate b5 open=duplicate:in_other_script@2@u1,poor_quality@8@u1 b1 open=duplicate@0@u2 stale=0 twice=0 bare=0 orphans=0',
+  'R38: the slot decision never deletes an in_other_script duplicate about the page it keeps, unless staff placed the page in that slot');
+select is(concat_ws(' ', pg_temp.links('b1'), pg_temp.state('b1'), (select count(*) from kv where name in ('u2', 'u9', 'u11', 'u4b', 'u3b', 'ux', 'bx')),
+    (select count(*) from public.script_page_hidden_areas a join public.script_pages p on p.id = a.page_id where p.exam_id = pg_temp.k('e')),
+    (select count(*) from public.bookings b where b.exam_id = pg_temp.k('e'))),
+  '1:0@u1,2:1@u1,3:2@u1,4:3@u1 receiving 0 0 5', 'the scenarios left nothing behind');
 
 -- ---------------------------------------------------------------------------------------------
 -- Access.
