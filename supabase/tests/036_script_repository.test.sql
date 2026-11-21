@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(144);
+select plan(153);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -87,8 +87,8 @@ create function pg_temp.page(p_up text, p_idx int, p_copy text, p_page int, p_fl
     'blank', false,
     'quality', jsonb_build_object('sharpness', 200, 'brightness', 180, 'cut_off', false, 'flags', to_jsonb(p_flags)),
     'rotation', 0,
-    'full_path', coalesce(p_dir, pg_temp.dir(p_up)) || p_idx || '-full.jpg',
-    'marking_path', case when p_copy is not null and p_marking then coalesce(p_dir, pg_temp.dir(p_up)) || p_idx || '-marking.jpg' end)
+    'full_path', coalesce(p_dir, pg_temp.dir(p_up), pg_temp.legacy(p_up) || 'none/') || p_idx || '-full.jpg',
+    'marking_path', case when p_copy is not null and p_marking then coalesce(p_dir, pg_temp.dir(p_up), pg_temp.legacy(p_up) || 'none/') || p_idx || '-marking.jpg' end)
 $$;
 -- Claims the upload's waiting prepare job, records these pages and finishes it.
 create function pg_temp.run(p_up text, p_pages jsonb) returns jsonb language plpgsql as $$
@@ -762,6 +762,108 @@ select is((select count(*)::int from public.script_exceptions e join public.scri
            where p.upload_id = pg_temp.k('u3') and p.replaced_at is null and p.marking_path is not null
              and e.kind = 'poor_quality' and e.state = 'open' and e.details ->> 'from' = 'remask'), 0,
   'R33: on the pages the prepare proved, what a remask raised is closed (marking made)');
+
+-- ---------------------------------------------------------------------------------------------
+-- R34: processing a file again never keeps a stale link or a picture staff work made unsafe.
+-- ---------------------------------------------------------------------------------------------
+-- A rerun: the upload's waiting prepare job, these pages, then its remask jobs answered with a picture for each.
+create function pg_temp.reprocess(p_up text, p_pages jsonb) returns jsonb language plpgsql as $$
+declare r jsonb;
+begin
+  perform tests.as_user(pg_temp.uid('admin'));
+  r := public.script_upload_reprocess(pg_temp.k(p_up), 'Read it again');
+  perform tests.as_postgres();
+  if r ->> 'ok' <> 'true' then
+    raise exception 'reprocess refused: %', r;
+  end if;
+  return pg_temp.run(p_up, p_pages);
+end $$;
+create function pg_temp.slot(p_booking text, p_slot int) returns uuid language sql stable as $$
+  select l.page_id from public.scripts s join public.script_page_links l on l.script_id = s.id and l.version = s.version
+  where s.booking_id = pg_temp.k(p_booking) and l.copy_page = p_slot $$;
+create function pg_temp.cur_version(p_booking text) returns public.script_versions language sql stable as $$
+  select v.* from public.scripts s join public.script_versions v on v.script_id = s.id and v.version = s.version
+  where s.booking_id = pg_temp.k(p_booking) $$;
+grant execute on function pg_temp.slot(text, int), pg_temp.cur_version(text) to public;
+
+-- (c) u10's page (staff placed it in b1's spare slot 6) now reads as b2's page 6: it is not carried into b1's script.
+select pg_temp.reprocess('u10', jsonb_build_array(pg_temp.page('u10', 0, 'q2', 6)));
+select is(concat_ws('/', pg_temp.slot('b1', 6) is null, pg_temp.slot('b2', 6) = pg_temp.pid('u10', 0),
+    (select count(*) from public.script_page_links l join public.scripts s on s.id = l.script_id and l.version = s.version
+     where l.page_id = pg_temp.pid('u10', 0)),
+    (select concat_ws(':', details ->> 'reason', details -> 'pages' @> '[6]') from public.script_exceptions
+     where booking_id = pg_temp.k('b1') and kind = 'missing_pages' and state = 'open'),
+    public.script_upload_stale_links(pg_temp.k('u10'))),
+  't/t/1/reprocessed:t/0',
+  'R34 (c): a page that now reads as another candidate''s goes to theirs only; b1''s slot is emptied and staff are told');
+
+-- (b) A page with no code staff placed in b1's slot 6, its file processed again three times.
+select pg_temp.scan_file('u12', 'e', 'bt');
+select pg_temp.run('u12', jsonb_build_array(pg_temp.page('u12', 0, null, null)));
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.script_exception_assign(pg_temp.exc('u12', 0, 'no_code'), pg_temp.k('b1'), 6, 'Her spare page', false, true) ->> 'resolution',
+  'assigned', 'staff place a page with no code in b1''s slot 6');
+select tests.as_postgres();
+insert into res select 'r12', pg_temp.claim_remask('u12');
+select pg_temp.remasked(pg_temp.r('r12'), pg_temp.answer(pg_temp.r('r12')));
+select pg_temp.finish(pg_temp.r('r12'), true);
+select pg_temp.reprocess('u12', jsonb_build_array(pg_temp.page('u12', 0, null, null)));
+select is(concat_ws('/', pg_temp.slot('b1', 6) = pg_temp.pid('u12', 0), public.script_upload_stale_links(pg_temp.k('u12')),
+    (pg_temp.cur_version('b1')).upload_id is null, (pg_temp.cur_version('b1')).created_by = pg_temp.uid('admin'),
+    (pg_temp.pg('u12', 0)).marking_path is null,
+    (select details ->> 'reprocessed' from public.script_exceptions where page_id = pg_temp.pid('u12', 0) and kind = 'poor_quality' and state = 'open')),
+  't/0/t/t/t/true',
+  'R34 (b): after one rerun the slot shows the new page, in a version owned by the staff member who asked (not the file); its name is checked again');
+insert into kv values ('x12', (select id from public.script_exceptions where page_id = pg_temp.pid('u12', 0) and kind = 'poor_quality' and state = 'open'));
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_exception_confirm(pg_temp.k('x12'), 'No name on it', true);
+select tests.as_postgres();
+select pg_temp.reprocess('u12', jsonb_build_array(pg_temp.page('u12', 0, null, null)));
+select is(concat_ws('/', pg_temp.slot('b1', 6) = pg_temp.pid('u12', 0), public.script_upload_stale_links(pg_temp.k('u12')),
+    (select count(*) from public.script_exceptions where page_id = pg_temp.pid('u12', 0) and kind = 'no_code' and state = 'open')),
+  't/0/0', 'R34 (b): after a second rerun it is still the slot''s page (the first rerun''s version is not undone), no orphan no_code');
+select pg_temp.reprocess('u12', jsonb_build_array(pg_temp.page('u12', 0, null, null)));
+select is(concat_ws('/', pg_temp.slot('b1', 6) = pg_temp.pid('u12', 0), public.script_upload_stale_links(pg_temp.k('u12')), pg_temp.state('b1')),
+  't/0/needs_attention', 'R34 (b): and after a third; the script waits for staff to check the name');
+select pg_temp.reprocess('u12', '[]'::jsonb);
+select is(concat_ws('/', pg_temp.slot('b1', 6) is null, public.script_upload_stale_links(pg_temp.k('u12')),
+    (select details -> 'pages' @> '[6]' from public.script_exceptions where booking_id = pg_temp.k('b1') and kind = 'missing_pages' and state = 'open')),
+  't/0/t', 'R34 (b): a rerun without that page empties the slot and tells staff');
+
+-- (a) b5's page 3 (an unexpected page: b5 refunded) placed in b2's slot 1, with a staff area over a name in its margin.
+select pg_temp.scan_file('u13', 'e', 'bt');
+select pg_temp.run('u13', jsonb_build_array(pg_temp.page('u13', 0, 'q5', 3)));
+insert into kv values ('p13_old', pg_temp.pid('u13', 0));
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.script_exception_assign(pg_temp.exc('u13', 0, 'not_expected'), pg_temp.k('b2'), 1, 'Belongs to b2') ->> 'resolution', 'assigned',
+  'staff place a page with a code in b2''s slot 1');
+select public.script_page_set_hidden_areas(pg_temp.k('p13_old'), '[{"x":0.02,"y":0.4,"w":0.05,"h":0.3}]', 'Name along the side');
+select tests.as_postgres();
+insert into res select 'r13', pg_temp.claim_remask('u13');
+select pg_temp.remasked(pg_temp.r('r13'), pg_temp.answer(pg_temp.r('r13')));
+select pg_temp.finish(pg_temp.r('r13'), true);
+select pg_temp.reprocess('u13', jsonb_build_array(pg_temp.page('u13', 0, 'q5', 3)));
+select is(concat_ws('/', pg_temp.slot('b2', 1) = pg_temp.pid('u13', 0), (pg_temp.pg('u13', 0)).marking_path is null,
+    (select count(*) from public.script_page_hidden_areas where page_id = pg_temp.pid('u13', 0)),
+    (select count(*) from public.script_exceptions where page_id = pg_temp.pid('u13', 0) and kind = 'poor_quality' and state = 'open'),
+    (select count(*) from public.script_exceptions where page_id = pg_temp.pid('u13', 0) and kind = 'not_expected' and state = 'open'),
+    pg_temp.state('b2')),
+  't/t/0/1/0/needs_attention',
+  'R34 (a): the rerun''s page keeps its slot but gets no marking picture from the prepare (its staff area is gone): staff check the name again');
+
+-- (a) A matched page with a staff area (b1's page 3, u1 position 2), its file processed again.
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_set_hidden_areas(pg_temp.pid('u1', 2), '[{"x":0.02,"y":0.4,"w":0.05,"h":0.3}]', 'Name in the margin');
+select tests.as_postgres();
+select pg_temp.reprocess('u1', jsonb_build_array(
+  pg_temp.page('u1', 0, 'q1', 1), pg_temp.page('u1', 1, 'q1', 2), pg_temp.page('u1', 2, 'q1', 3), pg_temp.page('u1', 3, 'q1', 4),
+  pg_temp.page('u1', 4, 'q2a', 2), pg_temp.page('u1', 5, 'q2', 3), pg_temp.page('u1', 6, 'q2', 4),
+  pg_temp.page('u1', 7, 'q5', 2), pg_temp.page('u1', 8, 'q5', 3, '{layout_unexpected}', false), pg_temp.page('u1', 9, null, null)));
+select is(concat_ws('/', (pg_temp.pg('u1', 2)).marking_path is null, (pg_temp.pg('u1', 1)).marking_path is not null,
+    (select details ->> 'reprocessed' from public.script_exceptions where page_id = pg_temp.pid('u1', 2) and kind = 'poor_quality' and state = 'open'),
+    pg_temp.slot('b1', 5) = pg_temp.pid('u1', 9), public.script_upload_stale_links(pg_temp.k('u1'))),
+  't/t/true/t/0',
+  'R34 (a): the page that had a staff area gets no prepare picture (the others keep theirs); the staff-placed page stays in slot 5');
 
 -- ---------------------------------------------------------------------------------------------
 -- Per-run picture folders: a prepare job's pictures must be in the folder of the job and its attempt.

@@ -217,6 +217,14 @@ const NOT_EXPECTED: Record<string, string> = {
 
 /** What the server found, in plain words: one sentence per line. */
 export function foundInWords(item: QueueItem): string[] {
+  const words = foundWords(item);
+  if (isLocked(item) && !isStaleNotice(item) && item.page) {
+    words.push("The script is being marked, so this page's hidden areas can no longer change here: tell the marking lead.");
+  }
+  return words;
+}
+
+function foundWords(item: QueueItem): string[] {
   const d = item.details;
   const copyPage = num(d.copy_page) ?? item.page?.copyPage ?? null;
   const pageWord = copyPage !== null ? `Page ${copyPage}` : "This page";
@@ -272,6 +280,10 @@ export function foundInWords(item: QueueItem): string[] {
         out.push("Hide the candidate's name on the full page, then accept it.");
       } else if (str(d.from) === "remask" && d.stale_marking === true) {
         out.push("Its marking pictures could not be made again after its hidden areas changed, and the script is already being marked: the marking picture it has may be out of date.");
+        out.push("Its hidden areas can no longer change here: tell the marking lead, then note it.");
+      } else if (str(d.from) === "remask" && d.reprocessed === true) {
+        out.push("Check the name again after reprocessing: the file was read again from the original, and staff work on this page (hidden areas, confirmation, placement) has to be done again.");
+        out.push("Hide the candidate's name on the full page, or tick that there is none, then accept it.");
       } else if (str(d.from) === "remask") {
         out.push("Its marking picture could not be made again after its hidden areas or its turn changed, so the old one was taken away (this is not the family's file).");
         out.push("Hide the candidate's name on the full page, or tick that there is none, then accept it.");
@@ -340,10 +352,18 @@ export function actionsFor(item: QueueItem): QueueAction[] {
   if (item.state !== "open") return [];
   if (item.kind === "missing_pages" && numbers(item.details.pages).length === 0) return [];
   if (item.kind === "late" && !item.script) return [];
-  if (isRemaskFailure(item)) return ["confirm"];
-  if (isRemaskQuality(item)) return ["hide_areas", "confirm"];
-  return ACTIONS[item.kind];
+  if (isRemaskFailure(item) || isStaleNotice(item)) return ["confirm"];
+  const actions = isRemaskQuality(item) ? (["hide_areas", "confirm"] as QueueAction[]) : ACTIONS[item.kind];
+  // The database refuses hidden areas on a page of a script past verification (R34 d): never offer them there.
+  return isLocked(item) ? actions.filter((a) => a !== "hide_areas") : actions;
 }
+
+/** A script past verification (being marked, marked, or out of the marking): its pages no longer change here. */
+export const isLocked = (item: QueueItem) =>
+  item.script !== null && !["receiving", "checking", "needs_attention", "verified"].includes(item.script.state);
+
+/** A script being marked kept a marking picture a failed remask could not make again (stale_marking): only noted. */
+export const isStaleNotice = (item: QueueItem) => item.kind === "poor_quality" && item.details.stale_marking === true;
 
 /** Whether rejecting this exception rejects a family's submission (as the database says). */
 export const rejectsSubmission = (item: QueueItem) => item.rejectsSubmission;
@@ -361,6 +381,7 @@ export function needsNameCheck(item: QueueItem, action: "confirm" | "assign" | Q
   if (action === "assign") return isCodeless(p);
   if (action !== "confirm") return false;
   if (item.kind === "name_visible" || item.kind === "uncoded_family_page") return true;
+  if (isStaleNotice(item)) return false;
   return item.kind === "poor_quality" && (p.flags.includes("layout_unexpected") || isRemaskQuality(item) || isCodeless(p));
 }
 
@@ -375,7 +396,9 @@ export function actionLabel(action: QueueAction, item: QueueItem): string {
     case "reject":
       return rejectsSubmission(item) ? "Reject the submission" : "Reject this page";
     case "confirm":
-      return item.kind === "poor_quality"
+      return isStaleNotice(item)
+        ? "Noted"
+        : item.kind === "poor_quality"
         ? "Accept as it is"
         : item.kind === "uncoded_family_page"
           ? "Confirm the family's placement"

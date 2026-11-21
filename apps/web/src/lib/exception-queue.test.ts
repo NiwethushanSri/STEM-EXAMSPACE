@@ -285,6 +285,22 @@ describe("a page whose marking picture a remask could not make again", () => {
     const words = foundInWords(item({ kind: "poor_quality", details: { from: "remask", marking_picture: true, stale_marking: true, flags: [] } }));
     expect(words.join(" ")).toContain("may be out of date");
   });
+  it("never offers to hide a name where it could not be hidden, and says what to do instead (R34 d)", () => {
+    const stale = item({ kind: "poor_quality", details: { from: "remask", marking_picture: true, stale_marking: true, flags: [] } });
+    expect(actionsFor(stale)).toEqual(["confirm"]);
+    expect(actionLabel("confirm", stale)).toBe("Noted");
+    expect(needsNameCheck(stale)).toBe(false);
+    expect(foundInWords(stale).join(" ")).toContain("marking lead");
+    const marking = { ...raw().script, state: "marking" };
+    const locked = item({ kind: "name_visible", script: marking, page: page({ areas: [] }) });
+    expect(actionsFor(locked)).not.toContain("hide_areas");
+    expect(foundInWords(locked).join(" ")).toContain("can no longer change here");
+    expect(actionsFor(item({ kind: "name_visible" }))).toContain("hide_areas");
+  });
+  it("asks for the name to be checked again after reprocessing", () => {
+    const words = foundInWords(item({ kind: "poor_quality", details: { from: "remask", marking_picture: false, reprocessed: true, flags: [] } }));
+    expect(words.join(" ")).toContain("Check the name again after reprocessing");
+  });
   it("says noting a remask failure makes the marking pictures again", () => {
     const words = foundInWords(item({ kind: "processing_failed", page: null, details: { kind: "remask", attempts: 3 } }));
     expect(words.join(" ")).toContain("made again");

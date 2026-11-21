@@ -1640,7 +1640,7 @@ isOneToOne: false
 { Args: { "p_page": string }; Returns: boolean
                            },
 "script_page_marking_lost":
-{ Args: { "p_cleared"?: boolean,"p_page": string }; Returns: undefined
+{ Args: { "p_cleared"?: boolean,"p_extra"?: Json,"p_page": string }; Returns: undefined
                            },
 "script_page_marking_made":
 { Args: { "p_page": string }; Returns: undefined
@@ -1734,6 +1734,9 @@ isOneToOne: false
                            },
 "script_upload_reprocess":
 { Args: { "p_reason": string,"p_upload": string }; Returns: Json
+                           },
+"script_upload_stale_links":
+{ Args: { "p_upload": string }; Returns: number
                            },
 "script_upload_stored":
 { Args: { "p_upload": string }; Returns: Json
