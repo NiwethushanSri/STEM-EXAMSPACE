@@ -71,8 +71,11 @@ test("parent_confirms_hands_in_photos_and_gets_the_receipt", async ({ page }) =>
   ]);
   await expect(panel.getByTestId("upload-files").getByText("Uploaded", { exact: true })).toHaveCount(6, { timeout: 120_000 });
   await noSidewaysScroll(page, "the upload with six photos");
+  // Uploaded is not handed in: the screen keeps saying so until Submit.
+  await expect(panel.getByTestId("unsent-warning")).toHaveText("Your pages are not sent yet. Press Submit to send them.");
   await panel.getByRole("button", { name: /^Submit/ }).click();
   await expect(panel.getByTestId("upload-status-word")).toHaveText("Checking your pages");
+  await expect(panel.getByTestId("unsent-warning")).toHaveCount(0);
 
   // The processing server reads the six photos; the hand-in is received once every one is recorded.
   const states = async () => ((await svc().from("home_submissions").select("state").eq("booking_id", booking).order("seq")).data ?? []).map((s) => s.state);
@@ -107,7 +110,7 @@ test("staff_find_the_other_candidates_page_in_the_exception_queue", async ({ pag
   // needs attention.
   await page.goto("/admin");
   const row = page.getByTestId("scripts-exam").filter({ hasText: exam!.title });
-  await expect(row.locator("td")).toHaveText(["2", "1", "0", "1", "0"]);
+  await expect(row.locator("td")).toHaveText(["2", "1", "0", "1", "0", "0"]);
   await expect(page.getByTestId("tile-open-exceptions")).not.toHaveText("0");
   await noSidewaysScroll(page, "the admin dashboard");
 
@@ -121,5 +124,5 @@ test("staff_find_the_other_candidates_page_in_the_exception_queue", async ({ pag
   await expect(page.getByTestId("exception-done")).toContainText("Marked as blank. The page is set aside.");
   await waitForDb(async () => (await svc().from("scripts").select("state").eq("booking_id", booking).single()).data?.state, "verified", "the script is verified");
   await page.goto("/admin");
-  await expect(page.getByTestId("scripts-exam").filter({ hasText: exam!.title }).locator("td")).toHaveText(["2", "1", "1", "0", "0"]);
+  await expect(page.getByTestId("scripts-exam").filter({ hasText: exam!.title }).locator("td")).toHaveText(["2", "1", "1", "0", "0", "0"]);
 });

@@ -1,7 +1,8 @@
 """The processing server: claim a job, prepare its upload (or re-make its pages' marking pictures from their stored
 full pictures: a remask job), store the pictures in the job's own folder, record them, finish the job.
-Between jobs, at most once a minute, it also deletes the files families never handed in (discarded from a draft, or
-left in a draft or unfinished after the booking's late window).
+Between jobs, at most once a minute, it also deletes the files that were never handed in and never will be: those a
+family discarded from a draft, and uploads that never finished. A file that finished uploading into a draft is kept
+(staff can still submit the draft for the family).
 
 Run with `python -m processor.main` (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the environment). It only
 calls out to Supabase and listens to nothing. Logs carry job and upload ids, the attempt, page counts, timings
@@ -266,15 +267,15 @@ def _abandon(client: Any, worker_id: str, claimed: Any, exc: Exception) -> None:
 
 def cleanup(client: Any) -> int:
     """Deletes from script-uploads the objects of files a family never handed in, as script_discarded_take lists
-    them (discarded from a draft over an hour ago; still in a draft, or pending, from finish + 48 hours; a file that
-    was handed in is never listed), then marks them purged. Nothing is marked when the deletion fails, so they are
+    them (discarded from a draft over an hour ago; never finished uploading, from finish + 48 hours; a file that was
+    handed in, or that finished uploading into a draft, is never listed), then marks them purged. Nothing is marked when the deletion fails, so they are
     listed again next time. Returns how many were deleted."""
     items = client.discarded_take(CLEANUP_BATCH)
     if not items:
         return 0
     client.remove(UPLOADS, [item["storage_path"] for item in items])
     client.mark_purged([item["id"] for item in items])
-    log.info("cleanup: %d files never handed in deleted", len(items))
+    log.info("cleanup: %d discarded or unfinished files deleted", len(items))
     return len(items)
 
 

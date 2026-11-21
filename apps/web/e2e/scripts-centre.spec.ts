@@ -145,5 +145,5 @@ test("staff_settle_the_duplicate_and_find_both_scripts_verified", async ({ page 
 
   await page.goto("/admin");
   const row = page.getByTestId("scripts-exam").filter({ hasText: exam!.title });
-  await expect(row.locator("td")).toHaveText(["2", "2", "2", "0", "0"]);
+  await expect(row.locator("td")).toHaveText(["2", "2", "2", "0", "0", "0"]);
 });

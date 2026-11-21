@@ -18,7 +18,9 @@ COPY tests/ tests/
 # pytest keeps its cache beside the tests.
 RUN mkdir -p /app/.pytest_cache && chown processor /app/.pytest_cache
 USER processor
-CMD ["pytest", "-q"]
+# The server, as in the runtime image: `docker compose up` starts it for the browser tests; `npm run proc:test` runs
+# pytest in this image instead.
+CMD ["python", "-m", "processor.main"]
 
 FROM base AS runtime
 USER processor
