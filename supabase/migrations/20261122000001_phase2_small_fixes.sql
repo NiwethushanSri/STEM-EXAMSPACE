@@ -11,6 +11,9 @@
 --      script_notice_given_up (as 20261120000076) leave a skipped notice alone. script_family_notices_waiting counts
 --      the family emails still to be sent; script_family_notices_skip skips them all, for an admin, with a reason kept
 --      in the audit log. Staff alerts are never skipped.
+--      A send already running stops too: script_notice_record (as 20261120000055) answers 'stopped' for a skipped
+--      notice, so a worker that claimed a batch just before the skip sends no more of it, and script_notice_mark
+--      (as 20261120000055) does not mark a skipped notice as sent.
 -- (The fourth and fifth fixes are in the web app and the processing server's tests.)
 
 -- ---------------------------------------------------------------------------------------------
@@ -211,3 +214,30 @@ revoke execute on function public.script_family_notices_waiting() from public, a
 revoke execute on function public.script_family_notices_skip(text) from public, anon;
 grant execute on function public.script_family_notices_waiting() to authenticated;
 grant execute on function public.script_family_notices_skip(text) to authenticated;
+
+-- script_notice_record: as 20261120000055, and a skipped notice is 'stopped' (do not send, do not retry).
+create or replace function public.script_notice_record(p_id bigint, p_profile uuid)
+returns text
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.script_notices n where n.id = p_id and n.sent_at is null and n.skipped_at is null) then
+    return 'stopped';
+  end if;
+  insert into public.script_notices_sent (notice_id, profile_id) values (p_id, p_profile) on conflict do nothing;
+  return case when found then 'ok' else 'already' end;
+end;
+$$;
+
+-- script_notice_mark: as 20261120000055, and a skipped notice is never marked as sent.
+create or replace function public.script_notice_mark(p_id bigint, p_ok boolean, p_now timestamptz default null)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.script_notices set sent_at = coalesce(p_now, now())
+  where id = p_id and sent_at is null and skipped_at is null and coalesce(p_ok, false)
+$$;

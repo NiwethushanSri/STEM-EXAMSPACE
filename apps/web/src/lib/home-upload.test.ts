@@ -8,6 +8,7 @@ import {
   canSubmit,
   unsentFiles,
   unsentWarning,
+  leavePrompt,
   fileProblem,
   isStale,
   retakePrompt,
@@ -243,5 +244,17 @@ describe("the warning that pages are not sent", () => {
 
   it("says the upload time has ended when it has", () => {
     expect(UPLOAD_TEXT.closedUnsent).toBe("The upload time has ended. Your pages were not sent. Please contact the institution.");
+  });
+});
+
+describe("asking before the page is left", () => {
+  it("leave_prompt_follows_what_can_still_be_lost", () => {
+    expect(leavePrompt("upload_open", [{ state: "uploading" }])).toBe(true);
+    expect(leavePrompt("sitting", [{ state: "waiting" }])).toBe(true);
+    expect(leavePrompt("late_window", [{ state: "stored" }])).toBe(true);
+    expect(leavePrompt("closed", [{ state: "stored" }])).toBe(false);
+    expect(leavePrompt("closed", [{ state: "uploading" }])).toBe(false);
+    expect(leavePrompt("upload_open", [])).toBe(false);
+    expect(leavePrompt("upload_open", [{ state: "failed" }])).toBe(false);
   });
 });

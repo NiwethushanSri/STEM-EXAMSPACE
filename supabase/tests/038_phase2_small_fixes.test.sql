@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(16);
+select plan(18);
 select tests.assert_no_owner();
 -- Notices left in a local database by other work are not part of this test: parked inside its transaction, which is
 -- rolled back.
@@ -148,6 +148,19 @@ select is(concat_ws('/', (select count(*)::int from public.script_notices where 
     (select count(*)::int from public.script_notices where kind = 'rejected' and claimed_at is not null)),
   '0/1', 'skipped_family_notice_is_never_claimed: the skipped ones stay untouched while a new one is claimed');
 select is(public.script_notice_given_up(now() + interval '7 days 1 hour'), 1, 'and only the one that was not skipped counts as given up after 7 days');
+
+-- ----- claimed_then_skipped_notice_is_not_recorded_as_sent -----
+-- The notice was claimed (script_notice_next above), then the admin skipped it: the running send must stop.
+insert into public.script_notices (kind, script_id, submission_id) values ('receipt', pg_temp.k('x1'), pg_temp.k('d2'));
+create temp table mid as select public.script_notice_next(10, now()) as j;
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_family_notices_skip('Stop the batch that is running');
+select tests.as_postgres();
+select is(public.script_notice_record((select max(id) from public.script_notices where kind = 'receipt'), pg_temp.uid('s1')), 'stopped',
+  'claimed_then_skipped_notice_is_not_recorded_as_sent: a skipped notice is stopped');
+select public.script_notice_mark((select max(id) from public.script_notices where kind = 'receipt'), true);
+select is((select sent_at from public.script_notices where kind = 'receipt' and submission_id = pg_temp.k('d2')), null,
+  'and marking it done does not make it sent');
 
 -- ----- record_takes_exactly_5000_pages -----
 select is(concat_ws('/',

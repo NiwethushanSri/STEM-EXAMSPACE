@@ -275,6 +275,15 @@ export function unsentWarning(phase: SittingPhase, storedFiles: number): "press_
   return phase === "closed" ? "closed_unsent" : null;
 }
 
+/**
+ * Whether leaving the page asks first: while uploading is possible (the sitting, and the upload and late windows),
+ * when a file is still waiting or uploading, or a file is stored and not yet submitted. Never once the time has ended.
+ */
+export function leavePrompt(phase: SittingPhase, files: { state: string }[]): boolean {
+  if (phase !== "sitting" && phase !== "upload_open" && phase !== "late_window") return false;
+  return unsentFiles(files) !== "none";
+}
+
 /** "2, 3, 4 and 6" */
 export function pageList(pages: number[]): string {
   if (pages.length <= 1) return pages.join("");

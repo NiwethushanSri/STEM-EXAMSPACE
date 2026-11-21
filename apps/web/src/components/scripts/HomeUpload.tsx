@@ -15,6 +15,7 @@ import {
   canSubmit,
   unsentFiles,
   unsentWarning,
+  leavePrompt,
   fileProblem,
   isStale,
   retakePrompt,
@@ -219,18 +220,20 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     }
   });
 
-  // Uploaded pages are not handed in until Submit: leaving the page with files uploaded or on their way asks first.
+  // Uploaded pages are not handed in until Submit: while uploading is possible, leaving the page with files uploaded or on
+  // their way asks first (not once the upload time has ended).
   const unsent = unsentFiles(files);
+  const prompt = leavePrompt(phase, files);
   const warning = unsentWarning(phase, files.filter((f) => f.state === "stored").length);
   useEffect(() => {
-    if (warning !== "press_submit") return;
+    if (!prompt) return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [warning]);
+  }, [prompt]);
 
   // Local previews are let go when the screen closes.
   useEffect(
