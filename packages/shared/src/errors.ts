@@ -364,3 +364,18 @@ export function structureMessageFor(code: string | null | undefined, context: St
   const table = structureMessages[context];
   return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
 }
+
+/** Failure codes of marker approvals, lead markers and declared conflicts (markers_list, marker_*). */
+const markerMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  reason_required: "Give a reason of 3 to 300 characters.",
+  invalid_input: "Check the details. A note can be up to 300 characters, and a conflict is about a candidate who is a student.",
+  not_found: "This could not be found. Refresh the page.",
+  not_approved: "This person cannot be approved to mark this subject.",
+  conflict_of_interest: "This marker cannot mark this candidate.",
+};
+
+/** Message for a marker RPC failure code; unknown codes get the generic message. */
+export function markerMessageFor(code: string | null | undefined): string {
+  return code && Object.hasOwn(markerMessages, code) ? markerMessages[code] : messages.internal;
+}

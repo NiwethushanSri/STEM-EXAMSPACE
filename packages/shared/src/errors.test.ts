@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -218,5 +218,19 @@ describe("scriptMessageFor", () => {
     expect(scriptMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(scriptMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(scriptMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("markerMessageFor", () => {
+  it("maps each code of the marker pages", () => {
+    expect(markerMessageFor("not_approved")).toBe("This person cannot be approved to mark this subject.");
+    expect(markerMessageFor("conflict_of_interest")).toBe("This marker cannot mark this candidate.");
+    expect(markerMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(markerMessageFor("forbidden")).toBe("You do not have permission to do that.");
+  });
+  it("falls back to the generic message", () => {
+    expect(markerMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(markerMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(markerMessageFor(null)).toBe("Something went wrong. Please try again.");
   });
 });

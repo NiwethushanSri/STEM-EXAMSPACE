@@ -1723,6 +1723,30 @@ isOneToOne: false
 "mark_scheme_upload_allowed":
 { Args: { "p_name": string }; Returns: boolean
                            },
+"marker_approve":
+{ Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"marker_audit_reason":
+{ Args: { "p_detail": string,"p_reason": string }; Returns: string
+                           },
+"marker_conflict_candidates":
+{ Args: { "p_query": string }; Returns: Json
+                           },
+"marker_conflict_remove":
+{ Args: { "p_marker": string,"p_reason": string,"p_student": string }; Returns: Json
+                           },
+"marker_conflict_set":
+{ Args: { "p_marker": string,"p_note": string,"p_reason": string,"p_student": string }; Returns: Json
+                           },
+"marker_set_lead":
+{ Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"marker_unapprove":
+{ Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"markers_list":
+{ Args: Record<PropertyKey, never>; Returns: Json
+                           },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
                            },

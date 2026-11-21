@@ -13,7 +13,7 @@ export function ShellUserProvider({ user, children }: { user: ShellUser; childre
   return <ShellUserContext.Provider value={user}>{children}</ShellUserContext.Provider>;
 }
 
-const LIVE_ADMIN = ["/admin/attendance", "/admin/accounts", "/admin/exams", "/admin/venues", "/admin/bookings", "/admin/finance", "/admin/scripts"];
+const LIVE_ADMIN = ["/admin/attendance", "/admin/accounts", "/admin/exams", "/admin/venues", "/admin/bookings", "/admin/finance", "/admin/scripts", "/admin/marking/markers"];
 
 /** Admin pages that still show sample data until their part of the build. */
 function isPreviewPath(pathname: string) {
@@ -87,6 +87,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/finance", label: "Finance" },
       { href: "/admin/scripts", label: "Scripts" },
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
+      { href: "/admin/marking/markers", label: "Markers" },
     ],
   },
   teacher: {
@@ -115,6 +116,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/scripts", label: "Scripts" },
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
       { href: "/admin/marking", label: "Marking progress" },
+      { href: "/admin/marking/markers", label: "Markers" },
       { href: "/admin/notices", label: "Notices" },
       { href: "/admin/audit", label: "Audit log" },
     ],
