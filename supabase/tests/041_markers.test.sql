@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(73);
+select plan(76);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -140,6 +140,15 @@ select is((select s ->> 'lead_id' from jsonb_array_elements(public.markers_list(
 select is(public.marker_set_lead(pg_temp.subj('subj'), null, 'No lead for now') ->> 'ok', 'true', 'a null marker clears the lead');
 select is((select count(*)::int from public.marker_approvals where subject_id = pg_temp.subj('subj') and lead), 0, 'no lead remains');
 select public.marker_set_lead(pg_temp.subj('subj'), pg_temp.uid('m2'), 'Lead again');
+select tests.as_postgres();
+insert into public.marker_approvals (marker_id, subject_id, approved_by, approved_at) values (pg_temp.uid('susp'), pg_temp.subj('subj'), pg_temp.uid('admin'), now());
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.marker_set_lead(pg_temp.subj('subj'), pg_temp.uid('susp'), 'Suspended lead') ->> 'code', 'not_approved', 'a suspended approved marker cannot be made lead');
+select is((select string_agg(marker_id::text, ',') from public.marker_approvals where subject_id = pg_temp.subj('subj') and lead), pg_temp.uid('m2')::text,
+  'and the lead stays as it was');
+select tests.as_postgres();
+delete from public.marker_approvals where marker_id = pg_temp.uid('susp');
+select tests.as_user(pg_temp.uid('admin'));
 
 -- ---------------------------------------------------------------------------------------------
 -- unapprove_releases_open_pieces_and_keeps_submitted
@@ -150,7 +159,8 @@ select tests.as_postgres();
 select is((select concat_ws('/', a.end_reason, (a.ended_at is not null)::text) from public.marking_assignments a where a.unit_id = pg_temp.k('ua')),
   'unapproved/true', 'its assignment ended as unapproved');
 select is((select state from public.marking_units where id = pg_temp.k('ua')), 'open', 'its unit is open again');
-select is((select status from public.markings where unit_id = pg_temp.k('ua')), 'in_progress', 'the in-progress marking is left as it is');
+select is((select concat_ws('/', status, set_aside_reason, (set_aside_at is not null)::text) from public.markings where unit_id = pg_temp.k('ua')),
+  'set_aside/unapproved/true', 'its in-progress marking is set aside as unapproved');
 select is((select count(*)::int from public.marking_assignments where unit_id = pg_temp.k('ue') and ended_at is null), 1,
   'the marker''s open piece of another subject is kept');
 select is((select state from public.marking_units where id = pg_temp.k('ue')), 'taken', 'and its unit stays taken');
@@ -175,6 +185,8 @@ select is(pg_temp.r('cf1')::text, '{"ok": true, "released": 1, "already_marked":
 select tests.as_postgres();
 select is((select concat_ws('/', a.end_reason, u.state) from public.marking_assignments a join public.marking_units u on u.id = a.unit_id where a.unit_id = pg_temp.k('uc')),
   'conflict/open', 'the assignment ended as conflict and its unit is open');
+select is((select concat_ws('/', status, set_aside_reason) from public.markings where unit_id = pg_temp.k('uc')), 'set_aside/conflict',
+  'the in-progress marking of the conflicted candidate is set aside as conflict');
 select is((select note from public.marker_conflicts where marker_id = pg_temp.uid('m2') and student_id = pg_temp.stud(pg_temp.k('sc'))), 'Is their cousin',
   'the conflict and its note are recorded');
 select tests.as_user(pg_temp.uid('admin'));

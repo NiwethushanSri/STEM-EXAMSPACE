@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, useTransition } from "react";
+import { useId, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Badge, Card } from "@/components/AppShell";
 import {
@@ -32,7 +32,7 @@ const FIELD = "rounded border border-slate-300 px-2 py-1.5 text-sm";
 
 type Note = { ok: boolean; text: string };
 
-/** Approving, leads and conflicts for every corrector and teacher. Each action reads the reason box of its marker's card. */
+/** Approving, leads and conflicts for every corrector and teacher. Each action opens its own small panel: what will happen, a reason, Confirm and Cancel. */
 export function MarkersPanel({ subjects, markers }: { subjects: SubjectRow[]; markers: MarkerRow[] }) {
   if (markers.length === 0) {
     return (
@@ -48,47 +48,165 @@ export function MarkersPanel({ subjects, markers }: { subjects: SubjectRow[]; ma
         is written to the audit log.
       </p>
       {markers.map((m) => (
-        <MarkerCard key={m.id} marker={m} subjects={subjects} />
+        <MarkerCard key={m.id} marker={m} subjects={subjects} markers={markers} />
       ))}
     </div>
   );
 }
 
-function MarkerCard({ marker, subjects }: { marker: MarkerRow; subjects: SubjectRow[] }) {
-  const router = useRouter();
-  const reasonId = useId();
+type Step =
+  | { kind: "approve"; subject: number }
+  | { kind: "unapprove"; subject: number }
+  | { kind: "lead"; subject: number }
+  | { kind: "unlead"; subject: number }
+  | { kind: "conflict_remove"; student: string; who: string };
+
+/** One action's panel: what will happen, its own reason box, Confirm and Cancel. A failed action keeps the panel open with the error. */
+function ActionPanel({
+  label,
+  consequence,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  children,
+}: {
+  label: string;
+  consequence?: string;
+  confirmLabel: string;
+  onConfirm: (reason: string) => Promise<MarkerActionResult>;
+  onCancel: () => void;
+  children?: ReactNode;
+}) {
+  const id = useId();
   const [reason, setReason] = useState("");
-  const [note, setNote] = useState<Note | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  return (
+    <div role="group" aria-label={label} className="mt-2 space-y-2 rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+      <p className="font-medium text-slate-800">{label}</p>
+      {consequence && <p className="text-slate-700">{consequence}</p>}
+      {children}
+      <div className="max-w-md space-y-1">
+        <label htmlFor={id} className="block font-medium text-slate-800">
+          Reason (kept in the audit log)
+        </label>
+        <textarea id={id} value={reason} maxLength={300} rows={2} onChange={(e) => setReason(e.target.value)} className={`${FIELD} w-full`} />
+        <p className="text-xs text-slate-500">{reason.trim().length}/300 characters, at least 3.</p>
+      </div>
+      {error && (
+        <p role="alert" className="text-red-700">
+          {error}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <button
+          type="button"
+          className={BUTTON}
+          disabled={pending}
+          onClick={() =>
+            start(async () => {
+              const r = await onConfirm(reason);
+              if (!r.ok) setError(r.message);
+            })
+          }
+        >
+          {pending ? "Saving..." : confirmLabel}
+        </button>
+        <button type="button" className={QUIET} disabled={pending} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const who = (c: { index_number: string | null; name: string | null }) => [c.name, c.index_number].filter(Boolean).join(" ") || "A candidate";
+
+function MarkerCard({ marker, subjects, markers }: { marker: MarkerRow; subjects: SubjectRow[]; markers: MarkerRow[] }) {
+  const router = useRouter();
+  const [note, setNote] = useState<(Note & { notice?: boolean }) | null>(null);
+  const [step, setStep] = useState<Step | null>(null);
   const [pick, setPick] = useState("");
 
   const approved = new Set(marker.subjects.map((s) => s.id));
   const nameOf = (id: number) => subjects.find((s) => s.id === id)?.name ?? `Subject ${id}`;
   const canApprove = marker.status === "active" ? subjects.filter((s) => !approved.has(s.id) && (marker.role === "corrector" || marker.teaches.includes(s.id))) : [];
+  const leadName = (subject: number) => {
+    const id = subjects.find((s) => s.id === subject)?.lead_id;
+    return id && id !== marker.id ? (markers.find((m) => m.id === id)?.name ?? "The current lead marker") : null;
+  };
 
-  const run = (action: () => Promise<MarkerActionResult>, after?: () => void) =>
-    start(async () => {
-      const r = await action();
-      setNote({ ok: r.ok, text: r.message });
-      if (r.ok) {
-        setReason("");
-        after?.();
-        router.refresh();
-      }
-    });
+  /** Runs an action with the panel's reason; success closes the panel and shows the result. */
+  const confirm = async (action: () => Promise<MarkerActionResult>, after?: () => void): Promise<MarkerActionResult> => {
+    const r = await action();
+    if (r.ok) {
+      setNote({ ok: true, text: r.message, notice: (r.alreadyMarked ?? 0) > 0 });
+      setStep(null);
+      after?.();
+      router.refresh();
+    }
+    return r;
+  };
+
+  const panel = () => {
+    if (!step) return null;
+    const cancel = () => setStep(null);
+    if (step.kind === "approve")
+      return (
+        <ActionPanel
+          label={`Approve for ${nameOf(step.subject)}`}
+          confirmLabel="Confirm"
+          onCancel={cancel}
+          onConfirm={(r) => confirm(() => approveMarkerAction(marker.id, step.subject, r), () => setPick(""))}
+        />
+      );
+    if (step.kind === "unapprove")
+      return (
+        <ActionPanel
+          label={`Remove approval for ${nameOf(step.subject)}`}
+          consequence="Scripts they are marking in this subject go back for others to mark."
+          confirmLabel="Confirm"
+          onCancel={cancel}
+          onConfirm={(r) => confirm(() => unapproveMarkerAction(marker.id, step.subject, r))}
+        />
+      );
+    if (step.kind === "lead") {
+      const earlier = leadName(step.subject);
+      return (
+        <ActionPanel
+          label={`Make lead marker for ${nameOf(step.subject)}`}
+          consequence={earlier ? `${earlier} stops being lead marker.` : undefined}
+          confirmLabel="Confirm"
+          onCancel={cancel}
+          onConfirm={(r) => confirm(() => setLeadMarkerAction(step.subject, marker.id, r))}
+        />
+      );
+    }
+    if (step.kind === "unlead")
+      return (
+        <ActionPanel
+          label={`Remove lead marker for ${nameOf(step.subject)}`}
+          consequence={`${marker.name} stops being lead marker.`}
+          confirmLabel="Confirm"
+          onCancel={cancel}
+          onConfirm={(r) => confirm(() => setLeadMarkerAction(step.subject, null, r))}
+        />
+      );
+    return (
+      <ActionPanel
+        label={`Remove the conflict with ${step.who}`}
+        confirmLabel="Confirm"
+        onCancel={cancel}
+        onConfirm={(r) => confirm(() => removeConflictAction(marker.id, step.student, r))}
+      />
+    );
+  };
 
   return (
     <Card title={marker.name}>
       <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
         <Badge tone="slate">{marker.role === "teacher" ? "Teacher" : "Exam corrector"}</Badge>
         {marker.status === "suspended" && <Badge tone="red">Suspended</Badge>}
-      </div>
-
-      <div className="mb-4 max-w-md">
-        <label htmlFor={reasonId} className="mb-1 block text-sm font-medium text-slate-800">
-          Reason for the next change (3 to 300 characters)
-        </label>
-        <input id={reasonId} value={reason} maxLength={300} onChange={(e) => setReason(e.target.value)} className={`${FIELD} w-full`} />
       </div>
 
       <h3 className="mb-2 text-sm font-semibold text-slate-800">Subjects</h3>
@@ -102,15 +220,15 @@ function MarkerCard({ marker, subjects }: { marker: MarkerRow; subjects: Subject
               {s.lead && <Badge tone="green">Lead marker</Badge>}
               <span className="ml-auto flex flex-wrap gap-2">
                 {s.lead ? (
-                  <button type="button" className={QUIET} disabled={pending} onClick={() => run(() => setLeadMarkerAction(s.id, null, reason))}>
+                  <button type="button" className={QUIET} onClick={() => setStep({ kind: "unlead", subject: s.id })}>
                     Remove lead marker
                   </button>
                 ) : (
-                  <button type="button" className={QUIET} disabled={pending || marker.status !== "active"} onClick={() => run(() => setLeadMarkerAction(s.id, marker.id, reason))}>
+                  <button type="button" className={QUIET} disabled={marker.status !== "active"} onClick={() => setStep({ kind: "lead", subject: s.id })}>
                     Make lead marker
                   </button>
                 )}
-                <button type="button" className={QUIET} disabled={pending} onClick={() => run(() => unapproveMarkerAction(marker.id, s.id, reason))}>
+                <button type="button" className={QUIET} onClick={() => setStep({ kind: "unapprove", subject: s.id })}>
                   Remove approval
                 </button>
               </span>
@@ -131,36 +249,30 @@ function MarkerCard({ marker, subjects }: { marker: MarkerRow; subjects: Subject
               ))}
             </select>
           </label>
-          <button type="button" className={BUTTON} disabled={pending || !pick} onClick={() => run(() => approveMarkerAction(marker.id, Number(pick), reason), () => setPick(""))}>
+          <button type="button" className={BUTTON} disabled={!pick} onClick={() => setStep({ kind: "approve", subject: Number(pick) })}>
             Approve
           </button>
         </div>
       )}
 
-      <Conflicts marker={marker} reason={reason} pending={pending} run={run} />
+      <Conflicts marker={marker} onRemove={(c) => setStep({ kind: "conflict_remove", student: c.student_id, who: who(c) })} confirm={confirm} />
 
-      <div aria-live="polite">{note?.ok && <p className="mt-3 text-sm text-green-800">{note.text}</p>}</div>
-      {note && !note.ok && (
-        <p role="alert" className="mt-3 text-sm text-red-700">
-          {note.text}
-        </p>
-      )}
+      {panel()}
+      <div aria-live="polite">
+        {note?.ok && <p className={`mt-3 text-sm ${note.notice ? "rounded border border-amber-200 bg-amber-50 p-3 text-amber-900" : "text-green-800"}`}>{note.text}</p>}
+      </div>
     </Card>
   );
 }
 
-const who = (c: { index_number: string | null; name: string | null }) => [c.name, c.index_number].filter(Boolean).join(" ") || "A candidate";
-
 function Conflicts({
   marker,
-  reason,
-  pending,
-  run,
+  onRemove,
+  confirm,
 }: {
   marker: MarkerRow;
-  reason: string;
-  pending: boolean;
-  run: (action: () => Promise<MarkerActionResult>, after?: () => void) => void;
+  onRemove: (c: ConflictRow) => void;
+  confirm: (action: () => Promise<MarkerActionResult>, after?: () => void) => Promise<MarkerActionResult>;
 }) {
   const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState("");
@@ -204,7 +316,7 @@ function Conflicts({
             <li key={c.student_id} className="flex flex-wrap items-center gap-3 py-2">
               <span className="font-medium">{who(c)}</span>
               {c.note && <span className="text-slate-600">{c.note}</span>}
-              <button type="button" className={`${QUIET} ml-auto`} disabled={pending} onClick={() => run(() => removeConflictAction(marker.id, c.student_id, reason))}>
+              <button type="button" className={`${QUIET} ml-auto`} onClick={() => onRemove(c)}>
                 Remove
               </button>
             </li>
@@ -256,24 +368,20 @@ function Conflicts({
               ))}
             </ul>
           )}
-          {chosen && (
-            <>
+          {chosen ? (
+            <ActionPanel
+              label={`Add a conflict with ${who({ index_number: chosen.indexNumber, name: chosen.name })}`}
+              consequence="Scripts of this candidate they are marking go back for others to mark."
+              confirmLabel="Add conflict"
+              onCancel={reset}
+              onConfirm={(r) => confirm(() => setConflictAction(marker.id, chosen.id, conflictNote, r), reset)}
+            >
               <label htmlFor={noteId} className="flex flex-col gap-1">
                 Note (optional, up to 300 characters)
                 <input id={noteId} value={conflictNote} maxLength={300} onChange={(e) => setConflictNote(e.target.value)} className={FIELD} />
               </label>
-              <p className="text-slate-600">The reason is the box at the top of this marker&rsquo;s card.</p>
-              <div className="flex gap-2">
-                <button type="button" className={BUTTON} disabled={pending} onClick={() => run(() => setConflictAction(marker.id, chosen.id, conflictNote, reason), reset)}>
-                  Add conflict
-                </button>
-                <button type="button" className={QUIET} onClick={reset}>
-                  Cancel
-                </button>
-              </div>
-            </>
-          )}
-          {!chosen && (
+            </ActionPanel>
+          ) : (
             <button type="button" className={QUIET} onClick={reset}>
               Cancel
             </button>

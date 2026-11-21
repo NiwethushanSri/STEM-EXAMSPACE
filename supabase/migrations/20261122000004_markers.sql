@@ -6,8 +6,9 @@
 -- transaction; the audit row names the subject or the candidate's index number after the reason.
 --
 -- Taking an approval away, or declaring a conflict, ends the marker's open assignments for it (end_reason 'unapproved'
--- or 'conflict'); a unit of the live pass that was taken goes back to open. The marker's in-progress marking is left
--- as it is (Task 5's "Next script" sets it aside when someone else takes the unit); submitted markings stay.
+-- or 'conflict'); a unit of the live pass that was taken goes back to open. The marker's in-progress live marking on a released
+-- unit is set aside (set_aside_reason 'unapproved' or 'conflict', as Task 2 does), so "Next script" cannot hand it back
+-- and another marker can take the unit; submitted markings stay.
 --
 -- No earlier function is changed.
 
@@ -160,6 +161,12 @@ begin
     update public.marking_units u set state = 'open'
     from ended where u.id = ended.unit_id and ended.kind = 'live' and u.state = 'taken'
     returning u.id
+  ),
+  aside as (
+    update public.markings m
+    set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'unapproved'
+    from ended where m.unit_id = ended.unit_id and ended.kind = 'live' and m.marker_id = p_marker and m.kind = 'live' and m.status = 'in_progress'
+    returning m.id
   )
   select count(*)::int into v_released from ended;
 
@@ -199,15 +206,25 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
   perform pg_advisory_xact_lock(hashtextextended('marker_lead:' || p_subject::text, 0));
-  if p_marker is not null and not exists (select 1 from public.marker_approvals a where a.marker_id = p_marker and a.subject_id = p_subject) then
-    return jsonb_build_object('ok', false, 'code', 'not_approved');
+  if p_marker is not null then
+    perform pg_advisory_xact_lock(hashtextextended('marker:' || p_marker::text, 0));
+    if not public.is_marker_for(p_marker, p_subject) then
+      return jsonb_build_object('ok', false, 'code', 'not_approved');
+    end if;
   end if;
 
   select a.marker_id into v_earlier from public.marker_approvals a where a.subject_id = p_subject and a.lead;
-  update public.marker_approvals a set lead = false where a.subject_id = p_subject and a.lead;
-  if p_marker is not null then
-    update public.marker_approvals a set lead = true where a.subject_id = p_subject and a.marker_id = p_marker;
-  end if;
+  begin
+    update public.marker_approvals a set lead = false where a.subject_id = p_subject and a.lead;
+    if p_marker is not null then
+      update public.marker_approvals a set lead = true where a.subject_id = p_subject and a.marker_id = p_marker;
+      if not found then
+        raise exception 'not_approved';
+      end if;
+    end if;
+  exception when raise_exception then
+    return jsonb_build_object('ok', false, 'code', 'not_approved');
+  end;
 
   if coalesce(p_marker, v_earlier) is not null then
     insert into public.audit_log (actor_id, action, target_type, target_id, reason)
@@ -274,10 +291,16 @@ begin
     update public.marking_units u set state = 'open'
     from ended where u.id = ended.unit_id and ended.kind = 'live' and u.state = 'taken'
     returning u.id
+  ),
+  aside as (
+    update public.markings m
+    set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'conflict'
+    from ended where m.unit_id = ended.unit_id and ended.kind = 'live' and m.marker_id = p_marker and m.kind = 'live' and m.status = 'in_progress'
+    returning m.id
   )
   select count(*)::int into v_released from ended;
 
-  select count(*)::int into v_marked
+  select count(distinct u.script_id)::int into v_marked
   from public.markings m
   join public.marking_units u on u.id = m.unit_id
   join public.scripts s on s.id = u.script_id
