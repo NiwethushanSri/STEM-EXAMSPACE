@@ -286,6 +286,10 @@ function foundWords(item: QueueItem): string[] {
       const flags = Array.isArray(d.flags) ? d.flags.filter((f): f is string => typeof f === "string") : (item.page?.flags ?? []);
       const words = flags.map((f) => FLAG_WORDS[f]).filter((w): w is string => !!w);
       const out: string[] = [];
+      // A page with a code carries the printed name box: only a staff area will do (Ruling R40).
+      const hideWords = item.page && !isCodeless(item.page)
+        ? "Hide the candidate's name on the full page (draw a box over the printed name box), then accept it."
+        : "Hide the candidate's name on the full page, or tick that there is none, then accept it.";
       if (words.length) out.push(`${pageWord} is ${pageList(words)}.`);
       if (flags.includes("layout_unexpected")) {
         out.push("The page was not where it should be on the picture, so the name band could not be hidden and no marking picture was made.");
@@ -295,10 +299,10 @@ function foundWords(item: QueueItem): string[] {
         out.push("Its hidden areas can no longer change here: tell the marking lead, then note it.");
       } else if (str(d.from) === "remask" && d.reprocessed === true) {
         out.push("Check the name again after reprocessing: the file was read again from the original, and staff work on this page (hidden areas, confirmation, placement) has to be done again.");
-        out.push("Hide the candidate's name on the full page, or tick that there is none, then accept it.");
+        out.push(hideWords);
       } else if (str(d.from) === "remask") {
         out.push("Its marking picture could not be made again after its hidden areas or its turn changed, so the old one was taken away (this is not the family's file).");
-        out.push("Hide the candidate's name on the full page, or tick that there is none, then accept it.");
+        out.push(hideWords);
         out.push("A page with a code gets its marking picture back only from its print layout: turn it back upright, or process its file again from the script's page.");
       } else if (d.marking_picture === false) {
         out.push("No marking picture could be made for this answer page.");
@@ -403,6 +407,16 @@ export function needsNameCheck(item: QueueItem, action: "confirm" | "assign" | Q
   if (item.kind === "name_visible" || item.kind === "uncoded_family_page") return true;
   if (isStaleNotice(item)) return false;
   return item.kind === "poor_quality" && (p.flags.includes("layout_unexpected") || isRemaskQuality(item) || isCodeless(p));
+}
+
+/** Said instead of the "no name" tick for a page with a code (Ruling R40): its printed name box must be covered. */
+export const NAME_BOX_MESSAGE = "This page has a printed name box. Draw a box over the name before confirming.";
+
+/** Whether "There is no name on this page" is offered where the name check applies: only for a page with no code.
+ * A page with a code always carries the printed name box, and when its layout was not proved (a "Fit to page" print)
+ * nothing but a staff hidden area covers it, so the database refuses "no name" for it (name_area_required). */
+export function noNameOffered(item: QueueItem, action: "confirm" | "assign" | QueueAction = "confirm"): boolean {
+  return needsNameCheck(item, action) && item.page !== null && isCodeless(item.page);
 }
 
 export function actionLabel(action: QueueAction, item: QueueItem): string {

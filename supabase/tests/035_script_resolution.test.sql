@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(183);
+select plan(189);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -430,6 +430,23 @@ select tests.as_postgres();
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x_pq9'))), 'name_not_hidden',
   'a page whose layout was unexpected cannot be confirmed before its name is hidden');
+-- Ruling R40 (C1): a page with a code always carries the printed name box, so "no name" is never taken for it.
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x_pq9'), 'Fit to page print, no name seen', true)), 'name_area_required',
+  'R40: "There is no name on this page" is refused for a page with a code whose layout was unexpected');
+select tests.as_postgres();
+select is(concat_ws('/', (select state::text from public.script_exceptions where id = pg_temp.k('x_pq9')),
+    (select marking_path is null from public.script_pages where id = pg_temp.k('pg9')),
+    public.script_page_remask_context(pg_temp.k('pg9')) ->> 'confirmed',
+    (select count(*) from public.audit_log where action = 'script_exception_confirmed' and target_id = pg_temp.k('x_pq9'))),
+  'open/t/false/0', 'R40: the exception stays open, the page has no marking picture and is not confirmed');
+-- A "no name" confirmation of a page with a code (none can be made any more) never counts.
+insert into public.script_exceptions (exam_id, kind, booking_id, page_id, upload_id, state, resolution, resolved_at, details)
+select p.exam_id, 'poor_quality', p.booking_id, p.id, p.upload_id, 'resolved', 'confirmed', now(),
+  public.script_page_binding(p.id) || '{"no_name": true}'::jsonb
+from public.script_pages p where p.id = pg_temp.k('pg9');
+select is(public.script_page_confirmed(pg_temp.k('pg9')), false, 'R40: an old "no name" confirmation does not confirm a page with a code');
+delete from public.script_exceptions where page_id = pg_temp.k('pg9') and state = 'resolved' and details ->> 'no_name' = 'true';
+select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.script_page_set_hidden_areas(pg_temp.k('pg9'), '[{"x":0.6,"y":0.1,"w":0.5,"h":0.1}]', 'Name box')), 'invalid_input',
   'an area must stay inside the page');
 select is(pg_temp.code(public.script_page_set_hidden_areas(pg_temp.k('pg9'), '[{"x":0.1,"y":0.1,"w":0,"h":0.1}]', 'Name box')), 'invalid_input',
@@ -463,6 +480,8 @@ select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x_mix2'))), 's
 insert into res select 'cq', public.script_exception_confirm(pg_temp.k('x_pq9'));
 select is(pg_temp.r('cq') ->> 'resolution', 'confirmed', 'the poor-quality page is confirmed for marking, with no reason');
 select tests.as_postgres();
+select is(public.script_page_remask_context(pg_temp.k('pg9')) ->> 'confirmed', 'true',
+  'R40: with a staff area over the name the confirmation is accepted and holds for that area set');
 select is((select concat_ws('/', state, resolution, coalesce(reason, 'none')) from public.script_exceptions where id = pg_temp.k('x_pq9')),
   'resolved/confirmed/none', 'resolved without a reason');
 select is((select count(*)::int from public.audit_log where action = 'script_exception_confirmed' and target_id = pg_temp.k('x_pq9') and reason is null), 1,
@@ -474,10 +493,13 @@ values (pg_temp.k('e'), 'name_visible', pg_temp.k('b1'), pg_temp.sid('b1'), pg_t
 insert into kv values ('x_nv1', pg_temp.exc('u1', 1, 'name_visible'));
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x_nv1'), 'Looked at it')), 'name_not_hidden', 'a visible name must be hidden first');
-select is(public.script_exception_confirm(pg_temp.k('x_nv1'), 'Only the board''s logo', true) ->> 'resolution', 'confirmed',
-  'or staff say there is no name on the page');
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x_nv1'), 'Only the board''s logo', true)), 'name_area_required',
+  'R40: the page has a code, so "no name" is refused: staff draw an area');
+select is(public.script_page_set_hidden_areas(pg_temp.pid('u1', 1), '[{"x":0.1,"y":0.05,"w":0.5,"h":0.04}]', 'Name box') ->> 'ok', 'true',
+  'staff draw an area over the name');
+select is(public.script_exception_confirm(pg_temp.k('x_nv1'), 'Hidden now') ->> 'resolution', 'confirmed', 'and then the name is hidden');
 select tests.as_postgres();
-select is((select details ->> 'no_name' from public.script_exceptions where id = pg_temp.k('x_nv1')), 'true', 'which is kept with the exception');
+select is((select details ->> 'no_name' from public.script_exceptions where id = pg_temp.k('x_nv1')), null, 'no "no name" is kept with the exception');
 
 -- ---------------------------------------------------------------------------------------------
 -- The centre's scans are all in; then the duplicates and the missing pages.

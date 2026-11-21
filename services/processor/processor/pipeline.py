@@ -228,7 +228,10 @@ def remask(
       everything above the measured top rule (marking_image). If the proof fails there is no marking picture, even
       when staff confirmed the page (Ruling R32 b): a turned or re-read page could show its printed name elsewhere;
     - any other page (no code, or placed by its code alone): only when staff confirmed it (`confirmed`: they hid the
-      name, or said there is none, for the page as it is turned now), the nominal band and the paper's areas.
+      name, or said there is none, for the page as it is turned now), the nominal band and the paper's areas. A page
+      with a code always carries the printed name box, which the nominal band does not cover when the layout is not
+      proved (a "Fit to page" print), so it needs at least one staff area as well (Ruling R40; the database refuses
+      "no name" for such a page, this is the second lock).
     Otherwise None: no marking picture."""
     if rotation not in (0, 90, 180, 270):
         raise ValueError("rotation must be a quarter turn")
@@ -249,7 +252,7 @@ def remask(
             if fit.expected:
                 return imaging.encode_jpeg(imaging.marking_image(page, areas, fit))
         return None  # never the nominal fallback for a page that may be proved
-    if confirmed:
+    if confirmed and (code is None or len(staff_areas) > 0):
         return imaging.encode_jpeg(imaging.nominal_marking_image(page, areas))
     return None
 

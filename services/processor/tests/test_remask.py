@@ -150,11 +150,39 @@ def test_a_turned_confirmed_page_hides_the_staff_area_drawn_on_the_stored_pictur
     assert not white(m)[synth.blue(turned)].all()  # the rest of the page still shows
 
 
-def test_no_name_confirmed_page_still_gets_the_band(unproved):
-    """'There is no name on this page': confirmed without any area, the nominal band is still painted."""
-    m = decode(pipeline.remask(unproved.full, 0, [], code=A, copy_page=2, provable=False, confirmed=True))
+def test_a_coded_page_confirmed_without_a_staff_area_gets_no_marking_picture(unproved):
+    """Ruling R40 (C1): a page with a copy code always carries the printed name box. When its layout is not proved
+    the nominal band cannot be trusted to cover it, so "confirmed" alone never makes a marking picture: staff must
+    have drawn a hidden area. A page with no code keeps the nominal band (R31)."""
+    assert pipeline.remask(unproved.full, 0, [], code=A, copy_page=2, provable=False, confirmed=True) is None
+    m = decode(pipeline.remask(unproved.full, 0, [], provable=False, confirmed=True))  # no code: as before
     assert m[:BAND].min() > 225
     assert not white(m)[BAND:].all()
+
+
+@pytest.mark.parametrize("kind", ["scan_file", "home_pdf"])
+@pytest.mark.parametrize("scale", [0.80, 0.84])
+def test_a_fit_to_page_copy_page_never_shows_its_printed_name(kind, scale):
+    """The final review's probe (Ruling R40, C1): a copy page printed with "Fit to page" at 80% and 84%, scanned or
+    sent as a home PDF. Its code is read but its layout is not proved, and the printed name lies below the nominal
+    band. Confirmed with no staff area there is no marking picture; with the staff area over the name box no name
+    pixel shows."""
+    sheet = synth.scan(synth.printed(TAGGED, scale=scale), seed=round(scale * 100))
+    [p] = pipeline.prepare(synth.scan_pdf([sheet]), kind, PDF, ctx())
+    assert (p.code, p.copy_page) == (A, 2)
+    assert p.marking is None and pipeline.LAYOUT_UNEXPECTED in p.quality.flags
+    full = decode(p.full)
+    name = synth.red(full)
+    assert name.sum() > 1000 and name[BAND:].sum() > 1000  # the band alone would not hide it
+
+    assert pipeline.remask(p.full, 0, [], code=A, copy_page=2, provable=False, confirmed=True) is None
+    area = staff_area_over(name)
+    marking = pipeline.remask(p.full, 0, [], staff_areas=[area], code=A, copy_page=2, provable=False, confirmed=True)
+    assert marking is not None
+    m = decode(marking)
+    assert int((name & ~white(m)).sum()) == 0, f"{int((name & ~white(m)).sum())} name pixels show"
+    assert m[:BAND].min() > 225
+    assert full[name].min() < 100  # staff still see the name in the full picture
 
 
 def test_remask_refuses_a_turn_that_is_not_a_quarter(stored):

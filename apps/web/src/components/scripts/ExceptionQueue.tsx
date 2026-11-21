@@ -12,7 +12,9 @@ import {
   candidateLabel,
   copyPages,
   foundInWords,
+  NAME_BOX_MESSAGE,
   needsNameCheck,
+  noNameOffered,
   reasonProblem,
   reasonRequired,
   rejectsSubmission,
@@ -280,6 +282,8 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
   const [noName, setNoName] = useState(false);
   // Confirming some pages, and assigning a page with no code, needs the name hidden first or "no name" ticked (R31).
   const nameCheck = (action === "confirm" || action === "assign") && needsNameCheck(item, action);
+  // A page with a code carries the printed name box: no "no name" tick, staff draw a box over it (Ruling R40).
+  const noNameAllowed = nameCheck && noNameOffered(item, action);
   const required = reasonRequired(action);
   const familySees = (action === "reject" && rejectsSubmission(item)) || action === "late_reject";
 
@@ -295,7 +299,7 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
       if (nameCheck && !noName) {
         return setNote({ ok: false, text: 'This page has no code, so hide the candidate\'s name first ("Hide the name"), or tick "There is no name on this page".' });
       }
-      input = { action, exceptionId: item.id, bookingId: choice.bookingId, copyPage: choice.copyPage, reason, replace: replacing, noName: nameCheck && noName };
+      input = { action, exceptionId: item.id, bookingId: choice.bookingId, copyPage: choice.copyPage, reason, replace: replacing, noName: noNameAllowed && noName };
     } else if (action === "dismiss_missing") {
       if (pages.length === 0) return setNote({ ok: false, text: "Choose the pages that were left blank." });
       input = { action, exceptionId: item.id, pages, reason };
@@ -303,10 +307,11 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
       if (!item.script) return;
       input = { action, scriptId: item.script.id, reason };
     } else if (action === "confirm") {
+      if (nameCheck && !noNameAllowed) return setNote({ ok: false, text: NAME_BOX_MESSAGE });
       if (nameCheck && !noName) {
         return setNote({ ok: false, text: 'Hide the candidate\'s name first ("Hide the name"), or tick "There is no name on this page".' });
       }
-      input = { action, exceptionId: item.id, reason, noName: nameCheck && noName };
+      input = { action, exceptionId: item.id, reason, noName: noNameAllowed && noName };
     } else if (action === "blank" || action === "keep_existing" || action === "reject") {
       input = { action, exceptionId: item.id, reason };
     } else {
@@ -349,7 +354,12 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
           </span>
         </label>
       )}
-      {nameCheck && (
+      {nameCheck && !noNameAllowed && (
+        <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="name-box-required">
+          {NAME_BOX_MESSAGE}
+        </p>
+      )}
+      {noNameAllowed && (
         <label className="flex items-start gap-2 text-sm text-slate-800">
           <input type="checkbox" className="mt-1" checked={noName} onChange={(e) => setNoName(e.target.checked)} />
           <span>

@@ -6,7 +6,9 @@ import {
   conflictMessage,
   failureMessage,
   foundInWords,
+  NAME_BOX_MESSAGE,
   needsNameCheck,
+  noNameOffered,
   parseCandidates,
   parseQueue,
   reasonProblem,
@@ -275,6 +277,24 @@ describe("needsNameCheck", () => {
     expect(needsNameCheck(item({ kind: "poor_quality", page: codeless }))).toBe(true);
     expect(needsNameCheck(item({ kind: "poor_quality", page: page({ areas: [] }), details: { from: "remask" } }))).toBe(true);
     expect(needsNameCheck(item({ kind: "no_code", page: codeless }), "blank")).toBe(false);
+  });
+});
+
+describe("noNameOffered (Ruling R40)", () => {
+  const layout = page({ quality: { sharpness: 100, brightness: 180, cut_off: false, flags: ["layout_unexpected"] }, areas: [] });
+  const codeless = page({ copy_page: null, paper_version: null, paper_current: null, areas: [] });
+  it("hides the 'no name' tick for a page with a code, and says why", () => {
+    expect(needsNameCheck(item({ kind: "poor_quality", page: layout }))).toBe(true);
+    expect(noNameOffered(item({ kind: "poor_quality", page: layout }))).toBe(false);
+    expect(noNameOffered(item({ kind: "name_visible", page: page({ areas: [] }) }))).toBe(false);
+    expect(noNameOffered(item({ kind: "poor_quality", page: page({ areas: [] }), details: { from: "remask" } }))).toBe(false);
+    expect(NAME_BOX_MESSAGE).toBe("This page has a printed name box. Draw a box over the name before confirming.");
+  });
+  it("still offers it for a page with no code", () => {
+    expect(noNameOffered(item({ kind: "no_code", page: codeless }), "assign")).toBe(true);
+    expect(noNameOffered(item({ kind: "uncoded_family_page", page: codeless }))).toBe(true);
+    expect(noNameOffered(item({ kind: "poor_quality", page: codeless }))).toBe(true);
+    expect(noNameOffered(item({ kind: "no_code", page: { ...codeless, areas: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.1 }] } }), "assign")).toBe(false);
   });
 });
 

@@ -296,6 +296,7 @@ const exceptionMessages: Record<string, string> = {
   still_mixed: "The script still shows pages from two versions of the paper. Make its pages one version first.",
   not_late: "This script was not handed in late.",
   name_not_hidden: "Hide the candidate's name on the page first, or tick \"There is no name on this page\".",
+  name_area_required: "This page has a printed name box. Draw a box over the name before confirming.",
   other_family: "A page handed in by one family can only go to that family's own bookings, not to another family's.",
 };
 

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(183);
+select plan(185);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -1515,13 +1515,17 @@ select is(pg_temp.code(public.script_exception_reject(pg_temp.k('x5_1'), 'Unread
 select is((select x ->> 'rejects_submission' from jsonb_array_elements(public.script_detail(pg_temp.sid('b3')) -> 'exceptions') x
            where (x ->> 'id')::uuid = pg_temp.k('x5_1')), 'false', 'and the queue does not offer to reject the submission');
 select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x5_1'))), 'name_not_hidden', 'staff hide the name or say there is none first');
-select is(public.script_exception_confirm(pg_temp.k('x5_1'), 'Checked: the name band is empty', true) ->> 'resolution', 'confirmed',
-  'staff say there is no name on it');
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x5_1'), 'Checked: the name band is empty', true)), 'name_area_required',
+  'R40: the page has a code, so "no name" is refused');
+select is(public.script_page_set_hidden_areas(pg_temp.pid('u3', 1), '[{"x":0.05,"y":0.01,"w":0.9,"h":0.05}]', 'Name box') ->> 'ok', 'true',
+  'staff draw an area over the name box');
+select is(public.script_exception_confirm(pg_temp.k('x5_1'), 'Name box hidden') ->> 'resolution', 'confirmed',
+  'and then accept the page');
 select tests.as_postgres();
 select is(concat_ws('/', pg_temp.jobs('u3', 'remask', 'queued'), public.script_page_remask_context(pg_temp.pid('u3', 1)) ->> 'confirmed',
     (select details ->> 'no_name' from public.script_exceptions where id = pg_temp.k('x5_1')), pg_temp.state('b3'),
     (select state::text from public.home_submissions where id = pg_temp.k('d3'))),
-  '1/true/true/needs_attention/received',
+  '1/true/needs_attention/received',
   'R32: a remask is queued; nothing is open, but while its answer page has no marking picture the script is not verified');
 insert into res select 'r5b', pg_temp.claim_remask('u3');
 select pg_temp.remasked(pg_temp.r('r5b'), pg_temp.answer(pg_temp.r('r5b')));

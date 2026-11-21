@@ -182,6 +182,7 @@ describe("exceptionMessageFor", () => {
     expect(exceptionMessageFor("still_mixed")).toContain("two versions");
     expect(exceptionMessageFor("not_late")).toContain("late");
     expect(exceptionMessageFor("name_not_hidden")).toContain("There is no name on this page");
+    expect(exceptionMessageFor("name_area_required")).toBe("This page has a printed name box. Draw a box over the name before confirming.");
     expect(exceptionMessageFor("other_family")).toContain("another family");
     expect(exceptionMessageFor("wrong_kind")).toContain("does not fit");
     expect(exceptionMessageFor("invalid_input")).toContain("copy");
