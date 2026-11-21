@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(179);
+select plan(183);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -904,11 +904,12 @@ select is(pg_temp.scenario('s_xr2'),
 -- Probes inc1/inc2: as xT, but the rerun also reads a page of the candidate staff gave the page to (bx), so bx's script
 -- is written by the rerun too, while b1's undone version still shows the page. The rerun goes through its bookings in
 -- uuid order, so bx's booking is made to sort before b1's (p_before) or after it.
-create function pg_temp.s_inc(p_before boolean) returns text language plpgsql as $$
+-- The set-up: candidate bx, its pages 1-4 scanned (ux); u2 holds b1's page 3 again, sharper, and takes slot 3; staff put
+-- the duplicate (u1#2) in bx's spare slot 6; staff ask for u2 to be processed again. Answers what it saw.
+create function pg_temp.inc_setup(p_before boolean) returns text language plpgsql as $$
 declare
   v_b uuid := (case when p_before then '00000000-0000-4000-8000-0000000000b7' else 'ffffffff-ffff-4fff-bfff-ffffffffffb7' end)::uuid;
   v_s uuid := tests.create_user('student', 'active');
-  v text;
   r jsonb;
 begin
   insert into kv values ('bx', v_b);
@@ -927,7 +928,14 @@ begin
   perform pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 3), '{quality,sharpness}', '400')));
   -- Staff put that duplicate in bx's spare slot 6.
   r := pg_temp.as_admin($q$select public.script_exception_assign(pg_temp.exc('u1', 2, 'duplicate'), pg_temp.k('bx'), 6, 'It is the other candidate''s')$q$);
-  v := concat_ws(' ', pg_temp.code(r), pg_temp.links('b1'), '/', pg_temp.links('bx'), pg_temp.ask('u2'));
+  insert into res values ('b1 before reprocess', to_jsonb(pg_temp.state('b1')));
+  return concat_ws(' ', pg_temp.code(r), pg_temp.links('b1'), '/', pg_temp.links('bx'), pg_temp.ask('u2'));
+end $$;
+create function pg_temp.s_inc(p_before boolean) returns text language plpgsql as $$
+declare
+  v text := pg_temp.inc_setup(p_before);
+  r jsonb;
+begin
   -- u2 is processed again and now reads as b1's page 5 and bx's page 5.
   r := pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 5), '{quality,sharpness}', '400'),
     pg_temp.pp('u2', 1, 'qx', 5)));
@@ -945,6 +953,23 @@ begin
 end $$;
 create function pg_temp.s_inc_before() returns text language sql as $$ select pg_temp.s_inc(true) $$;
 create function pg_temp.s_inc_after() returns text language sql as $$ select pg_temp.s_inc(false) $$;
+-- R39 (1), the reviewer's probe: the same set-up, but u2 is read again as before (b1's page 3 and bx's page 5; with
+-- p_six bx's page 6 too). Slot 3 is filled again by u2's page, so the rerun leaves b1 complete and tells staff nothing.
+create function pg_temp.s_same(p_before boolean, p_six boolean) returns text language plpgsql as $$
+declare
+  v text := pg_temp.inc_setup(p_before);
+  v_state text := pg_temp.r('b1 before reprocess') #>> '{}';
+  r jsonb;
+begin
+  r := pg_temp.run('u2', jsonb_build_array(jsonb_set(pg_temp.pp('u2', 0, 'q1', 3), '{quality,sharpness}', '400'), pg_temp.pp('u2', 1, 'qx', 5))
+    || case when p_six then jsonb_build_array(pg_temp.pp('u2', 2, 'qx', 6)) else '[]'::jsonb end);
+  return concat_ws(' ', v, 'recorded:' || (r ->> 'pages'), pg_temp.links('b1'), '/', pg_temp.links('bx'),
+    'b1 open=' || pg_temp.opens('b1'), 'bx open=' || pg_temp.opens('bx'), 'b1 ' || v_state || '>' || pg_temp.state('b1'), pg_temp.safe());
+end $$;
+create function pg_temp.s_same_before() returns text language sql as $$ select pg_temp.s_same(true, false) $$;
+create function pg_temp.s_same_after() returns text language sql as $$ select pg_temp.s_same(false, false) $$;
+create function pg_temp.s_same6_before() returns text language sql as $$ select pg_temp.s_same(true, true) $$;
+create function pg_temp.s_same6_after() returns text language sql as $$ select pg_temp.s_same(false, true) $$;
 -- The slot decision keeps a page and clears the duplicates about it, but not one saying another script's version asked
 -- for that page (in_other_script) unless the page is kept in a slot staff placed it in. Here b5's version had asked
 -- for b1's page 3 (u1#2), which b1 shows; a blurrier scan of the same page leaves u1#2 where it is.
@@ -971,6 +996,22 @@ select is(pg_temp.scenario('s_inc_after'),
   || 'u1#2=duplicate placed=true b1 open=duplicate:in_other_script@2@u1,missing_pages:in_other_script:[3] bx open=none other=b1>bx '
   || '| needs_attention verified b1 open=duplicate:in_other_script@2@u1,missing_pages:[3] bx open=none stale=0 twice=0 bare=0 orphans=0',
   'R38 (inc1/inc2, the staff-chosen script sorts last): the same outcome');
+select is(pg_temp.scenario('s_same_before'),
+  'ok 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,6:2@u1 ok recorded:2 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,5:1@u2,6:2@u1 '
+  || 'b1 open=none bx open=none b1 receiving>receiving stale=0 twice=0 bare=0 orphans=0',
+  'R39 (1): a rerun that reads the file as before fills slot 3 again: b1 is complete and staff are told nothing (staff-chosen script first)');
+select is(pg_temp.scenario('s_same_after'),
+  'ok 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,6:2@u1 ok recorded:2 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,5:1@u2,6:2@u1 '
+  || 'b1 open=none bx open=none b1 receiving>receiving stale=0 twice=0 bare=0 orphans=0',
+  'R39 (1): the same, the staff-chosen script last');
+select is(pg_temp.scenario('s_same6_before'),
+  'ok 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,6:2@u1 ok recorded:3 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,5:1@u2,6:2@u1 '
+  || 'b1 open=none bx open=duplicate@2@u2 b1 receiving>receiving stale=0 twice=0 bare=0 orphans=0',
+  'R39 (1): read as before and with bx''s page 6 too: the page staff placed keeps slot 6, the new one is a duplicate, b1 is told nothing (first)');
+select is(pg_temp.scenario('s_same6_after'),
+  'ok 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,6:2@u1 ok recorded:3 1:0@u1,2:1@u1,3:0@u2,4:3@u1 / 1:0@ux,2:1@ux,3:2@ux,4:3@ux,5:1@u2,6:2@u1 '
+  || 'b1 open=none bx open=duplicate@2@u2 b1 receiving>receiving stale=0 twice=0 bare=0 orphans=0',
+  'R39 (1): the same with bx''s page 6, the staff-chosen script last');
 select is(pg_temp.scenario('s_dup_kept'),
   'recorded:1 1:0@u1,2:1@u1,3:2@u1,4:3@u1 u2#0=duplicate b5 open=duplicate:in_other_script@2@u1,poor_quality@8@u1 b1 open=duplicate@0@u2 stale=0 twice=0 bare=0 orphans=0',
   'R38: the slot decision never deletes an in_other_script duplicate about the page it keeps, unless staff placed the page in that slot');
@@ -988,34 +1029,66 @@ create function pg_temp.dash_exam(d jsonb, p_exam text) returns text language sq
 create function pg_temp.dash_centres(d jsonb) returns text language sql stable as $$
   select coalesce(string_agg(pg_temp.kname((x ->> 'centre_id')::uuid) || ':' || (x ->> 'counted'), ','), 'none')
   from jsonb_array_elements(d -> 'centres_without_scanned_custody') x where (x ->> 'exam_id')::uuid in (pg_temp.k('e'), pg_temp.k('f')) $$;
+-- One attempt of a file's waiting prepare job, failed (the third makes it fail for good: a processing_failed exception).
+create function pg_temp.fail_prepare(p_up text) returns jsonb language plpgsql as $$
+declare
+  v jsonb;
+begin
+  update public.processing_jobs set run_after = '2000-01-01' where upload_id = pg_temp.k(p_up) and state = 'queued' and kind = 'prepare';
+  v := public.processing_job_claim('t-worker');
+  if v is null or v -> 'upload' ->> 'id' <> pg_temp.k(p_up)::text or v -> 'job' ->> 'kind' <> 'prepare' then
+    raise exception 'claimed another job: %', v -> 'job';
+  end if;
+  return public.processing_job_finish((v -> 'job' ->> 'id')::bigint, 't-worker', (v -> 'job' ->> 'attempts')::int, false, 'RuntimeError');
+end $$;
 create function pg_temp.s_dashboard() returns text language plpgsql as $$
 declare
   d jsonb;
   v text;
   v_failed int;
 begin
-  -- Jobs left waiting by other work are not part of this.
-  update public.processing_jobs set state = 'done' where state = 'queued';
+  -- Jobs left waiting or running by other work are not part of this.
+  update public.processing_jobs set state = 'done' where state in ('queued', 'running');
   d := pg_temp.dash('2031-08-05 12:00Z');
   v_failed := (d ->> 'failed_jobs')::int;
   v := concat_ws(' ', 'e=' || pg_temp.dash_exam(d, 'e'), 'f=' || pg_temp.dash_exam(d, 'f'),
     'open=' || ((d ->> 'open_exceptions')::int = (select count(*) from public.script_exceptions x where x.state = 'open')),
-    'queue=' || coalesce(d ->> 'oldest_queued_minutes', 'none'), 'centres=' || pg_temp.dash_centres(d));
-  -- A file has waited 30 minutes and another is not due yet; one failed for good, another failed and ran again.
+    'queue=' || coalesce(d ->> 'oldest_queued_minutes', 'none'), 'stuck=' || (d ->> 'stuck_jobs'), 'centres=' || pg_temp.dash_centres(d));
+  -- A file has waited 30 minutes and another is not due yet.
   perform pg_temp.scan_file('u2', 'e', 'bt', 'queued', false);
   insert into public.processing_jobs (upload_id, kind, run_after) values (pg_temp.k('u2'), 'prepare', '2031-08-05 11:30Z');
   perform pg_temp.scan_file('u9', 'e', 'bt', 'queued', false);
   insert into public.processing_jobs (upload_id, kind, run_after) values (pg_temp.k('u9'), 'prepare', '2031-08-05 12:30Z');
-  perform pg_temp.scan_file('u11', 'e', 'bt', 'failed', false);
-  insert into public.processing_jobs (upload_id, kind, state, attempts, finished_at) values (pg_temp.k('u11'), 'prepare', 'failed', 3, '2031-08-05 11:00Z');
-  perform pg_temp.scan_file('ux', 'e', 'bt', 'processed', false);
-  insert into public.processing_jobs (upload_id, kind, state, attempts, finished_at)
-  values (pg_temp.k('ux'), 'prepare', 'failed', 3, '2031-08-05 10:00Z'), (pg_temp.k('ux'), 'prepare', 'done', 1, '2031-08-05 10:30Z');
-  -- A late script that staff later withdrew counts nowhere.
-  update public.scripts set state = 'withdrawn' where booking_id = pg_temp.k('b5');
   d := pg_temp.dash('2031-08-05 12:00Z');
-  v := concat_ws(' ', v, '| e=' || pg_temp.dash_exam(d, 'e'), 'failed+' || ((d ->> 'failed_jobs')::int - v_failed),
-    'queue=' || coalesce(d ->> 'oldest_queued_minutes', 'none'));
+  v := concat_ws(' ', v, '| queue=' || coalesce(d ->> 'oldest_queued_minutes', 'none'), 'stuck=' || (d ->> 'stuck_jobs'));
+  -- A server died part-way through a file 40 minutes ago (its lock is old); another file is being read now.
+  perform pg_temp.scan_file('u10', 'e', 'bt', 'processing', false);
+  insert into public.processing_jobs (upload_id, kind, state, attempts, locked_by, locked_at, run_after)
+  values (pg_temp.k('u10'), 'prepare', 'running', 1, 'dead-worker', '2031-08-05 11:20Z', '2031-08-05 11:19Z');
+  perform pg_temp.scan_file('u13', 'e', 'bt', 'processing', false);
+  insert into public.processing_jobs (upload_id, kind, state, attempts, locked_by, locked_at, run_after)
+  values (pg_temp.k('u13'), 'prepare', 'running', 1, 'live-worker', '2031-08-05 11:59Z', '2031-08-05 11:58Z');
+  d := pg_temp.dash('2031-08-05 12:00Z');
+  v := concat_ws(' ', v, 'dead: queue=' || coalesce(d ->> 'oldest_queued_minutes', 'none'), 'stuck=' || (d ->> 'stuck_jobs'));
+  -- Two files fail for good; staff note one (confirm) and reject the other: each leaves the count.
+  perform pg_temp.scan_file('u11', 'e', 'bt');
+  perform pg_temp.scan_file('u12', 'e', 'bt');
+  for i in 1 .. 3 loop
+    perform pg_temp.fail_prepare('u11');
+    perform pg_temp.fail_prepare('u12');
+  end loop;
+  v := concat_ws(' ', v, '| failed+' || ((pg_temp.dash('2031-08-05 12:00Z') ->> 'failed_jobs')::int - v_failed));
+  perform pg_temp.as_admin(format('select public.script_exception_confirm(%L, %L)',
+    (select e.id from public.script_exceptions e where e.upload_id = pg_temp.k('u11') and e.kind = 'processing_failed' and e.state = 'open'), 'Noted'));
+  v := concat_ws(' ', v, 'confirmed:+' || ((pg_temp.dash('2031-08-05 12:00Z') ->> 'failed_jobs')::int - v_failed));
+  perform pg_temp.as_admin(format('select public.script_exception_reject(%L, %L)',
+    (select e.id from public.script_exceptions e where e.upload_id = pg_temp.k('u12') and e.kind = 'processing_failed' and e.state = 'open'), 'Broken file'));
+  v := concat_ws(' ', v, 'rejected:+' || ((pg_temp.dash('2031-08-05 12:00Z') ->> 'failed_jobs')::int - v_failed));
+  -- A late script that staff later withdrew counts nowhere: b5 is handed in late, then withdrawn.
+  update public.scripts set late = true where booking_id = pg_temp.k('b5');
+  v := concat_ws(' ', v, '| late: e=' || pg_temp.dash_exam(pg_temp.dash('2031-08-05 12:00Z'), 'e'));
+  update public.scripts set state = 'withdrawn' where booking_id = pg_temp.k('b5');
+  v := concat_ws(' ', v, 'withdrawn: e=' || pg_temp.dash_exam(pg_temp.dash('2031-08-05 12:00Z'), 'e'));
   -- Sheets were counted at centre ce for b1 and b2; its custody has "collected" only. Listed from 09:00 UK time the
   -- next day until a "scanned" record exists.
   insert into public.collection_counts (booking_id, exam_id, extra_sheets, recorded_by)
@@ -1028,14 +1101,17 @@ begin
   -- Only exams that started in the last 14 days: on 18 August at 09:30 UTC, f but not e.
   d := pg_temp.dash('2031-08-18 09:30Z');
   v := concat_ws(' ', v, '| 14 days: e=' || pg_temp.dash_exam(d, 'e'), 'f=' || pg_temp.dash_exam(d, 'f'));
-  -- Before f starts, it is not listed.
-  return concat_ws(' ', v, 'not started: f=' || pg_temp.dash_exam(pg_temp.dash('2031-08-05 08:59Z'), 'f'));
+  -- Before f starts, it is not listed; nor is an exam still in draft.
+  v := concat_ws(' ', v, 'not started: f=' || pg_temp.dash_exam(pg_temp.dash('2031-08-05 08:59Z'), 'f'));
+  update public.exams set status = 'draft' where id = pg_temp.k('f');
+  return concat_ws(' ', v, 'draft: f=' || pg_temp.dash_exam(pg_temp.dash('2031-08-05 12:00Z'), 'f'));
 end $$;
 
 select is(pg_temp.scenario('s_dashboard'),
-  'e=5/5/1/3/1 f=1/1/0/0/0 open=true queue=none centres=none | e=5/4/1/2/1 failed+1 queue=30 | 08:59=none 09:00=ce:2 scanned=none '
-  || '| 14 days: e=- f=1/1/0/0/0 not started: f=-',
-  'dashboard_counts: expected, received, verified, needs attention and late per exam of the last 14 days; open problems, failed files, queue age and centres not scanned by 09:00 the next day');
+  'e=5/5/1/3/1 f=1/1/0/0/0 open=true queue=none stuck=0 centres=none | queue=30 stuck=0 dead: queue=40 stuck=1 '
+  || '| failed+2 confirmed:+1 rejected:+0 | late: e=5/5/1/3/2 withdrawn: e=5/4/1/2/1 | 08:59=none 09:00=ce:2 scanned=none '
+  || '| 14 days: e=- f=1/1/0/0/0 not started: f=- draft: f=-',
+  'dashboard_counts: expected, received, verified, needs attention and late per exam of the last 14 days; open problems, files that failed and are not yet settled, queue age (a dead server included) and centres not scanned by 09:00 the next day');
 select tests.as_user(pg_temp.uid('teacher'));
 select is(public.scripts_dashboard() ->> 'code', 'forbidden', 'the scripts dashboard is for owners and admins: a teacher is refused');
 select tests.as_postgres();
@@ -1043,7 +1119,7 @@ select ok(pg_temp.as_admin('select public.scripts_dashboard()') ->> 'ok' = 'true
       and not has_function_privilege('anon', 'public.scripts_dashboard(timestamptz)', 'execute')
       and has_function_privilege('authenticated', 'public.scripts_dashboard(timestamptz)', 'execute'),
   'an admin reads the scripts dashboard; anon cannot call it');
-select is(concat_ws(' ', pg_temp.links('b1'), pg_temp.state('b1'), (select count(*) from kv where name in ('u2', 'u9', 'u11', 'u4b', 'u3b', 'ux', 'bx')),
+select is(concat_ws(' ', pg_temp.links('b1'), pg_temp.state('b1'), (select count(*) from kv where name in ('u2', 'u9', 'u10', 'u11', 'u12', 'u13', 'u4b', 'u3b', 'ux', 'bx')),
     (select count(*) from public.script_page_hidden_areas a join public.script_pages p on p.id = a.page_id where p.exam_id = pg_temp.k('e')),
     (select count(*) from public.bookings b where b.exam_id = pg_temp.k('e'))),
   '1:0@u1,2:1@u1,3:2@u1,4:3@u1 receiving 0 0 5', 'the scenarios left nothing behind');

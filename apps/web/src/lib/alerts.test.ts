@@ -20,6 +20,7 @@ const answer = {
   open_exceptions: 7,
   failed_jobs: 1,
   oldest_queued_minutes: 3,
+  stuck_jobs: 0,
   centres_without_scanned_custody: [
     {
       exam_id: EXAM,
@@ -44,6 +45,7 @@ describe("parseScriptsDashboard", () => {
       openExceptions: 7,
       failedJobs: 1,
       oldestQueuedMinutes: 3,
+      stuckJobs: 0,
       centresNotScanned: [
         { examId: EXAM, title: "Maths mock", paper: "Paper 1", centreId: CENTRE, venue: "Town Hall", room: "Room 2", counted: 12, scannedBy: "2026-12-02T09:00:00Z" },
       ],
@@ -68,13 +70,14 @@ describe("parseScriptsDashboard", () => {
       openExceptions: 0,
       failedJobs: 0,
       oldestQueuedMinutes: null,
+      stuckJobs: 0,
       centresNotScanned: [],
     });
   });
 });
 
 describe("scriptsDashboardAlerts", () => {
-  const base: ScriptsDashboard = { exams: [], openExceptions: 0, failedJobs: 0, oldestQueuedMinutes: null, centresNotScanned: [] };
+  const base: ScriptsDashboard = { exams: [], openExceptions: 0, failedJobs: 0, oldestQueuedMinutes: null, stuckJobs: 0, centresNotScanned: [] };
 
   it("says nothing when all is well", () => {
     expect(scriptsDashboardAlerts(base)).toEqual([]);
@@ -99,6 +102,21 @@ describe("scriptsDashboardAlerts", () => {
       },
       { id: "open", tone: "amber", text: "1 problem is waiting in the exception queue.", href: "/admin/scripts/exceptions" },
     ]);
+  });
+
+  it("names a server that stopped part-way through a file, and reads the count", () => {
+    expect(parseScriptsDashboard({ ...answer, oldest_queued_minutes: 40, stuck_jobs: 1 })?.stuckJobs).toBe(1);
+    expect(scriptsDashboardAlerts({ ...base, oldestQueuedMinutes: 40, stuckJobs: 1 })).toEqual([
+      {
+        id: "queue",
+        tone: "red",
+        text: "1 file stopped part-way through processing, and files have waited 40 minutes. Check that the processing server is running.",
+        href: null,
+      },
+    ]);
+    expect(scriptsDashboardAlerts({ ...base, oldestQueuedMinutes: 16, stuckJobs: 2 })[0].text).toBe(
+      "2 files stopped part-way through processing, and files have waited 16 minutes. Check that the processing server is running.",
+    );
   });
 
   it("uses the singular for one file and one candidate, and the plural for problems", () => {

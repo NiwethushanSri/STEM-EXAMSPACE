@@ -215,8 +215,11 @@ export type ScriptsDashboard = {
   exams: ScriptsDashboardExam[];
   openExceptions: number;
   failedJobs: number;
-  /** How long the oldest file due to be processed has waited, or null when none waits. */
+  /** How long the oldest file due to be processed has waited (a file the server stopped part-way through included),
+   * or null when none waits. */
   oldestQueuedMinutes: number | null;
+  /** Files the server stopped part-way through: still "running", their lock not renewed for 15 minutes. */
+  stuckJobs: number;
   centresNotScanned: CentreNotScanned[];
 };
 
@@ -270,6 +273,7 @@ export function parseScriptsDashboard(data: unknown): ScriptsDashboard | null {
     openExceptions: counted(data.open_exceptions),
     failedJobs: counted(data.failed_jobs),
     oldestQueuedMinutes: typeof minutes === "number" && Number.isInteger(minutes) && minutes >= 0 ? minutes : null,
+    stuckJobs: counted(data.stuck_jobs),
     centresNotScanned: (Array.isArray(data.centres_without_scanned_custody) ? data.centres_without_scanned_custody : [])
       .map(centreNotScanned)
       .filter((c): c is CentreNotScanned => c !== null),
@@ -282,11 +286,21 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
  * centres whose collected sheets were not scanned by 09:00 the next day, and problems in the exception queue. */
 export function scriptsDashboardAlerts(d: ScriptsDashboard): StaffAlert[] {
   const out: StaffAlert[] = [];
-  if (d.oldestQueuedMinutes !== null && d.oldestQueuedMinutes >= QUEUE_STUCK_MINUTES) {
+  const waited = d.oldestQueuedMinutes ?? 0;
+  if (d.stuckJobs > 0) {
     out.push({
       id: "queue",
       tone: "red",
-      text: `Files have waited ${d.oldestQueuedMinutes} minutes to be processed. Check that the processing server is running.`,
+      text:
+        `${plural(d.stuckJobs, "file", "files")} stopped part-way through processing, and files have waited ${waited} minutes. ` +
+        "Check that the processing server is running.",
+      href: null,
+    });
+  } else if (waited >= QUEUE_STUCK_MINUTES) {
+    out.push({
+      id: "queue",
+      tone: "red",
+      text: `Files have waited ${waited} minutes to be processed. Check that the processing server is running.`,
       href: null,
     });
   }

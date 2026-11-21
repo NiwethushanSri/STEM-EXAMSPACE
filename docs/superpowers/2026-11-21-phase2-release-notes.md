@@ -31,7 +31,7 @@ Phase 2 takes every candidate's written answers into the system: home candidates
 - **Scripts** (/admin/scripts). Every script with filters (exam, home or centre, state, late), and each script's pages with the full picture and the marking picture side by side, its versions, files, custody and problems. Staff can turn a page, process a file again (only while nobody has worked on its pages), take a page out, or void a script, always with a reason.
 - **Page roles and hidden areas.** On the exam page, each paper version's pages are marked as answer, cover, blank or information pages, and areas to hide from markers can be drawn on a sample copy.
 - **Home rules** can be set per exam on the exam form.
-- **Admin home page.** New scripts figures: problems to check, files that could not be processed, and how long the oldest file has waited; and for every exam of the last 14 days, the scripts expected (paid home candidates plus centre candidates marked present or late), received, verified, needing attention and late. Alerts say when the processing server seems stopped (a file waiting 15 minutes or more), when files could not be processed, when a centre's collected sheets have no scan recorded by 09:00 the next day, and how many problems wait in the queue.
+- **Admin home page.** New scripts figures: problems to check, files that could not be processed and that staff have not dealt with yet, and how long the oldest file has waited; and for every exam of the last 14 days, the scripts expected (paid home candidates plus centre candidates marked present or late), received, verified, needing attention and late. Alerts say when the processing server seems stopped (a file waiting 15 minutes or more, or a file it stopped part-way through), when files could not be processed (until staff note or reject each one in the queue), when a centre's collected sheets have no scan recorded by 09:00 the next day, and how many problems wait in the queue.
 - **Staff alert emails** to the owner and admin accounts for each new problem staff must see.
 - **What markers will see.** Each page has two pictures: the full page, for staff only, and a marking picture with the name band and every hidden area painted white. When the system cannot prove where the name band is, it makes no marking picture: the family is asked to retake the page, or staff check it.
 
@@ -54,9 +54,9 @@ Do not deploy until you give the go-ahead.
 
 **Steps**
 
-1. **Migrations 20261120000050 to 20261120000068** (`npm run db:push`, by your go-ahead only). They add page roles and hidden areas, scripts, uploads, pages, processing jobs, the exception queue, the home sitting, emails, collection and custody, scan batches, the script repository, and the dashboard figures (068).
+1. **Migrations 20261120000050 to 20261120000070** (`npm run db:push`, by your go-ahead only). They add page roles and hidden areas, scripts, uploads, pages, processing jobs, the exception queue, the home sitting, emails, collection and custody, scan batches, the script repository, and the dashboard figures (068 and 070).
 2. **Edge Function `script-notify`**, then the Vault secret `script_notify_url` (the function's address, `https://<project>.supabase.co/functions/v1/script-notify`). It uses the existing Vault secret `cron_secret` and function secret `CRON_SECRET` from Phase 1A. Until both secrets exist, no script email is sent.
-3. **The processing server** on the host account in London (settings in `services/processor/fly.toml`: London region, 2 GB of memory). Give it `SUPABASE_URL` and the service key (`SUPABASE_SERVICE_ROLE_KEY`) as host secrets, never in a file. **Deploy it together with step 1, from this branch:** migrations 059 to 068 change what the server sends, and from migration 061 on the database refuses the picture folder older builds of the server write to. Files uploaded before it starts simply wait in the queue; nothing is lost. Allow it a few minutes to stop, so a long scan being read can finish (a stopped file is taken up again after 15 minutes).
+3. **The processing server** on the host account in London (settings in `services/processor/fly.toml`: London region, 2 GB of memory). Give it `SUPABASE_URL` and the service key (`SUPABASE_SERVICE_ROLE_KEY`) as host secrets, never in a file. **Deploy it with migration 059 onward, from this branch:** migrations 059 to 066 change what the server and the database exchange, and from migration 061 on the database refuses the picture folder older builds of the server write to (067 to 070 change nothing the server sends). Files uploaded before it starts simply wait in the queue; nothing is lost. Allow it a few minutes to stop, so a long scan being read can finish (a stopped file is taken up again after 15 minutes).
 4. **The website.**
 
 **Check afterwards**
@@ -103,6 +103,8 @@ The marking picture is made only when the printed page proves where the name ban
 - **Phones holding many photos offline.** Up to 60 photos taken without a connection are held in the phone's memory until they upload (about 200 to 300 MB); try this on older phones in the trial.
 - **Rejecting a late upload** when on-time pages exist still emails "rejected" about the late upload, although the on-time pages are used. The wording will be improved.
 - **Old page pictures** left by files processed again are kept in storage for now; a clean-up comes later.
+- **Another candidate's page in a family's hand-in.** The family sees "Received" and gets the receipt, while on the staff side the script still needs attention until staff decide what to do with that page.
+- **"Already in another candidate's script" problems can outlive their reason.** When a page staff placed in one script was also wanted by another, the problem stays open even after it no longer matters (for example the page went back where it was wanted), until staff close it.
 
 ## Follow-ups for Phase 3
 

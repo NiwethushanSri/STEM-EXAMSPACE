@@ -11,7 +11,9 @@ import { CODE_A, CODE_B, noSidewaysScroll, removeExam, requireProcessor, scriptF
 test.describe.configure({ mode: "serial" });
 
 const tag = crypto.randomUUID().slice(0, 8);
-const index = () => `SE-2026-${7000 + Math.floor(Math.random() * 999)}`;
+// The two candidates' index numbers come from separate ranges, so they never clash.
+const indexStudent = `SE-2026-${7000 + Math.floor(Math.random() * 499)}`;
+const indexOther = `SE-2026-${7500 + Math.floor(Math.random() * 499)}`;
 
 let admin: TestAccount;
 let parent: TestAccount;
@@ -33,8 +35,8 @@ test.beforeAll(async () => {
   files = scriptFiles();
   admin = await createAccount({ role: "admin" });
   parent = await createAccount({ role: "parent", firstName: `Pat${tag}` });
-  student = await createAccount({ status: "active", firstName: `Hana${tag}`, indexNumber: index() });
-  other = await createAccount({ status: "active", firstName: `Omar${tag}`, indexNumber: index() });
+  student = await createAccount({ status: "active", firstName: `Hana${tag}`, indexNumber: indexStudent });
+  other = await createAccount({ status: "active", firstName: `Omar${tag}`, indexNumber: indexOther });
   const link = await svc().from("parent_children").insert({ parent_id: parent.id, student_id: student.id });
   if (link.error) throw new Error(`parent link failed: ${link.error.message}`);
   // Started 10 minutes ago, 90 minutes long: the sitting is on, so the parent can still confirm and hand in.
