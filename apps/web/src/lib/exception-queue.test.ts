@@ -145,10 +145,11 @@ describe("foundInWords", () => {
 
 describe("actionsFor", () => {
   it("offers what fits each kind", () => {
-    expect(actionsFor(item({ kind: "no_code" }))).toEqual(["assign", "blank", "reject"]);
+    expect(actionsFor(item({ kind: "no_code" }))).toEqual(["hide_areas", "assign", "blank", "reject"]);
+    expect(actionsFor(item({ kind: "unknown_code" }))).toEqual(["hide_areas", "assign", "blank", "reject"]);
     expect(actionsFor(item({ kind: "other_exam" }))).toEqual(["blank", "reject"]);
     expect(actionsFor(item())).toEqual(["keep_existing", "assign"]);
-    expect(actionsFor(item({ kind: "uncoded_family_page" }))).toEqual(["confirm", "assign", "blank", "reject"]);
+    expect(actionsFor(item({ kind: "uncoded_family_page" }))).toEqual(["hide_areas", "confirm", "assign", "blank", "reject"]);
     expect(actionsFor(item({ kind: "poor_quality" }))).toEqual(["hide_areas", "confirm", "reject"]);
     expect(actionsFor(item({ kind: "missing_pages", details: { pages: [3] } }))).toEqual(["dismiss_missing"]);
     expect(actionsFor(item({ kind: "missing_pages", details: { pages: [], reason: "no_paper" } }))).toEqual([]);
@@ -157,6 +158,8 @@ describe("actionsFor", () => {
     expect(actionsFor(item({ kind: "late", script: null }))).toEqual([]);
     expect(actionsFor(item({ kind: "processing_failed", page: null, details: { kind: "prepare" } }))).toEqual(["confirm", "reject"]);
     expect(actionsFor(item({ kind: "processing_failed", page: null, details: { kind: "remask" } }))).toEqual(["confirm"]);
+    // A page whose marking picture a remask could not make again is not the family's file: hide the name and accept it.
+    expect(actionsFor(item({ kind: "poor_quality", details: { from: "remask", marking_picture: false } }))).toEqual(["hide_areas", "confirm"]);
   });
   it("offers nothing once resolved", () => {
     expect(actionsFor(item({ state: "resolved", resolved: { by: "A", at: "2031-07-07T12:00:00Z", resolution: "kept", reason: null } }))).toEqual([]);
@@ -212,6 +215,13 @@ describe("rpcFor", () => {
       p_reason: "Real page 2",
       p_replace: true,
     });
+    expect(rpcFor({ action: "assign", exceptionId: "e", bookingId: "b", copyPage: 5, reason: "No name on it", noName: true }).args).toEqual({
+      p_exception: "e",
+      p_booking: "b",
+      p_copy_page: 5,
+      p_reason: "No name on it",
+      p_no_name: true,
+    });
     expect(rpcFor({ action: "dismiss_missing", exceptionId: "e", pages: [3, 4], reason: "Blank" })).toEqual({
       fn: "script_exception_dismiss_missing",
       args: { p_exception: "e", p_pages: [3, 4], p_reason: "Blank" },
@@ -246,7 +256,27 @@ describe("needsNameCheck", () => {
     expect(needsNameCheck(item({ kind: "poor_quality", page: { ...layout, areas: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.1 }] } }))).toBe(false);
     expect(needsNameCheck(item({ kind: "poor_quality", page: page({ quality: { flags: ["blurred"] }, areas: [] }) }))).toBe(false);
     expect(needsNameCheck(item({ kind: "name_visible", page: page({ areas: [] }) }))).toBe(true);
-    expect(needsNameCheck(item({ kind: "uncoded_family_page" }))).toBe(false);
+    expect(needsNameCheck(item({ kind: "uncoded_family_page" }))).toBe(false); // an area is drawn on it already
+  });
+  it("asks for it on a page with no code that staff assign or accept (Ruling R31)", () => {
+    const codeless = page({ copy_page: null, paper_version: null, paper_current: null, areas: [] });
+    expect(needsNameCheck(item({ kind: "no_code", page: codeless }), "assign")).toBe(true);
+    expect(needsNameCheck(item({ kind: "unknown_code", page: { ...codeless, copy_page: 2 } }), "assign")).toBe(true);
+    expect(needsNameCheck(item({ kind: "no_code", page: { ...codeless, areas: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.1 }] } }), "assign")).toBe(false);
+    expect(needsNameCheck(item({ kind: "not_expected", page: page({ areas: [] }) }), "assign")).toBe(false); // it has a code
+    expect(needsNameCheck(item({ kind: "uncoded_family_page", page: codeless }), "assign")).toBe(true);
+    expect(needsNameCheck(item({ kind: "uncoded_family_page", page: codeless }))).toBe(true);
+    expect(needsNameCheck(item({ kind: "poor_quality", page: codeless }))).toBe(true);
+    expect(needsNameCheck(item({ kind: "poor_quality", page: page({ areas: [] }), details: { from: "remask" } }))).toBe(true);
+    expect(needsNameCheck(item({ kind: "no_code", page: codeless }), "blank")).toBe(false);
+  });
+});
+
+describe("a page whose marking picture a remask could not make again", () => {
+  it("says it is not the family's file and what to do", () => {
+    const words = foundInWords(item({ kind: "poor_quality", details: { from: "remask", marking_picture: false, flags: [] } }));
+    expect(words.join(" ")).toContain("not the family's file");
+    expect(words.join(" ")).toContain("Hide the candidate's name");
   });
 });
 

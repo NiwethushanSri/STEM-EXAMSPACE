@@ -270,6 +270,9 @@ export function foundInWords(item: QueueItem): string[] {
       if (flags.includes("layout_unexpected")) {
         out.push("The page was not where it should be on the picture, so the name band could not be hidden and no marking picture was made.");
         out.push("Hide the candidate's name on the full page, then accept it.");
+      } else if (str(d.from) === "remask") {
+        out.push("Its marking picture could not be made again after its hidden areas or its turn changed, so the old one was taken away (this is not the family's file).");
+        out.push("Hide the candidate's name on the full page, or tick that there is none, then accept it.");
       } else if (d.marking_picture === false) {
         out.push("No marking picture could be made for this answer page.");
       }
@@ -303,13 +306,13 @@ export type QueueAction =
   | "hide_areas";
 
 const ACTIONS: Record<ExceptionKind, QueueAction[]> = {
-  no_code: ["assign", "blank", "reject"],
-  unknown_code: ["assign", "blank", "reject"],
+  no_code: ["hide_areas", "assign", "blank", "reject"],
+  unknown_code: ["hide_areas", "assign", "blank", "reject"],
   not_expected: ["assign", "blank", "reject"],
   other_exam: ["blank", "reject"],
   duplicate: ["keep_existing", "assign"],
   missing_pages: ["dismiss_missing"],
-  uncoded_family_page: ["confirm", "assign", "blank", "reject"],
+  uncoded_family_page: ["hide_areas", "confirm", "assign", "blank", "reject"],
   mixed_versions: ["confirm"],
   poor_quality: ["hide_areas", "confirm", "reject"],
   name_visible: ["hide_areas", "confirm"],
@@ -320,23 +323,37 @@ const ACTIONS: Record<ExceptionKind, QueueAction[]> = {
 /** A remask job (re-making marking pictures) that failed for good: not the family's file. */
 export const isRemaskFailure = (item: QueueItem) => item.kind === "processing_failed" && item.details.kind === "remask";
 
-/** The actions that fit an open exception (none once resolved). A remask failure can only be noted. */
+/** A page whose marking picture a remask could not make again: not the family's file (Ruling R31). */
+export const isRemaskQuality = (item: QueueItem) => item.kind === "poor_quality" && item.details.from === "remask";
+
+/** The actions that fit an open exception (none once resolved). A remask failure can only be noted; a page whose
+ * marking picture a remask could not make again is never rejected (the family's file was fine). */
 export function actionsFor(item: QueueItem): QueueAction[] {
   if (item.state !== "open") return [];
   if (item.kind === "missing_pages" && numbers(item.details.pages).length === 0) return [];
   if (item.kind === "late" && !item.script) return [];
   if (isRemaskFailure(item)) return ["confirm"];
+  if (isRemaskQuality(item)) return ["hide_areas", "confirm"];
   return ACTIONS[item.kind];
 }
 
 /** Whether rejecting this exception rejects a family's submission (as the database says). */
 export const rejectsSubmission = (item: QueueItem) => item.rejectsSubmission;
 
-/** Whether confirming needs a staff hidden area on the page first, or "There is no name on this page": a page whose
- * layout was unexpected (the name band could not be found), or a reported visible name, with no area drawn yet. */
-export function needsNameCheck(item: QueueItem): boolean {
-  if (!item.page || item.page.areas.length > 0) return false;
-  return item.kind === "name_visible" || (item.kind === "poor_quality" && item.page.flags.includes("layout_unexpected"));
+/** A page with no known copy (no code read, or an unknown one): its layout can never place the name band. */
+export const isCodeless = (p: QueuePage) => p.paperVersion === null;
+
+/** Whether confirming (or assigning) needs a staff hidden area on the page first, or "There is no name on this page",
+ * while none is drawn: confirming a page whose layout was unexpected, a reported visible name, a page whose marking
+ * picture a remask could not make again, or a page with no code (a family's placement, a poor-quality page); and
+ * assigning a page with no code (Ruling R31). The database checks the same. */
+export function needsNameCheck(item: QueueItem, action: "confirm" | "assign" | QueueAction = "confirm"): boolean {
+  const p = item.page;
+  if (!p || p.areas.length > 0) return false;
+  if (action === "assign") return isCodeless(p);
+  if (action !== "confirm") return false;
+  if (item.kind === "name_visible" || item.kind === "uncoded_family_page") return true;
+  return item.kind === "poor_quality" && (p.flags.includes("layout_unexpected") || isRemaskQuality(item) || isCodeless(p));
 }
 
 export function actionLabel(action: QueueAction, item: QueueItem): string {
@@ -383,7 +400,7 @@ export function reasonProblem(reason: string, required: boolean): string | null 
 }
 
 export type ResolveInput =
-  | { action: "assign"; exceptionId: string; bookingId: string; copyPage: number; reason: string; replace?: boolean }
+  | { action: "assign"; exceptionId: string; bookingId: string; copyPage: number; reason: string; replace?: boolean; noName?: boolean }
   | { action: "blank" | "keep_existing" | "reject"; exceptionId: string; reason: string }
   | { action: "confirm"; exceptionId: string; reason?: string; noName?: boolean }
   | { action: "dismiss_missing"; exceptionId: string; pages: number[]; reason: string }
@@ -401,6 +418,7 @@ export function rpcFor(input: ResolveInput): { fn: string; args: Record<string, 
           p_copy_page: input.copyPage,
           p_reason: input.reason.trim(),
           ...(input.replace ? { p_replace: true } : {}),
+          ...(input.noName ? { p_no_name: true } : {}),
         },
       };
     case "blank":

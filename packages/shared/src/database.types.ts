@@ -1530,7 +1530,7 @@ isOneToOne: false
 { Args: { "p_now": string,"p_script": string }; Returns: undefined
                            },
 "script_exception_assign":
-{ Args: { "p_booking": string,"p_copy_page": number,"p_exception": string,"p_reason": string,"p_replace"?: boolean }; Returns: Json
+{ Args: { "p_booking": string,"p_copy_page": number,"p_exception": string,"p_no_name"?: boolean,"p_reason": string,"p_replace"?: boolean }; Returns: Json
                            },
 "script_exception_blank":
 { Args: { "p_exception": string,"p_reason": string }; Returns: Json

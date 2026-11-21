@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(179);
+select plan(181);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -225,7 +225,7 @@ select is((select string_agg(e.kind::text || ':' || coalesce(p.source_index::tex
 -- ---------------------------------------------------------------------------------------------
 select ok(not exists (select 1 from unnest(array[
     'public.script_exceptions_list(uuid,public.exception_kind,text)', 'public.script_exception_candidates(uuid,text)',
-    'public.script_exception_assign(uuid,uuid,integer,text,boolean)',
+    'public.script_exception_assign(uuid,uuid,integer,text,boolean,boolean)',
     'public.script_exception_blank(uuid,text)', 'public.script_exception_keep_existing(uuid,text)', 'public.script_exception_reject(uuid,text)',
     'public.script_exception_confirm(uuid,text,boolean)', 'public.script_exception_dismiss_missing(uuid,integer[],text)',
     'public.script_late_decide(uuid,boolean,text)', 'public.script_page_set_hidden_areas(uuid,jsonb,text)']) f
@@ -300,7 +300,10 @@ select is((select count(*)::int from public.script_exceptions where id in (pg_te
 insert into res select 'b1v', to_jsonb((select version from public.scripts where booking_id = pg_temp.k('b1')));
 select is(pg_temp.links('b1'), '2:0@u1,3:1@u1,5:9@u1', 'b1''s script shows pages 2, 3 and the spare page 5');
 select tests.as_user(pg_temp.uid('admin'));
-insert into res select 'as1', public.script_exception_assign(pg_temp.k('x_nc2'), pg_temp.k('b1'), 4, 'Page 4 of this candidate, the code was torn off');
+select is(pg_temp.code(public.script_exception_assign(pg_temp.k('x_nc2'), pg_temp.k('b1'), 4, 'Page 4 of this candidate, the code was torn off')),
+  'name_not_hidden', 'R31: a page with no code needs its name hidden, or "no name" said, before it is assigned');
+insert into res select 'as1', public.script_exception_assign(pg_temp.k('x_nc2'), pg_temp.k('b1'), 4, 'Page 4 of this candidate, the code was torn off',
+  false, true);
 select is(pg_temp.r('as1') ->> 'ok', 'true', 'assign_moves_page_into_script_new_version: the page with no code is assigned to b1 page 4');
 select tests.as_postgres();
 select is(pg_temp.links('b1'), '2:0@u1,3:1@u1,4:2@u1,5:9@u1', 'b1''s script now shows it at page 4');
@@ -379,7 +382,7 @@ select tests.as_user(pg_temp.uid('admin'));
 insert into res select 'oc', public.script_exception_assign(pg_temp.k('x_nc12'), pg_temp.k('b1'), 2, 'This is the real page 2');
 select is(concat_ws('/', pg_temp.r('oc') ->> 'code', pg_temp.r('oc') ->> 'reason', (pg_temp.r('oc') ->> 'page_id')::uuid = pg_temp.pid('u1', 0)),
   'conflict/occupied/t', 'page 2 already holds a page: refused (occupied), naming it');
-insert into res select 'oc2', public.script_exception_assign(pg_temp.k('x_nc12'), pg_temp.k('b1'), 2, 'This is the real page 2', true);
+insert into res select 'oc2', public.script_exception_assign(pg_temp.k('x_nc12'), pg_temp.k('b1'), 2, 'This is the real page 2', true, true);
 select is((pg_temp.r('oc2') ->> 'replaced_page_id')::uuid, pg_temp.pid('u1', 0), 'with p_replace the page is replaced');
 select tests.as_postgres();
 select is(pg_temp.links('b1'), '2:12@u1,3:1@u1,4:2@u1,5:9@u1', 'b1''s page 2 is now the assigned page');
@@ -728,7 +731,9 @@ select is(public.script_page_set_hidden_areas(pg_temp.pid('u8', 2), '[{"x":0.05,
   'staff hide the name on the page whose layout was unexpected');
 select is(public.script_exception_confirm(pg_temp.exc('u8', 2, 'poor_quality')) ->> 'resolution', 'confirmed', 'and confirm it');
 select is(pg_temp.remasks('u8'), 1, 'a page with no marking picture, confirmed: a remask job is queued for its file');
-select is(public.script_exception_confirm(pg_temp.exc('u8', 3, 'uncoded_family_page'), 'Continuation of question 4') ->> 'resolution', 'confirmed',
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.exc('u8', 3, 'uncoded_family_page'), 'Continuation of question 4')), 'name_not_hidden',
+  'R31: a family''s page with no code needs its name hidden, or "no name" said, first');
+select is(public.script_exception_confirm(pg_temp.exc('u8', 3, 'uncoded_family_page'), 'Continuation of question 4', true) ->> 'resolution', 'confirmed',
   'the family''s placement of the page with no code is confirmed');
 select tests.as_postgres();
 select is(pg_temp.remasks('u8') || ' ' || pg_temp.script('b8'), '1 true/verified', 'still one remask job; the script is verified');

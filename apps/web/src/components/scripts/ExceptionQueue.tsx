@@ -278,7 +278,8 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
   );
   const [replace, setReplace] = useState(false);
   const [noName, setNoName] = useState(false);
-  const nameCheck = action === "confirm" && needsNameCheck(item);
+  // Confirming some pages, and assigning a page with no code, needs the name hidden first or "no name" ticked (R31).
+  const nameCheck = (action === "confirm" || action === "assign") && needsNameCheck(item, action);
   const required = reasonRequired(action);
   const familySees = (action === "reject" && rejectsSubmission(item)) || action === "late_reject";
 
@@ -291,7 +292,10 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
       // A duplicate's "Use this page instead" replaces the page kept, which staff see beside it.
       const replacing = item.kind === "duplicate" || (choice.occupied && replace);
       if (choice.occupied && !replacing) return setNote({ ok: false, text: 'That page already holds a page. Tick "Replace the page that is there" to replace it.' });
-      input = { action, exceptionId: item.id, bookingId: choice.bookingId, copyPage: choice.copyPage, reason, replace: replacing };
+      if (nameCheck && !noName) {
+        return setNote({ ok: false, text: 'This page has no code, so hide the candidate\'s name first ("Hide the name"), or tick "There is no name on this page".' });
+      }
+      input = { action, exceptionId: item.id, bookingId: choice.bookingId, copyPage: choice.copyPage, reason, replace: replacing, noName: nameCheck && noName };
     } else if (action === "dismiss_missing") {
       if (pages.length === 0) return setNote({ ok: false, text: "Choose the pages that were left blank." });
       input = { action, exceptionId: item.id, pages, reason };

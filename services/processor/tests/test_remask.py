@@ -4,6 +4,7 @@ on real pixels: the name and the hidden areas are white in the marking picture a
 import io
 import math
 
+import cv2
 import numpy as np
 import pytest
 from PIL import Image
@@ -158,3 +159,46 @@ def test_no_name_confirmed_page_still_gets_the_band(unproved):
 def test_remask_refuses_a_turn_that_is_not_a_quarter(stored):
     with pytest.raises(ValueError):
         pipeline.remask(stored, 45, [])
+
+
+# Ruling R31 -----------------------------------------------------------------------------------------------------
+
+
+def codeless_sheet() -> np.ndarray:
+    """An extra sheet with no 1A code (a family's continuation page): the candidate's name in red near its top, below
+    the nominal band, and a line of working in the middle."""
+    sheet = np.full((H, W, 3), 255, np.uint8)
+    cv2.putText(sheet, "Sam One  SE-2097-6601", (120, 260), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (230, 0, 0), 5, cv2.LINE_AA)
+    return synth.with_writing(sheet, "q4 continued: x = 7")
+
+
+def test_a_codeless_staff_confirmed_page_gets_a_marking_picture_with_the_staff_area_white():
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(codeless_sheet(), seed=41)]), "scan_file", PDF, ctx())
+    assert p.code is None and p.marking is None and not p.blank  # no code: no marking picture from the prepare
+    full = decode(p.full)
+    name = synth.red(full)
+    assert name.sum() > 1000 and name[:BAND].sum() == 0  # the band alone would not hide it
+    area = staff_area_over(name)
+
+    # Not confirmed: nothing to prove it by, so no marking picture (staff area or not).
+    assert pipeline.remask(p.full, 0, [], staff_areas=[area], provable=False) is None
+    # Staff hid the name (and assigned or accepted the page): the nominal band, the paper's areas and the staff area.
+    paper_area = Area(page=5, x=0.6, y=0.8, w=0.3, h=0.1)
+    m = decode(pipeline.remask(p.full, 0, [paper_area], staff_areas=[area], provable=False, confirmed=True))
+    assert not (name & ~white(m)).any(), f"{int((name & ~white(m)).sum())} name pixels show"
+    assert m[:BAND].min() > 225
+    assert m[math.ceil(0.8 * H):math.floor(0.9 * H), math.ceil(0.6 * W):math.floor(0.9 * W)].min() > 225
+    assert not white(m)[H // 2 - 60:H // 2 + 20, W // 3:W // 3 + 400].all()  # the working still shows
+    assert full[name].min() < 100  # and the full picture is untouched
+
+
+def test_a_page_proved_before_that_cannot_be_proved_now_gets_no_marking_picture(stored):
+    """The prepare proved this page (it had a marking picture). Turned a quarter by staff it can no longer be proved:
+    the remask makes none (the database then takes the old one away and tells staff), until staff confirm it."""
+    assert pipeline.remask(stored, 0, [QUESTION_AREA], code=A, copy_page=2) is not None
+    assert pipeline.remask(stored, 90, [QUESTION_AREA], code=A, copy_page=2) is None
+    full = decode(stored)
+    area = staff_area_over(synth.red(full))
+    m = decode(pipeline.remask(stored, 90, [QUESTION_AREA], staff_areas=[area], code=A, copy_page=2, confirmed=True))
+    turned = imaging.to_a4(np.ascontiguousarray(np.rot90(full, -1)))
+    assert not (synth.red(turned) & ~white(m)).any()

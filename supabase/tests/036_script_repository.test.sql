@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(96);
+select plan(114);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -233,7 +233,10 @@ select public.home_page_place(pg_temp.k('p3_4'), 2);
 select tests.as_postgres();
 insert into kv values ('x3_4', pg_temp.exc('u3', 4, 'uncoded_family_page'));
 select tests.as_user(pg_temp.uid('admin'));
-select public.script_exception_confirm(pg_temp.k('x3_4'), 'Working for question 2');
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x3_4'), 'Working for question 2')), 'name_not_hidden',
+  'R31: a family''s page with no code is confirmed only once its name is hidden or staff say there is none');
+select is(public.script_exception_confirm(pg_temp.k('x3_4'), 'Working for question 2', true) ->> 'resolution', 'confirmed',
+  'staff say there is no name on it');
 select tests.as_postgres();
 -- Home b4: late.
 select pg_temp.hand_in('s4', 'b4', 'd4', 'u4', '2031-08-04 13:00Z', '2031-08-04 13:05Z');
@@ -433,11 +436,12 @@ insert into kv values ('x8', pg_temp.exc('u1', 8, 'poor_quality')), ('x7', pg_te
 select tests.as_user(pg_temp.uid('admin'));
 select public.script_page_set_hidden_areas(pg_temp.pid('u1', 8), '[{"x":0.05,"y":0.03,"w":0.6,"h":0.05}]', 'Name across the top');
 select public.script_exception_confirm(pg_temp.k('x8'));
-select public.script_exception_confirm(pg_temp.k('x7'));
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x7'))), 'name_not_hidden',
+  'R31: a page whose marking picture a remask could not make again needs its name hidden, or none said, before it is accepted');
 select tests.as_postgres();
 select is(concat_ws('/', public.script_page_remask_context(pg_temp.pid('u1', 8)) ->> 'confirmed',
     public.script_page_remask_context(pg_temp.pid('u1', 7)) ->> 'confirmed'),
-  'true/false', 'confirmed once staff hid the name and accepted it (accepting a page without hiding a name confirms nothing)');
+  'true/false', 'confirmed once staff hid the name and accepted it');
 
 -- ---------------------------------------------------------------------------------------------
 -- script_page_remove: takes a page out of a script (new version), which unsticks mixed versions.
@@ -533,6 +537,35 @@ select is((select state::text || '/' || state_reason from public.scripts where b
   'a refunded booking''s script is withdrawn too');
 
 -- ---------------------------------------------------------------------------------------------
+-- R31 (b): at home, a remask that cannot make a page's marking picture again takes the old one away and tells staff;
+-- the family is not asked to take the page again.
+-- ---------------------------------------------------------------------------------------------
+select is(pg_temp.state('b3') || ' ' || (select state::text from public.home_submissions where id = pg_temp.k('d3')), 'verified received',
+  'b3 is verified, its submission received');
+insert into res select 'r5', pg_temp.claim_remask('u3');
+insert into res select 'rm5', pg_temp.remasked(pg_temp.r('r5'), pg_temp.answer(pg_temp.r('r5'), '{1}'));
+select is(pg_temp.finish(pg_temp.r('r5'), true) ->> 'state', 'done', 'the remask job could not make page 2''s marking picture again');
+insert into kv values ('x5_1', (select id from public.script_exceptions where page_id = pg_temp.pid('u3', 1) and kind = 'poor_quality' and state = 'open'));
+select is(concat_ws('/', (pg_temp.pg('u3', 1)).marking_path is null,
+    (select concat_ws(':', details ->> 'from', details ->> 'marking_picture', script_id = pg_temp.sid('b3')) from public.script_exceptions where id = pg_temp.k('x5_1')),
+    (select count(*) from public.script_exceptions where page_id = pg_temp.pid('u3', 1) and kind = 'poor_quality'),
+    (select state::text from public.home_submissions where id = pg_temp.k('d3')), pg_temp.state('b3')),
+  't/remask:false:t/1/received/needs_attention',
+  'the old marking picture is gone, one open poor_quality exception from remask; the family is not asked to retake; the script waits for staff');
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.script_exception_reject(pg_temp.k('x5_1'), 'Unreadable page')), 'wrong_kind',
+  'it is not the family''s file: it cannot be rejected');
+select is((select x ->> 'rejects_submission' from jsonb_array_elements(public.script_detail(pg_temp.sid('b3')) -> 'exceptions') x
+           where (x ->> 'id')::uuid = pg_temp.k('x5_1')), 'false', 'and the queue does not offer to reject the submission');
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x5_1'))), 'name_not_hidden', 'staff hide the name or say there is none first');
+select is(public.script_exception_confirm(pg_temp.k('x5_1'), 'Checked: the name band is empty', true) ->> 'resolution', 'confirmed',
+  'staff say there is no name on it');
+select tests.as_postgres();
+select is(concat_ws('/', pg_temp.jobs('u3', 'remask', 'queued'), public.script_page_remask_context(pg_temp.pid('u3', 1)) ->> 'confirmed',
+    (select details ->> 'no_name' from public.script_exceptions where id = pg_temp.k('x5_1')), pg_temp.state('b3')),
+  '1/true/true/verified', 'a remask is queued to make it from the staff check; the script is verified again');
+
+-- ---------------------------------------------------------------------------------------------
 -- A remask job that fails for good: the scripts showing the file's pages are worked out again.
 -- ---------------------------------------------------------------------------------------------
 select is(pg_temp.state('b3'), 'verified', 'b3 is verified');
@@ -550,6 +583,29 @@ select is((select string_agg(pg_temp.kname(booking_id), ',' order by pg_temp.kna
            where upload_id = pg_temp.k('u1') and kind = 'processing_failed' and state = 'open'), 'b1,b2,b5',
   'a scanner file''s failure is raised for each script showing its pages');
 select is(pg_temp.state('b1') || ' ' || pg_temp.state('b5'), 'needs_attention withdrawn', 'which are worked out again (a withdrawn one stays)');
+
+-- ---------------------------------------------------------------------------------------------
+-- R31 (a): a page with no code is assigned only once its name is hidden or staff say there is none; it then gets a
+-- marking picture from the staff check (u1's page 9 to b1's spare page 5).
+-- ---------------------------------------------------------------------------------------------
+insert into kv values ('x9', pg_temp.exc('u1', 9, 'no_code')), ('p1_9', pg_temp.pid('u1', 9));
+select is(pg_temp.jobs('u1', 'remask', 'queued'), 0, 'no remask job waits for u1');
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.script_exception_assign(pg_temp.k('x9'), pg_temp.k('b1'), 5, 'Spare page, code torn off')), 'name_not_hidden',
+  'R31: a page with no code is not assigned before its name is hidden or staff say there is none');
+select is(public.script_exception_assign(pg_temp.k('x9'), pg_temp.k('b1'), 5, 'Spare page, code torn off', false, true) ->> 'resolution', 'assigned',
+  'staff say there is no name on it, and it is assigned');
+select tests.as_postgres();
+select is(concat_ws('/', (select details ->> 'no_name' from public.script_exceptions where id = pg_temp.k('x9')),
+    public.script_page_remask_context(pg_temp.k('p1_9')) ->> 'answer', public.script_page_remask_context(pg_temp.k('p1_9')) ->> 'provable',
+    public.script_page_remask_context(pg_temp.k('p1_9')) ->> 'confirmed', pg_temp.jobs('u1', 'remask', 'queued')),
+  'true/true/false/true/1', 'recorded; an answer page that cannot be proved but is confirmed, and a remask job is queued for its file');
+insert into res select 'r6', pg_temp.claim_remask('u1');
+select is(concat_ws('/', pg_temp.at(pg_temp.r('r6'), 9) ->> 'confirmed', coalesce(pg_temp.at(pg_temp.r('r6'), 9) ->> 'code', 'none')), 'true/none',
+  'the remask job is told to make it from the staff check (no code to prove it by)');
+select is(pg_temp.remasked(pg_temp.r('r6'), pg_temp.answer(pg_temp.r('r6'))) ->> 'ok', 'true', 'its marking picture is recorded');
+select is((pg_temp.pg('u1', 9)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r6') -> 'job' ->> 'id') || '/9-marking.jpg', 'page 9 has a marking picture');
+select pg_temp.finish(pg_temp.r('r6'), true);
 
 -- ---------------------------------------------------------------------------------------------
 -- Per-run picture folders: a prepare job's pictures must be in its own folder (or, for pictures stored before, the
