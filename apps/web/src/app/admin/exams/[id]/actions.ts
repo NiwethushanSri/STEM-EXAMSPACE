@@ -1,6 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import type { FileBegun, StructurePayload, StructureResult } from "@/lib/exam-structure";
+import { beginMarkSchemeFile, markSchemeFileStored, removeMarkSchemeFile, saveStructure } from "@/lib/exam-structure-server";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
@@ -155,3 +157,27 @@ export async function savePageLayoutAction(
 }
 
 const ROLES_LOCKED = "Scripts have already come in for this paper, so the page roles can no longer change.";
+
+/** Saves the exam's questions and mark scheme. Once marking has opened a change needs a reason and is recorded. */
+export async function saveStructureAction(examId: string, structure: StructurePayload, reason?: string): Promise<StructureResult> {
+  await requireStaff(["admin", "owner"]);
+  return saveStructure(examId, structure, reason);
+}
+
+/** Starts a mark scheme PDF upload: the path the browser sends it to. */
+export async function markSchemeBeginAction(examId: string, bytes: number): Promise<FileBegun> {
+  await requireStaff(["admin", "owner"]);
+  return beginMarkSchemeFile(examId, bytes);
+}
+
+/** The uploaded PDF becomes the exam's mark scheme. */
+export async function markSchemeStoredAction(examId: string, fileId: string): Promise<{ ok: boolean; code?: string }> {
+  await requireStaff(["admin", "owner"]);
+  return markSchemeFileStored(examId, fileId);
+}
+
+/** Removes the mark scheme PDF, with a reason. */
+export async function markSchemeRemoveAction(examId: string, fileId: string, reason: string): Promise<StructureResult> {
+  await requireStaff(["admin", "owner"]);
+  return removeMarkSchemeFile(examId, fileId, reason);
+}

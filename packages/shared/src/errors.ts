@@ -329,3 +329,38 @@ export function scriptMessageFor(code: string | null | undefined, reason?: strin
   if (code === "conflict") return reason && Object.hasOwn(scriptConflicts, reason) ? scriptConflicts[reason] : scriptConflicts.changed;
   return code && Object.hasOwn(scriptMessages, code) ? scriptMessages[code] : messages.internal;
 }
+
+/** Which exam structure RPC a failure code came from: the questions and mark scheme (exam_structure_get and
+ * exam_structure_save) or the mark scheme PDF (mark_scheme_file_*). Marking open (Task 4) also answers
+ * structure_incomplete. */
+export type StructureContext = "save" | "file";
+
+const STRUCTURE_LOCKED = "Marking has started, so this can no longer be changed.";
+
+const structureMessages: Record<StructureContext, Record<string, string>> = {
+  save: {
+    structure_locked: STRUCTURE_LOCKED,
+    structure_incomplete: "Finish the questions and their marks first.",
+    forbidden: FORBIDDEN,
+    reason_required: "Give a reason of 3 to 300 characters.",
+    invalid_input:
+      "Check the questions: each needs a label and a maximum, on answer or spare pages of this paper, and optional questions must be out of the same total.",
+    conflict: "A maximum cannot go below a mark a marker has already given.",
+    not_found: "This exam no longer exists. Refresh the page.",
+  },
+  file: {
+    structure_locked: STRUCTURE_LOCKED,
+    forbidden: FORBIDDEN,
+    reason_required: "Give a reason of 3 to 300 characters.",
+    invalid_input: "That file could not be added. Please try again.",
+    not_found: "The file did not arrive. Please try again.",
+    conflict: "This PDF has already been replaced or removed. Refresh the page.",
+    file_too_large: "This PDF is larger than 20 MB. Make it smaller and upload it again.",
+  },
+};
+
+/** Message for an exam structure or mark scheme PDF RPC failure code; unknown codes get the generic message. */
+export function structureMessageFor(code: string | null | undefined, context: StructureContext): string {
+  const table = structureMessages[context];
+  return code && Object.hasOwn(table, code) ? table[code] : messages.internal;
+}

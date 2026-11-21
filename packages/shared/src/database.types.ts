@@ -1563,6 +1563,21 @@ isOneToOne: false
 "exam_code_generate":
 { Args: { "p_paper": string,"p_self": string,"p_starts_at": string,"p_subject": number }; Returns: string
                            },
+"exam_structure_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"exam_structure_max_total":
+{ Args: { "p_exam": string }; Returns: number
+                           },
+"exam_structure_pages":
+{ Args: { "p_exam": string }; Returns: (number)[]
+                           },
+"exam_structure_save":
+{ Args: { "p_exam": string,"p_reason"?: string,"p_structure": Json }; Returns: Json
+                           },
+"exam_structure_valid":
+{ Args: { "p_pages": (number)[],"p_structure": Json }; Returns: boolean
+                           },
 "expire_unconfirmed":
 { Args: { "p_now"?: string }; Returns: number
                            },
@@ -1689,6 +1704,24 @@ isOneToOne: false
                            },
 "mark_booking_paid":
 { Args: { "p_booking": string,"p_note": string }; Returns: Json
+                           },
+"mark_scheme_file_begin":
+{ Args: { "p_bytes": number,"p_exam": string }; Returns: Json
+                           },
+"mark_scheme_file_can_change":
+{ Args: { "p_exam": string,"p_user": string }; Returns: boolean
+                           },
+"mark_scheme_file_remove":
+{ Args: { "p_file": string,"p_reason": string }; Returns: Json
+                           },
+"mark_scheme_file_stored":
+{ Args: { "p_file": string }; Returns: Json
+                           },
+"mark_scheme_path_allowed":
+{ Args: { "p_name": string }; Returns: boolean
+                           },
+"mark_scheme_upload_allowed":
+{ Args: { "p_name": string }; Returns: boolean
                            },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
