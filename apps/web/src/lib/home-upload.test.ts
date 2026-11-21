@@ -6,6 +6,7 @@ import {
   attentionItems,
   blankPrompt,
   canSubmit,
+  unsentFiles,
   fileProblem,
   isStale,
   retakePrompt,
@@ -123,6 +124,17 @@ describe("files", () => {
     expect(canSubmit([{ state: "stored" }, { state: "uploading" }])).toBe(false);
     expect(canSubmit([{ state: "stored" }, { state: "failed" }])).toBe(false);
     expect(canSubmit([{ state: "waiting" }])).toBe(false);
+  });
+
+  it("warns while uploaded pages are not sent, and while files are still on their way (Ruling R40)", () => {
+    expect(unsentFiles([])).toBe("none");
+    expect(unsentFiles([{ state: "failed" }])).toBe("none");
+    expect(unsentFiles([{ state: "stored" }])).toBe("not_sent");
+    expect(unsentFiles([{ state: "stored" }, { state: "failed" }])).toBe("not_sent");
+    expect(unsentFiles([{ state: "stored" }, { state: "uploading" }])).toBe("uploading");
+    expect(unsentFiles([{ state: "waiting" }])).toBe("uploading");
+    expect(UPLOAD_TEXT.notSent).toBe("Your pages are not sent yet. Press Submit to send them.");
+    expect(UPLOAD_TEXT.notSentUploading).toContain("not sent yet");
   });
 });
 

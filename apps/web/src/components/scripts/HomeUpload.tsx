@@ -13,6 +13,7 @@ import {
   attentionItems,
   blankPrompt,
   canSubmit,
+  unsentFiles,
   fileProblem,
   isStale,
   retakePrompt,
@@ -216,6 +217,18 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
       focusNext.current = null;
     }
   });
+
+  // Uploaded pages are not handed in until Submit: leaving the page with files uploaded or on their way asks first.
+  const unsent = unsentFiles(files);
+  useEffect(() => {
+    if (unsent === "none") return;
+    const warn = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsent]);
 
   // Local previews are let go when the screen closes.
   useEffect(
@@ -460,6 +473,13 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
       <p data-testid="upload-live" role="status" aria-live="polite" className="sr-only">
         {showEditor ? (uploadingCount ? `${UPLOAD_TEXT.uploading}: ${uploadingCount}` : "") : (word ?? "")}
       </p>
+
+      {unsent !== "none" && (
+        <p data-testid="unsent-warning" role="status"
+          className="rounded-lg border-2 border-amber-500 bg-amber-50 p-3 text-base font-semibold text-amber-950 print:hidden">
+          {unsent === "not_sent" ? UPLOAD_TEXT.notSent : UPLOAD_TEXT.notSentUploading}
+        </p>
+      )}
 
       {!showEditor && sub && (
         <div data-testid="upload-status" className="space-y-2 rounded-lg border border-slate-200 p-3">

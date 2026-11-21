@@ -15,8 +15,10 @@ const answer = {
       verified: 30,
       needs_attention: 5,
       late: 2,
+      unsubmitted: 1,
     },
   ],
+  unsubmitted_drafts: 1,
   open_exceptions: 7,
   failed_jobs: 1,
   oldest_queued_minutes: 3,
@@ -40,8 +42,9 @@ describe("parseScriptsDashboard", () => {
   it("reads the dashboard answer", () => {
     expect(parseScriptsDashboard(answer)).toEqual({
       exams: [
-        { id: EXAM, title: "Maths mock", paper: "Paper 1", startsAt: "2026-12-01T09:00:00Z", expected: 40, received: 38, verified: 30, needsAttention: 5, late: 2 },
+        { id: EXAM, title: "Maths mock", paper: "Paper 1", startsAt: "2026-12-01T09:00:00Z", expected: 40, received: 38, verified: 30, needsAttention: 5, late: 2, unsubmitted: 1 },
       ],
+      unsubmittedDrafts: 1,
       openExceptions: 7,
       failedJobs: 1,
       oldestQueuedMinutes: 3,
@@ -66,7 +69,8 @@ describe("parseScriptsDashboard", () => {
       centres_without_scanned_custody: [{ exam_id: EXAM }],
     });
     expect(d).toEqual({
-      exams: [{ id: EXAM, title: "T", paper: null, startsAt: "2026-12-01T09:00:00Z", expected: 0, received: 0, verified: 0, needsAttention: 0, late: 0 }],
+      exams: [{ id: EXAM, title: "T", paper: null, startsAt: "2026-12-01T09:00:00Z", expected: 0, received: 0, verified: 0, needsAttention: 0, late: 0, unsubmitted: 0 }],
+      unsubmittedDrafts: 0,
       openExceptions: 0,
       failedJobs: 0,
       oldestQueuedMinutes: null,
@@ -77,7 +81,7 @@ describe("parseScriptsDashboard", () => {
 });
 
 describe("scriptsDashboardAlerts", () => {
-  const base: ScriptsDashboard = { exams: [], openExceptions: 0, failedJobs: 0, oldestQueuedMinutes: null, stuckJobs: 0, centresNotScanned: [] };
+  const base: ScriptsDashboard = { exams: [], unsubmittedDrafts: 0, openExceptions: 0, failedJobs: 0, oldestQueuedMinutes: null, stuckJobs: 0, centresNotScanned: [] };
 
   it("says nothing when all is well", () => {
     expect(scriptsDashboardAlerts(base)).toEqual([]);
@@ -94,6 +98,12 @@ describe("scriptsDashboardAlerts", () => {
         href: null,
       },
       { id: "failed", tone: "red", text: "2 files could not be processed. They are in the exception queue.", href: "/admin/scripts/exceptions?kind=processing_failed" },
+      {
+        id: "unsent",
+        tone: "red",
+        text: "1 family uploaded pages but did not press Submit. Their answers were not handed in.",
+        href: "/admin/scripts/unsent",
+      },
       {
         id: `custody-${EXAM}-${CENTRE}`,
         tone: "amber",
@@ -117,6 +127,12 @@ describe("scriptsDashboardAlerts", () => {
     expect(scriptsDashboardAlerts({ ...base, oldestQueuedMinutes: 16, stuckJobs: 2 })[0].text).toBe(
       "2 files stopped part-way through processing, and files have waited 16 minutes. Check that the processing server is running.",
     );
+  });
+
+  it("counts the families who uploaded pages but never submitted (Ruling R40)", () => {
+    expect(scriptsDashboardAlerts({ ...base, unsubmittedDrafts: 3 })).toEqual([
+      { id: "unsent", tone: "red", text: "3 families uploaded pages but did not press Submit. Their answers were not handed in.", href: "/admin/scripts/unsent" },
+    ]);
   });
 
   it("uses the singular for one file and one candidate, and the plural for problems", () => {

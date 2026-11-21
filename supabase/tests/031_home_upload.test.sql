@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(140);
+select plan(161);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -456,22 +456,23 @@ select is((select format('%s|%s', (select purged_at is not null from public.scri
                          (select purged_at is null from public.script_uploads where id = pg_temp.k('u21')))),
   't|t', 'purged marks discarded files only, never a submitted one');
 
--- ----- files never handed in are removed a day after the last chance to hand in (finish + 48 h) -----
+-- ----- files never finished are removed a day after the last chance to hand in (finish + 48 h); a draft's stored
+-- ----- files are kept (Ruling R40, I2: staff can still accept the draft) -----
 create function pg_temp.taken(p_now text) returns uuid[] language sql as $$
   select coalesce(array_agg((x ->> 'id')::uuid), '{}') from jsonb_array_elements(public.script_discarded_take(1000, p_now::timestamptz)) x $$;
 grant execute on function pg_temp.taken(text) to public;
 set local role service_role;
 select ok(not (pg_temp.taken('2031-06-09 10:29:59Z') && array[pg_temp.k('v1'), pg_temp.k('f8'), pg_temp.k('f9')]),
   'finish + 48 h - 1 s: draft files are kept');
-select ok(pg_temp.taken('2031-06-09 10:30:00Z') @> array[pg_temp.k('v1'), pg_temp.k('f8'), pg_temp.k('f9'), pg_temp.k('u91')],
-  'finish + 48 h: a pending draft file, a stored one never submitted and one left pending after a refused stored are listed');
+select ok(pg_temp.taken('2031-06-09 10:30:00Z') @> array[pg_temp.k('v1'), pg_temp.k('f9'), pg_temp.k('u91')]
+          and not pg_temp.k('f8') = any (pg_temp.taken('2031-06-09 10:30:00Z')),
+  'finish + 48 h: a pending draft file and one left pending after a refused stored are listed; a stored one never submitted is not');
 select ok(not (pg_temp.taken('2040-01-01 00:00:00Z') && array[pg_temp.k('u1'), pg_temp.k('u2'), pg_temp.k('u21'), pg_temp.k('u23'),
   pg_temp.k('u31'), pg_temp.k('u71'), pg_temp.k('u81')]), 'a submitted file is never listed, however late');
 reset role;
 select is((select count(*)::int from unnest(pg_temp.taken('2040-01-01 00:00:00Z')) t(id) join public.script_uploads u on u.id = t.id
-           where u.state not in ('discarded', 'pending', 'stored')
-              or (u.state = 'stored' and (select s.state from public.home_submissions s where s.id = u.submission_id) <> 'draft')), 0,
-  'everything listed was discarded, never finished, or still in a draft');
+           where u.state not in ('discarded', 'pending')), 0,
+  'everything listed was discarded or never finished');
 set local role service_role;
 select public.script_upload_purged(array[pg_temp.k('f8')], '2031-06-09 10:29:59Z');
 reset role;
@@ -482,8 +483,104 @@ select public.script_upload_purged(array[pg_temp.k('v1'), pg_temp.k('f8'), pg_te
 reset role;
 select is((select string_agg(k.name || ':' || u.state || ':' || (u.purged_at is not null), ',' order by k.name)
            from public.script_uploads u join kv k on k.id = u.id where k.name in ('v1', 'f8', 'f9', 'u81')),
-  'f8:discarded:true,f9:discarded:true,u81:queued:false,v1:discarded:true',
-  'purged files never handed in become discarded; a submitted file is untouched');
+  'f8:stored:false,f9:discarded:true,u81:queued:false,v1:discarded:true',
+  'purged files never finished become discarded; a submitted file and a draft''s stored file are untouched');
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R40 (m3): the files of one hand-in, discarded ones included, are capped at 120.
+-- d6 has 61 so far (60 begun, one discarded, one more begun).
+-- ---------------------------------------------------------------------------------------------
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('s6'));
+create function pg_temp.swap(p_n int) returns int language plpgsql as $$
+declare
+  v_ok int := 0;
+  r jsonb;
+begin
+  for i in 1 .. p_n loop
+    r := public.script_upload_begin(pg_temp.k('d6'), 'home_photo', 'image/jpeg', 1000, '2031-06-07 11:00:00Z');
+    if r ->> 'ok' = 'true' then
+      v_ok := v_ok + 1;
+      perform public.script_upload_discard((r ->> 'upload_id')::uuid);
+    end if;
+  end loop;
+  return v_ok;
+end $$;
+select pg_temp.discard('f10');
+select is(pg_temp.swap(59), 59, 'a family can add and remove files: 120 in all for one hand-in');
+select is(pg_temp.bgn(null, 'd6', 'home_photo', 'image/jpeg', 1000, '2031-06-07 11:00:00Z') ->> 'code', 'too_many_files_total',
+  'R40 m3: the 121st file of one hand-in is refused, although fewer than 60 are in it now');
+select tests.as_postgres();
+select is((select concat_ws('/', count(*), count(*) filter (where u.state <> 'discarded') < 60) from public.script_uploads u where u.submission_id = pg_temp.k('d6')),
+  '120/t', 'the hand-in holds 120 files, discarded ones included');
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R40 (I2): uploaded but never submitted. d6 (b6) is a draft with one stored file (f8); d9 (b9) gets one too.
+-- ---------------------------------------------------------------------------------------------
+insert into c values ('teacher', tests.create_user('teacher', 'active'));
+select tests.as_user(pg_temp.uid('s9'));
+select pg_temp.put('u91', 1000, 'image/jpeg');
+select is(pg_temp.stored('u91') ->> 'ok', 'true', 'b9 uploads a page and leaves without pressing Submit');
+select tests.as_postgres();
+select ok(not exists (select 1 from public.script_exceptions e where e.booking_id in (pg_temp.k('b6'), pg_temp.k('b9'))),
+  'nothing in the exception queue shows these drafts');
+
+-- cleanup_keeps_draft_files
+set local role service_role;
+select ok(not (pg_temp.taken('2040-01-01 00:00:00Z') && array[pg_temp.k('f8'), pg_temp.k('u91')]),
+  'R40 I2: the stored files of a draft are never listed for deletion, however long ago the exam was');
+select ok(pg_temp.taken('2031-06-09 10:30:00Z') @> array[pg_temp.k('f11'), pg_temp.k('f12')],
+  'pending files (never finished) of the same draft still are, from finish + 48 h');
+reset role;
+
+-- dashboard_counts_unsubmitted_drafts
+select tests.as_user(pg_temp.uid('admin'));
+insert into res select 'dash_before', public.scripts_dashboard('2031-06-07 10:29:59Z');
+insert into res select 'dash', public.scripts_dashboard('2031-06-08 12:00:00Z');
+select is(concat_ws('/', (select x ->> 'unsubmitted' from jsonb_array_elements(pg_temp.r('dash_before') -> 'exams') x where (x -> 'exam' ->> 'id')::uuid = pg_temp.k('e')),
+    (select x ->> 'unsubmitted' from jsonb_array_elements(pg_temp.r('dash') -> 'exams') x where (x -> 'exam' ->> 'id')::uuid = pg_temp.k('e'))),
+  '0/2', 'R40 I2: the dashboard counts, per exam, the home bookings with stored files never submitted, once the exam has finished');
+select cmp_ok((pg_temp.r('dash') ->> 'unsubmitted_drafts')::int, '>=', 2, 'and in its total');
+insert into res select 'drafts', public.home_drafts_unsubmitted(pg_temp.k('e'), '2031-06-08 12:00:00Z');
+select is((select string_agg(concat_ws(':', k.name, x ->> 'files', x ->> 'late', x -> 'booking' ->> 'id' is not null), ',' order by k.name)
+           from jsonb_array_elements(pg_temp.r('drafts') -> 'items') x join kv k on k.id = (x ->> 'submission_id')::uuid),
+  'd6:1:true:t,d9:1:true:t', 'the staff list names each such draft, its stored files and whether it would be late now');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('teacher'));
+select is(concat_ws('/', public.home_drafts_unsubmitted(null) ->> 'code', public.home_submission_accept_draft(pg_temp.k('d9'), 'Family asked by phone') ->> 'code'),
+  'forbidden/forbidden', 'R40 I2: a teacher can neither list the drafts nor accept one');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('s9'));
+select is(public.home_submission_accept_draft(pg_temp.k('d9'), 'Let me in') ->> 'code', 'forbidden', 'nor can the family');
+
+-- staff_accept_draft
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+select is(concat_ws('/', public.home_submission_accept_draft(pg_temp.k('d9'), 'ok') ->> 'code',
+    public.home_submission_accept_draft(gen_random_uuid(), 'Family asked by phone') ->> 'code',
+    public.home_submission_accept_draft(pg_temp.k('d8'), 'Family asked by phone') ->> 'code'),
+  'reason_required/not_found/conflict', 'a reason is needed; an unknown submission is not found; one already submitted is refused');
+insert into res select 'acc9', public.home_submission_accept_draft(pg_temp.k('d9'), 'Family asked by phone', '2031-06-07 12:29:59Z');
+select is(concat_ws('/', pg_temp.r('acc9') ->> 'ok', pg_temp.r('acc9') ->> 'state', pg_temp.r('acc9') ->> 'late'), 'true/checking/false',
+  'R40 I2: an admin submits the draft for the family: on time until finish + 2 h');
+insert into res select 'acc6', public.home_submission_accept_draft(pg_temp.k('d6'), 'Uploaded in time, never submitted', '2031-06-08 12:00:00Z');
+select is(concat_ws('/', pg_temp.r('acc6') ->> 'ok', pg_temp.r('acc6') ->> 'state', pg_temp.r('acc6') ->> 'late'), 'true/checking/true',
+  'and late when the clock says so (here after the family''s own late window)');
+select tests.as_postgres();
+select is((select string_agg(concat_ws(':', k.name, s.state, s.late, s.submitted_by = pg_temp.uid('admin'), s.submitted_at), ',' order by k.name)
+           from public.home_submissions s join kv k on k.id = s.id where k.name in ('d6', 'd9')),
+  'd6:checking:t:t:2031-06-08 12:00:00+00,d9:checking:f:t:2031-06-07 12:29:59+00',
+  'the submissions are submitted as the family''s own submit would, in the admin''s name');
+select is((select string_agg(k.name || ':' || u.state, ',' order by k.name) from public.script_uploads u join kv k on k.id = u.id
+           where k.name in ('f8', 'f11', 'u91')), 'f11:discarded,f8:queued,u91:queued',
+  'its stored files wait to be processed; files never finished are discarded');
+select is((select count(*)::int from public.processing_jobs j where j.upload_id in (pg_temp.k('f8'), pg_temp.k('u91')) and j.kind = 'prepare' and j.state = 'queued'),
+  2, 'each with a prepare job');
+select is((select count(*)::int from public.script_exceptions e where e.booking_id = pg_temp.k('b6') and e.kind = 'late' and e.state = 'open'), 1,
+  'the late one is raised for a decision, as a late hand-in is');
+select is((select string_agg(k.name || ':' || a.reason, ',' order by k.name) from public.audit_log a join kv k on k.id = a.target_id
+           where a.action = 'home_submission_draft_accepted' and a.target_type = 'home_submission' and a.actor_id = pg_temp.uid('admin')),
+  'd6:Uploaded in time, never submitted,d9:Family asked by phone', 'R40 I2: each acceptance is audited with its reason');
+select tests.as_user(pg_temp.uid('admin'));
+select is((select x ->> 'unsubmitted' from jsonb_array_elements(public.scripts_dashboard('2031-06-08 12:00:00Z') -> 'exams') x
+           where (x -> 'exam' ->> 'id')::uuid = pg_temp.k('e')), '0', 'and the dashboard no longer counts them');
+select tests.as_postgres();
 
 select * from finish();
 rollback;

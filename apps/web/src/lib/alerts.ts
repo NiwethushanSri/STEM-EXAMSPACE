@@ -197,6 +197,8 @@ export type ScriptsDashboardExam = {
   verified: number;
   needsAttention: number;
   late: number;
+  /** Home bookings whose family uploaded files but never pressed Submit (counted once the exam has finished). */
+  unsubmitted: number;
 };
 
 /** A centre whose sheets were counted but which has no "scanned" custody record by 09:00 the day after the exam. */
@@ -213,6 +215,8 @@ export type CentreNotScanned = {
 
 export type ScriptsDashboard = {
   exams: ScriptsDashboardExam[];
+  /** Home bookings, of any exam, with uploaded files that were never submitted. */
+  unsubmittedDrafts: number;
   openExceptions: number;
   failedJobs: number;
   /** How long the oldest file due to be processed has waited (a file the server stopped part-way through included),
@@ -249,6 +253,7 @@ function dashboardExam(x: unknown): ScriptsDashboardExam | null {
     verified: counted(x.verified),
     needsAttention: counted(x.needs_attention),
     late: counted(x.late),
+    unsubmitted: counted(x.unsubmitted),
   };
 }
 
@@ -270,6 +275,7 @@ export function parseScriptsDashboard(data: unknown): ScriptsDashboard | null {
   const minutes = data.oldest_queued_minutes;
   return {
     exams: (Array.isArray(data.exams) ? data.exams : []).map(dashboardExam).filter((e): e is ScriptsDashboardExam => e !== null),
+    unsubmittedDrafts: counted(data.unsubmitted_drafts),
     openExceptions: counted(data.open_exceptions),
     failedJobs: counted(data.failed_jobs),
     oldestQueuedMinutes: typeof minutes === "number" && Number.isInteger(minutes) && minutes >= 0 ? minutes : null,
@@ -283,7 +289,7 @@ export function parseScriptsDashboard(data: unknown): ScriptsDashboard | null {
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** What staff should act on, the most urgent first: a stopped processing server, files that could not be processed,
- * centres whose collected sheets were not scanned by 09:00 the next day, and problems in the exception queue. */
+ * families who uploaded pages but never submitted them, centres whose collected sheets were not scanned by 09:00 the next day, and problems in the exception queue. */
 export function scriptsDashboardAlerts(d: ScriptsDashboard): StaffAlert[] {
   const out: StaffAlert[] = [];
   const waited = d.oldestQueuedMinutes ?? 0;
@@ -310,6 +316,14 @@ export function scriptsDashboardAlerts(d: ScriptsDashboard): StaffAlert[] {
       tone: "red",
       text: `${plural(d.failedJobs, "file", "files")} could not be processed. ${d.failedJobs === 1 ? "It is" : "They are"} in the exception queue.`,
       href: "/admin/scripts/exceptions?kind=processing_failed",
+    });
+  }
+  if (d.unsubmittedDrafts > 0) {
+    out.push({
+      id: "unsent",
+      tone: "red",
+      text: `${plural(d.unsubmittedDrafts, "family", "families")} uploaded pages but did not press Submit. Their answers were not handed in.`,
+      href: "/admin/scripts/unsent",
     });
   }
   for (const c of d.centresNotScanned) {

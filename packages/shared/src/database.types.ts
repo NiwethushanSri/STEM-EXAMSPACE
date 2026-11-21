@@ -1219,6 +1219,14 @@ isOneToOne: false
 "home_booking_lock":
 { Args: { "p_booking": string }; Returns: undefined
                            },
+"home_drafts_stored":
+{ Args: { "p_now": string }; Returns: {
+              "booking_id": string,"exam_id": string,"files": number,"last_file_at": string,"late": boolean,"submission_id": string
+            }[]
+                           },
+"home_drafts_unsubmitted":
+{ Args: { "p_exam"?: string,"p_now"?: string }; Returns: Json
+                           },
 "home_missing_confirm_blank":
 { Args: { "p_pages": (number)[],"p_submission": string }; Returns: Json
                            },
@@ -1233,6 +1241,9 @@ isOneToOne: false
                            },
 "home_reevaluate":
 { Args: { "p_booking": string,"p_submission": string }; Returns: Database["public"]['Enums']["submission_state"]
+                           },
+"home_submission_accept_draft":
+{ Args: { "p_now"?: string,"p_reason": string,"p_submission": string }; Returns: Json
                            },
 "home_submission_assemble":
 { Args: { "p_now": string,"p_submission": string,"p_upload": string }; Returns: boolean
@@ -1265,6 +1276,9 @@ isOneToOne: false
                            },
 "home_submission_result":
 { Args: { "p_submission": string }; Returns: Json
+                           },
+"home_submission_send":
+{ Args: { "p_actor": string,"p_now": string,"p_submission": string }; Returns: undefined
                            },
 "home_submission_status":
 { Args: { "p_booking": string }; Returns: Json
@@ -1691,6 +1705,9 @@ isOneToOne: false
 "script_page_staff_work":
 { Args: { "p_page": string }; Returns: string
                            },
+"script_pages_elsewhere":
+{ Args: { "p_pages": (string)[],"p_script": string }; Returns: (string)[]
+                           },
 "script_pages_record":
 { Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_sha256": string,"p_worker": string }; Returns: Json
                            },
@@ -1733,6 +1750,9 @@ isOneToOne: false
 "script_stale_links":
 { Args: { "p_script": string }; Returns: number
                            },
+"script_stats_refresh":
+{ Args: Record<PropertyKey, never>; Returns: undefined
+                           },
 "script_upload_begin":
 { Args: { "p_bytes": number,"p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string,"p_now"?: string,"p_submission": string }; Returns: Json
                            },
@@ -1750,6 +1770,9 @@ isOneToOne: false
                            },
 "script_upload_path_allowed":
 { Args: { "p_add": boolean,"p_path": string }; Returns: boolean
+                           },
+"script_upload_processed":
+{ Args: { "p_now": string,"p_upload": string }; Returns: undefined
                            },
 "script_upload_purged":
 { Args: { "p_ids": (string)[],"p_now"?: string }; Returns: undefined

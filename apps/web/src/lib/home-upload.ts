@@ -66,6 +66,8 @@ export const UPLOAD_TEXT = {
   notFinished: "This file did not finish uploading. Delete it and add it again.",
   elsewhere: "Still uploading on another device.",
   submit: "Submit",
+  notSent: "Your pages are not sent yet. Press Submit to send them.",
+  notSentUploading: "Your pages are not sent yet. Wait until every file shows as uploaded, then press Submit.",
   submitHint: "Submit when every page is uploaded. You can still replace pages until the deadline.",
   checkingHint: "The pages are being read. This usually takes a minute or two; you can leave this page.",
   replaceAll: "Replace all pages",
@@ -250,6 +252,13 @@ export async function storeFile(
 /** Submit is offered once there is a file and every file is uploaded. */
 export function canSubmit(files: { state: string }[]): boolean {
   return files.length > 0 && files.every((f) => f.state === "stored");
+}
+
+/** Whether the strip holds answers that are not handed in (Ruling R40): files still on their way ("uploading"), or
+ * files uploaded and waiting for Submit ("not_sent"). The screen warns for both, and before the page is left. */
+export function unsentFiles(files: { state: string }[]): "none" | "uploading" | "not_sent" {
+  if (files.some((f) => f.state === "waiting" || f.state === "uploading")) return "uploading";
+  return files.some((f) => f.state === "stored") ? "not_sent" : "none";
 }
 
 /** "2, 3, 4 and 6" */

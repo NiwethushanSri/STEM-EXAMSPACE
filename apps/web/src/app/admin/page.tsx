@@ -61,8 +61,9 @@ function ScriptsDashboardView({ d }: { d: ScriptsDashboard }) {
   const alerts = scriptsDashboardAlerts(d);
   return (
     <div className="mb-6 space-y-4" data-testid="scripts-dashboard">
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Tile label="Problems to check" value={d.openExceptions} href="/admin/scripts/exceptions" testId="tile-open-exceptions" />
+        <Tile label="Uploaded, not sent" value={d.unsubmittedDrafts} href="/admin/scripts/unsent" testId="tile-unsent" />
         <Tile label="Files not processed" value={d.failedJobs} href="/admin/scripts/exceptions?kind=processing_failed" testId="tile-failed-jobs" />
         <Tile
           label="Oldest file waiting"
@@ -100,7 +101,7 @@ function ScriptsDashboardView({ d }: { d: ScriptsDashboard }) {
               <caption className="sr-only">Scripts expected and received per exam</caption>
               <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  {["Exam", "Expected", "Received", "Verified", "Needs attention", "Late"].map((h) => (
+                  {["Exam", "Expected", "Received", "Verified", "Needs attention", "Late", "Uploaded, not sent"].map((h) => (
                     <th key={h} scope="col" className="py-2 pr-4 font-medium">
                       {h}
                     </th>
@@ -122,6 +123,15 @@ function ScriptsDashboardView({ d }: { d: ScriptsDashboard }) {
                     <td className="py-2 pr-4">{e.verified}</td>
                     <td className="py-2 pr-4">{e.needsAttention}</td>
                     <td className="py-2 pr-4">{e.late}</td>
+                    <td className="py-2 pr-4">
+                      {e.unsubmitted > 0 ? (
+                        <Link href={`/admin/scripts/unsent?exam=${e.id}`} className="font-medium text-blue-700 underline">
+                          {e.unsubmitted}
+                        </Link>
+                      ) : (
+                        0
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

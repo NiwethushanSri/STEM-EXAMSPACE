@@ -187,6 +187,8 @@ const uploadMessages: Record<string, string> = {
   uploads_not_open: "You can upload your answers once the exam has started.",
   uploads_closed: "Uploads for this exam have closed. Please contact the institution.",
   too_many_files: "You can hand in at most 60 files. Delete some, or put the pages into one PDF.",
+  too_many_files_total:
+    "Too many files have been added and deleted in this hand-in (120 at most). Press Submit to send the pages you have; you can then replace pages.",
   file_too_large: "This file is too large. Photos can be up to 25 MB and PDFs up to 100 MB.",
   wrong_file_type: "This file cannot be used. Upload a PDF, or photos as JPEG, PNG or HEIC.",
   still_uploading: "Some files are still uploading. Wait until every file shows as uploaded, or delete it.",

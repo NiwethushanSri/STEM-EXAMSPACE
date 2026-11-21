@@ -112,6 +112,8 @@ describe("uploadMessageFor", () => {
     expect(uploadMessageFor("uploads_not_open")).toBe("You can upload your answers once the exam has started.");
     expect(uploadMessageFor("uploads_closed")).toBe("Uploads for this exam have closed. Please contact the institution.");
     expect(uploadMessageFor("too_many_files")).toContain("at most 60 files");
+    expect(uploadMessageFor("too_many_files_total")).toContain("120 at most");
+    expect(uploadMessageFor("too_many_files_total")).toContain("Press Submit");
     expect(uploadMessageFor("file_too_large")).toContain("25 MB");
     expect(uploadMessageFor("file_too_large")).toContain("100 MB");
     expect(uploadMessageFor("wrong_file_type")).toContain("PDF");
