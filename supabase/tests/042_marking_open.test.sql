@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(136);
+select plan(143);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -453,6 +453,52 @@ select is((select schedule || ' | ' || command from cron.job where jobname = 'ma
 select is((select count(*)::int from cron.job where jobname = 'marking-tick'), 1, 'once');
 
 -- ---------------------------------------------------------------------------------------------
+-- added_question_leaves_withdrawn_scripts_alone (exam_structure_save after opening, Rulings R1 and R9)
+-- ---------------------------------------------------------------------------------------------
+-- In exam et, m1 has marked t1 and t2: each unit submitted, its marking submitted, the hold ended. Then t2's booking
+-- is cancelled, and an admin adds question 3.
+insert into kv values ('t2', tests.verified_script(pg_temp.k('et')));
+select is(public.marking_exam_sync(pg_temp.k('et'), null), 1, 'added_question_leaves_withdrawn_scripts_alone: t2 is made ready');
+update public.marking_units set state = 'submitted' where script_id in (pg_temp.k('t1'), pg_temp.k('t2'));
+insert into public.markings (unit_id, marker_id, status, total, submitted_at)
+select u.id, pg_temp.uid('m1'), 'submitted', 8, now() from public.marking_units u where u.script_id in (pg_temp.k('t1'), pg_temp.k('t2'));
+insert into public.marking_assignments (unit_id, marker_id, how, hold_until, created_at, ended_at, end_reason)
+select u.id, pg_temp.uid('m1'), 'next', now() + interval '1 hour', now() - interval '1 hour', now(), 'submitted'
+from public.marking_units u where u.script_id in (pg_temp.k('t1'), pg_temp.k('t2'));
+select public.marking_script_state(pg_temp.k('t1'));
+select public.marking_script_state(pg_temp.k('t2'));
+select is(array[pg_temp.st('t1'), pg_temp.st('t2')], array['marked', 'marked'], 'both scripts are marked');
+update public.bookings set status = 'cancelled' where id = (select booking_id from public.scripts where id = pg_temp.k('t2'));
+select is((select s.state || ' ' || u.on_hold || ' ' || u.hold_reason from public.scripts s join public.marking_units u on u.script_id = s.id
+           where s.id = pg_temp.k('t2')), 'withdrawn true withdrawn', 't2''s booking is cancelled: withdrawn, its piece on hold');
+-- What exam_structure_get gives, as a draft to save again (as 040 and the editor make it), with question 3 added.
+create function pg_temp.with_q3(g jsonb) returns jsonb language sql immutable as $$
+  select jsonb_build_object(
+    'groups', '[]'::jsonb, 'option_groups', '[]'::jsonb,
+    'questions', (select jsonb_agg(jsonb_build_object('id', x -> 'id', 'key', x ->> 'id', 'parent_key', x -> 'parent_id',
+        'label', x -> 'label', 'max_mark', x -> 'max_mark', 'mark_step', x -> 'mark_step', 'levels', x -> 'levels', 'pages', x -> 'pages',
+        'areas', x -> 'areas', 'group_key', null, 'option_group_key', null, 'guidance', x -> 'guidance', 'alternatives', x -> 'alternatives',
+        'points', '[]'::jsonb) order by o)
+      from jsonb_array_elements(g -> 'questions') with ordinality t(x, o))
+      || jsonb_build_array(jsonb_build_object('id', null, 'key', 'new3', 'parent_key', null, 'label', '3', 'max_mark', 2, 'mark_step', 1,
+           'levels', false, 'pages', '[3]'::jsonb, 'areas', '[]'::jsonb, 'group_key', null, 'option_group_key', null,
+           'guidance', null, 'alternatives', null, 'points', '[]'::jsonb))) $$;
+grant execute on function pg_temp.with_q3(jsonb) to public;
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.exam_structure_save(pg_temp.k('et'), pg_temp.with_q3(public.exam_structure_get(pg_temp.k('et'))), 'Question 3 was left out')),
+  'ok', 'an admin adds question 3 after marking has opened');
+select tests.as_postgres();
+select is((select s.state || ' ' || u.state || ' ' || (select count(*) from public.marking_assignments a where a.unit_id = u.id and a.ended_at is null)
+                  || ' ' || (select string_agg(m.status, ',') from public.markings m where m.unit_id = u.id)
+           from public.scripts s join public.marking_units u on u.script_id = s.id where s.id = pg_temp.k('t1')),
+  'marking taken 1 in_progress', 't1''s piece is reopened for m1 and the script is being marked again');
+select is((select s.state || ' ' || u.state || ' ' || u.on_hold || ' ' || u.hold_reason
+                  || ' ' || (select count(*) from public.marking_assignments a where a.unit_id = u.id and a.ended_at is null)
+                  || ' ' || (select string_agg(m.status, ',') from public.markings m where m.unit_id = u.id)
+           from public.scripts s join public.marking_units u on u.script_id = s.id where s.id = pg_temp.k('t2')),
+  'withdrawn submitted true withdrawn 0 submitted', 'the withdrawn script''s piece stays submitted and on hold, with no holder, and the script stays withdrawn');
+
+-- ---------------------------------------------------------------------------------------------
 -- teacher_and_corrector_forbidden
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('teacher'));
@@ -472,8 +518,12 @@ select is(array(select f from unnest(array[
     'public.marking_script_busy(uuid)', 'public.marking_script_waiting(uuid, timestamptz)', 'public.marking_script_blocked(uuid, timestamptz)',
     'public.marking_exam_sync(uuid, timestamptz)', 'public.marking_script_state(uuid)', 'public.marking_tick()',
     'public.marking_on_script_state()']) f
-  where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')), '{}'::text[],
-  'the internal functions cannot be called from the API');
+  where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')
+     or has_function_privilege('service_role', f, 'execute')), '{}'::text[],
+  'the internal functions cannot be called from the API, nor by the service role');
+select is((select j.username from cron.job j where j.jobname = 'marking-tick'),
+  (select p.proowner::regrole::text from pg_proc p where p.oid = 'public.marking_tick()'::regprocedure),
+  'the marking-tick job runs as the owner of marking_tick, who may still run it');
 select is(array(select f from unnest(array[
     'public.marking_settings_set(uuid, public.marking_mode, timestamptz, text)', 'public.marking_exam_get(uuid, timestamptz)',
     'public.marking_open(uuid)', 'public.marking_close(uuid, text)', 'public.marking_reopen(uuid, text)']) f

@@ -19,14 +19,18 @@
 -- A script withdrawn or void (its booking cancelled, refunded or expired, or voided by staff) puts its units on hold
 -- ('withdrawn') and ends their open assignments ('withdrawn'). Its markings are kept.
 --
--- Locks, in this order: the exam's structure lock (advisory, as exam_structure_save; settings and opening take it),
--- the exam's exam_marking row (for update to change it, for share in the sync); then, for each script made ready,
--- its booking (advisory, as Phase 2) and its row, then its units. marking_script_state holds the script's row before
--- it reads the units.
+-- Lock order, for every function that changes marking (Ruling R9; later tasks keep it): the exam's structure lock
+-- (advisory, where taken: exam_structure_save, settings and opening), then the exam's exam_marking row (for update to
+-- change it, for share to mark under it), then the bookings' advisory locks where taken (as Phase 2, in uuid order),
+-- then the scripts' rows in id order (for no key update), then their units, assignments and markings. A booking
+-- cancelled or a script voided takes its booking, then the script's row, then (through marking_on_script_state) its
+-- units, in the same order. marking_script_state holds the script's row before it reads the units.
 --
--- Changed: exam_structure_save, from its latest definition (20261122000003). A question added after opening now sets
--- the state of each script it reopens with marking_script_state, instead of its own marked -> marking update (Ruling
--- R1). Nothing else in it changed.
+-- Changed: exam_structure_save, from its latest definition (20261122000003). A question added after opening (1) holds
+-- the rows of the scripts whose pieces include it, in id order, before it reads their states and pieces, so it never
+-- reopens a piece of a script withdrawn or voided meanwhile; pieces of withdrawn or void scripts are left out where
+-- the reopened markings are read too (Ruling R9); and (2) sets the state of each script it reopens with
+-- marking_script_state, instead of its own marked -> marking update (Ruling R1). Nothing else in it changed.
 
 -- ---------------------------------------------------------------------------------------------
 -- Internal: whether a file holding one of the script's pages (a page its current version shows, or one of its extra
@@ -513,8 +517,9 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- exam_structure_save: as 20261122000003, except that a question added after opening sets each reopened script's state
--- with marking_script_state (Ruling R1) instead of updating marked scripts to marking itself.
+-- exam_structure_save: as 20261122000003, except that a question added after opening holds the rows of the scripts
+-- concerned before it reads them (Ruling R9) and sets each reopened script's state with marking_script_state (Ruling R1)
+-- instead of updating marked scripts to marking itself.
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.exam_structure_save(p_exam uuid, p_structure jsonb, p_reason text default null)
 returns jsonb
@@ -536,6 +541,7 @@ declare
   v_oids jsonb;
   v_added uuid[] := '{}';
   v_units uuid[];
+  v_held uuid[];
   v_scripts uuid[];
   v_version int;
   v_opened timestamptz;
@@ -718,6 +724,20 @@ begin
   -- an active, approved marker of the subject; and not blocked for the candidate). Otherwise the piece is open again
   -- for anyone and that marking is set aside (unapproved, or conflict when blocked), so no hold is left stranded.
   if v_locked and cardinality(v_added) > 0 then
+    -- The rows of the scripts whose pieces include the new question are held first, in id order (Ruling R9), and
+    -- only then are their states and pieces read: a booking cancelled or a script voided at the same moment has either
+    -- finished (the script is withdrawn or void and left alone) or waits until this save ends.
+    with recursive up as (
+      select q.id, q.parent_id, q.group_id from public.exam_questions q where q.id = any (v_added)
+      union all
+      select p.id, p.parent_id, p.group_id from up join public.exam_questions p on p.id = up.parent_id
+    )
+    select coalesce(array_agg(distinct u.script_id order by u.script_id), '{}') into v_held
+    from public.marking_units u
+    where u.exam_id = p_exam
+      and (u.group_id is null or u.group_id in (select up.group_id from up where up.parent_id is null));
+    perform 1 from public.scripts s where s.id = any (v_held) order by s.id for no key update;
+
     with recursive up as (
       select q.id, q.parent_id, q.group_id from public.exam_questions q where q.id = any (v_added)
       union all
@@ -727,6 +747,7 @@ begin
     from public.marking_units u
     join public.scripts s on s.id = u.script_id
     where u.exam_id = p_exam
+      and s.id = any (v_held)
       and s.state not in ('withdrawn', 'void')
       and (u.group_id is null or u.group_id in (select up.group_id from up where up.parent_id is null));
 
@@ -739,6 +760,7 @@ begin
       join public.scripts s on s.id = u.script_id
       join public.bookings b on b.id = s.booking_id
       where m.unit_id = any (v_units) and m.kind = 'live' and m.status = 'submitted'
+        and s.state not in ('withdrawn', 'void')
     ),
     reopened as (
       update public.markings m set status = 'in_progress', submitted_at = null
@@ -788,11 +810,11 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- Privileges.
 -- ---------------------------------------------------------------------------------------------
-revoke execute on function public.marking_script_busy(uuid) from public, anon, authenticated;
-revoke execute on function public.marking_script_waiting(uuid, timestamptz) from public, anon, authenticated;
-revoke execute on function public.marking_script_blocked(uuid, timestamptz) from public, anon, authenticated;
-revoke execute on function public.marking_script_state(uuid) from public, anon, authenticated;
-revoke execute on function public.marking_exam_sync(uuid, timestamptz) from public, anon, authenticated;
+revoke execute on function public.marking_script_busy(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_script_waiting(uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_script_blocked(uuid, timestamptz) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_script_state(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_exam_sync(uuid, timestamptz) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_tick() from public, anon, authenticated, service_role;
 revoke execute on function public.marking_on_script_state() from public, anon, authenticated, service_role;
 revoke execute on function public.marking_settings_set(uuid, public.marking_mode, timestamptz, text) from public, anon;
