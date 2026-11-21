@@ -695,14 +695,14 @@ isOneToOne: false
                   ]
                 },"script_notices": {
                   Row: {
-                    "attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
+                    "attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"skipped_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
                   }
                   ComputedFields: "script_notice_content" | "script_notice_count" | "script_notice_recipients"
                   Insert: {
-                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"submission_id"?: string | null
+                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Update: {
-                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"submission_id"?: string | null
+                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Relationships: [
                     {
@@ -1588,6 +1588,12 @@ isOneToOne: false
 { Args: { "p_script": string }; Returns: {
               "file_position": number,"page_id": string,"placed_after": number,"source_index": number
             }[]
+                           },
+"script_family_notices_skip":
+{ Args: { "p_reason": string }; Returns: Json
+                           },
+"script_family_notices_waiting":
+{ Args: Record<PropertyKey, never>; Returns: Json
                            },
 "script_home_reject":
 { Args: { "p_actor": string,"p_booking": string,"p_now": string,"p_reason": string,"p_subs": (string)[] }; Returns: undefined

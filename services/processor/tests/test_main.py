@@ -172,10 +172,10 @@ def test_a_file_of_too_many_pages_fails_before_anything_is_rendered_or_stored(mo
 
 def test_a_file_of_exactly_the_limit_is_prepared(monkeypatch):
     monkeypatch.setattr(pipeline, "page_count", lambda source, mime: main.MAX_PAGES)
-    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(data=b"a long scan")
     assert main.process(client, "w-1", claimed(upload_kind="scan_file")) == "done"
+    assert len(client.named("record_pages")) == 1
     assert main.MAX_PAGES == 5000  # the database's own limit (script_pages_valid)
 
 

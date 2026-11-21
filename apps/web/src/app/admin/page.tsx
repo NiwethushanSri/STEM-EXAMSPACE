@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { AppShell, Card } from "@/components/AppShell";
+import { FamilyNotices } from "@/components/scripts/FamilyNotices";
 import { AccountsOverview } from "@/components/accounts/AccountsSection";
 import { parseScriptsDashboard, scriptsDashboardAlerts, type ScriptsDashboard } from "@/lib/alerts";
 import { loadExamsMissingPaper, loadExamsRolesUnchecked } from "@/lib/exams-staff";
@@ -190,7 +191,27 @@ async function ScriptsOverview() {
       </div>
     );
   }
-  return <ScriptsDashboardView d={d} />;
+  const waiting = await familyNoticesWaiting(supabase);
+  return (
+    <>
+      {waiting > 0 && (
+        <div className="mb-6">
+          <Card title="Family emails">
+            <FamilyNotices count={waiting} />
+          </Card>
+        </div>
+      )}
+      <ScriptsDashboardView d={d} />
+    </>
+  );
+}
+
+/** How many family emails (receipts and the like) are still to be sent; 0 when it cannot be read. */
+async function familyNoticesWaiting(supabase: Awaited<ReturnType<typeof createClient>>): Promise<number> {
+  const { data, error } = await supabase.rpc("script_family_notices_waiting", {});
+  if (error || !data || typeof data !== "object" || Array.isArray(data)) return 0;
+  const a = data as { ok?: unknown; count?: unknown };
+  return a.ok === true && typeof a.count === "number" ? a.count : 0;
 }
 
 export default function AdminDashboard() {
