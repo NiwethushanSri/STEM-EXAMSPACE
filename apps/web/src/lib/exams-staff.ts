@@ -248,6 +248,33 @@ async function loadExamsWithPaper(examIds: string[]): Promise<Set<string>> {
   return out;
 }
 
+/** Published exams that are still to start and whose current question paper's page roles nobody has checked: no copy
+ * is made for candidates until they are (the admin home page decides which are close to release). */
+export async function loadExamsRolesUnchecked(): Promise<{ id: string; title: string; paper: string; startsAt: string; releaseAt: string }[]> {
+  await requireStaff(["admin", "owner"]);
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("exam_papers")
+    .select("exam:exams!inner(id, title, paper, starts_at, status, release_minutes_before, released_early_at)")
+    .eq("kind", "paper")
+    .is("superseded_at", null)
+    .is("pages_reviewed_at", null)
+    .eq("exam.status", "published")
+    .gt("exam.starts_at", new Date().toISOString())
+    .limit(EXAM_CAP);
+  if (error) throw new Error("papers could not be loaded");
+  return (data ?? [])
+    .map((r) => r.exam)
+    .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+    .map((e) => ({
+      id: e.id,
+      title: e.title,
+      paper: e.paper,
+      startsAt: e.starts_at,
+      releaseAt: e.released_early_at ?? new Date(Date.parse(e.starts_at) - e.release_minutes_before * 60_000).toISOString(),
+    }));
+}
+
 /** Published exams that are still to start and have no question paper yet (the admin home page decides which are close to release). */
 export async function loadExamsMissingPaper(): Promise<{ id: string; title: string; paper: string; startsAt: string; releaseAt: string }[]> {
   await requireStaff(["admin", "owner"]);

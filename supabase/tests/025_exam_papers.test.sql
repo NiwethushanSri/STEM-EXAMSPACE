@@ -56,18 +56,26 @@ begin
   end loop;
   return v_ok;
 end $$;
--- Registers the stored object p_key as a paper or insert of p_exam and remembers the new id.
+-- A paper's page roles count as checked (Ruling R40: no copy is made for a candidate before that; 027 tests the
+-- refusal). An admin does this on the exam page with set_paper_page_roles.
+create function pg_temp.reviewed(p_paper uuid) returns void language sql security definer as $$
+  update public.exam_papers set pages_reviewed_at = now() where id = p_paper and kind = 'paper' $$;
+-- Registers the stored object p_key as a paper or insert of p_exam and remembers the new id; a question paper's page
+-- roles are then checked.
 create function pg_temp.reg(p_key text, p_exam text, p_kind text, p_title text, p_pages int, p_reason text default null)
 returns jsonb language plpgsql as $$
 declare v jsonb;
 begin
   v := public.register_exam_paper(pg_temp.eid(p_exam), p_kind::public.paper_kind, p_title, pg_temp.path(p_key), p_pages, 1000, p_reason);
-  if v ->> 'ok' = 'true' then update pp set id = (v ->> 'id')::uuid where name = p_key; end if;
+  if v ->> 'ok' = 'true' then
+    update pp set id = (v ->> 'id')::uuid where name = p_key;
+    perform pg_temp.reviewed((v ->> 'id')::uuid);
+  end if;
   return v;
 end $$;
 grant execute on function pg_temp.uid(text), pg_temp.eid(text), pg_temp.bid(text), pg_temp.pid(text), pg_temp.path(text),
   pg_temp.res(text), pg_temp.copy(text), pg_temp.issue(text, text, timestamptz), pg_temp.state(text, timestamptz),
-  pg_temp.dl(uuid, text), pg_temp.dl_n(uuid, int), pg_temp.reg(text, text, text, text, int, text) to public;
+  pg_temp.dl(uuid, text), pg_temp.dl_n(uuid, int), pg_temp.reg(text, text, text, text, int, text), pg_temp.reviewed(uuid) to public;
 
 -- Published exams, 90 minutes long. "fixed" starts at 10:00 London on 7 June 2031.
 create function pg_temp.mk_exam(p_name text, p_format public.exam_format, p_starts timestamptz, p_paper text default 'Paper 1 Higher')

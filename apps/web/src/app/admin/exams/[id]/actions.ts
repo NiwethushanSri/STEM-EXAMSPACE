@@ -32,6 +32,8 @@ function answer(
       return { ok: false, message: "Check the details and try again. A reason needs 3 to 300 characters." };
     case "conflict":
       return { ok: false, message: conflict };
+    case "roles_not_reviewed":
+      return { ok: false, message: ROLES_NOT_REVIEWED };
     case "not_found":
       return { ok: false, message: "That could not be found. Refresh the page and try again." };
     case "forbidden":
@@ -40,6 +42,10 @@ function answer(
       return { ok: false, message: GENERIC };
   }
 }
+
+/** The database refuses to release a paper whose page roles were never checked (Ruling R40). */
+const ROLES_NOT_REVIEWED =
+  'Check the page roles first: under "Page roles and hidden areas" on this page, set each page (answer, cover, blank or information) and save. Then release the paper.';
 
 function refresh(examId: string) {
   revalidatePath(`/admin/exams/${examId}`);

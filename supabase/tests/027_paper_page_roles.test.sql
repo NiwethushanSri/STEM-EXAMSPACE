@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(42);
+select plan(50);
 select tests.assert_no_owner();
 
 -- Fixtures: an admin, a teacher, a student, one exam with a 3-page paper (v1) later replaced by a 4-page paper (v2).
@@ -124,6 +124,48 @@ from up join public.paper_copies c on c.booking_id = up.booking_id and c.paper_i
 select tests.as_user(pg_temp.uid('admin'));
 select is(public.set_paper_page_roles(pg_temp.k('v2'), '[{"page":1,"role":"cover"},{"page":2,"role":"answer"},{"page":3,"role":"answer"},{"page":4,"role":"answer"}]') ->> 'code', 'conflict', 'roles are locked once a script page exists');
 select is(public.set_paper_hidden_areas(pg_temp.k('v2'), '[]') ->> 'ok', 'true', 'hidden areas can still change');
+select tests.as_postgres();
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R40 (I3): page roles must be checked before the paper is released. Exam r (home, starts in a week): a
+-- 3-page paper nobody has checked, and a paid home booking of s1.
+-- ---------------------------------------------------------------------------------------------
+with x as (
+  insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence,
+    price_confirmed, booking_deadline, status)
+  values ((select id from public.subjects where name = 'ZZ Roles'), 'ZZ Roles release', 'Paper 2', 'online',
+    now() + interval '7 days', 90, 0, true, now() + interval '6 days', 'published')
+  returning id)
+insert into kv select 'exam_r', id from x;
+with x as (
+  insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size)
+  select id, 'paper', 'Paper', 1, id::text || '/' || gen_random_uuid()::text || '.pdf', 3, 1000 from kv where name = 'exam_r'
+  returning id)
+insert into kv select 'r1', id from x;
+with x as (
+  insert into public.bookings (exam_id, student_id, booked_by, status, amount_pence, sitting)
+  select id, pg_temp.uid('s1'), pg_temp.uid('s1'), 'paid', 0, 'home' from kv where name = 'exam_r' returning id)
+insert into kv select 'bk_r', id from x;
+
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.paper_release_now(pg_temp.k('exam_r'), 'Start moved forward') ->> 'code', 'roles_not_reviewed',
+  'R40: a paper whose page roles were never checked cannot be released now');
+select tests.as_postgres();
+select is((select released_early_at from public.exams where id = pg_temp.k('exam_r')), null, 'and nothing is released');
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.paper_copy_issue(pg_temp.k('bk_r'), 'admin_preview') ->> 'ok', 'true', 'an admin can still preview a copy to check it');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('s1'));
+select is(public.paper_copy_issue(pg_temp.k('bk_r'), 'home', now() + interval '7 days') ->> 'code', 'roles_not_reviewed',
+  'R40: at the release time no copy is made for a family while the roles are unchecked');
+select is(public.booking_paper_state(pg_temp.k('bk_r'), now() + interval '7 days') ->> 'status', 'missing',
+  'the family is told the paper is not ready');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+select is(public.set_paper_page_roles(pg_temp.k('r1'), '[{"page":1,"role":"cover"},{"page":2,"role":"answer"},{"page":3,"role":"answer"}]') ->> 'ok',
+  'true', 'an admin checks the roles');
+select is(public.paper_release_now(pg_temp.k('exam_r'), 'Start moved forward') ->> 'ok', 'true', 'R40: then the paper can be released');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('s1'));
+select is(concat_ws('/', public.booking_paper_state(pg_temp.k('bk_r')) ->> 'status', public.paper_copy_issue(pg_temp.k('bk_r'), 'home') ->> 'ok'),
+  'open/true', 'R40: and the family gets its copy');
 select tests.as_postgres();
 
 select * from finish();

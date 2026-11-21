@@ -10,6 +10,7 @@ export type ErrorCode =
   | "invalid_credentials"
   | "paper_missing"
   | "paper_held"
+  | "roles_not_reviewed"
   | "paper_not_released"
   | "paper_closed"
   | "wrong_sitting"

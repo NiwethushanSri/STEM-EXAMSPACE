@@ -51,6 +51,34 @@ Deno.test("copy_after_release_is_pdf_and_logged", async () => {
   }
 });
 
+Deno.test("no_copy_until_page_roles_are_checked", async () => {
+  const fx = await setup(5);
+  try {
+    const paper = await fx.addPaper(await makePdf(2), "paper", 2, undefined, false);
+    const family = await call("paper-copy", fx.student.token, { bookingId: fx.bookingId, kind: "home" });
+    assertEquals(family.status, 409);
+    const told = (await family.json()).error;
+    assertEquals(told.code, "roles_not_reviewed");
+    assertEquals(told.message, "Your paper is not ready yet. Please contact the institution.");
+    assertEquals(await downloads(fx), 0);
+    // The admin's own preview and the sample copy still work: that is how the roles are checked.
+    const preview = await call("paper-copy", fx.admin.token, { bookingId: fx.bookingId, kind: "admin_preview" });
+    assertEquals(preview.status, 200);
+    await preview.arrayBuffer();
+    const sample = await call("paper-copy", fx.admin.token, { paperId: paper.id, kind: "admin_sample" });
+    assertEquals(sample.status, 200);
+    await sample.arrayBuffer();
+
+    const done = await fx.svc.from("exam_papers").update({ pages_reviewed_at: new Date().toISOString() }).eq("id", paper.id);
+    assertEquals(done.error, null);
+    const res = await call("paper-copy", fx.student.token, { bookingId: fx.bookingId, kind: "home" });
+    assertEquals(res.status, 200);
+    await res.arrayBuffer();
+  } finally {
+    await fx.cleanup();
+  }
+});
+
 Deno.test("failed_build_is_not_logged", async () => {
   const fx = await setup(5);
   try {

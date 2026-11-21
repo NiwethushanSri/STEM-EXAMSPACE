@@ -49,7 +49,9 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
 
       {current && current.pagesReviewedAt === null && !locked && (
         <div role="status" data-testid="page-roles-warning" className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          Check the page roles before the release time. Say which pages are answer pages and hide any candidate name boxes.
+          Check the page roles before the release time. Say which pages are answer pages and hide any candidate name boxes. Until
+          the roles are saved, the paper cannot be released and no copy is made for candidates (at home, in a print pack or as a
+          reprint).
         </div>
       )}
 
@@ -67,7 +69,8 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
         codeLocked={v.hasCopies}
         nowMs={nowMs}
       />
-      <PrintPanel examTitle={v.exam.title} examCode={v.exam.examCode} startsAt={v.exam.startsAt} paperVersion={current?.version ?? null} centres={v.centres} />
+      <PrintPanel examTitle={v.exam.title} examCode={v.exam.examCode} startsAt={v.exam.startsAt} paperVersion={current?.version ?? null}
+        rolesChecked={current !== null && current.pagesReviewedAt !== null} centres={v.centres} />
       {v.centres.length > 0 && (
         <ScanBatches examId={v.exam.id} centres={v.centres.map((c) => ({ id: c.id, venue: c.venue, room: c.room }))} batches={scans} />
       )}

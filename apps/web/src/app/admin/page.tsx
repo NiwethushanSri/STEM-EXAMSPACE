@@ -3,7 +3,7 @@ import Link from "next/link";
 import { AppShell, Card } from "@/components/AppShell";
 import { AccountsOverview } from "@/components/accounts/AccountsSection";
 import { parseScriptsDashboard, scriptsDashboardAlerts, type ScriptsDashboard } from "@/lib/alerts";
-import { loadExamsMissingPaper } from "@/lib/exams-staff";
+import { loadExamsMissingPaper, loadExamsRolesUnchecked } from "@/lib/exams-staff";
 import { missingPaperWarning } from "@/lib/print-pack";
 import { formatLondon } from "@/lib/money";
 import { requireStaff } from "@/lib/staff-gate";
@@ -28,6 +28,38 @@ async function MissingPapers() {
               </span>
               <Link href={`/admin/exams/${e.id}`} className="text-blue-700 underline">
                 Upload paper
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </div>
+  );
+}
+
+/** Published exams due for release within 24 hours whose paper's page roles nobody has checked: the paper cannot be
+ * released and no copy is made for candidates until an admin saves the roles. Shows nothing when there are none. */
+async function RolesUnchecked() {
+  const unchecked = await loadExamsRolesUnchecked();
+  const now = new Date();
+  const due = unchecked.filter((e) => missingPaperWarning({ status: "published", hasPaper: false, releaseAt: e.releaseAt }, now));
+  if (due.length === 0) return null;
+  return (
+    <div className="mb-6" data-testid="roles-unchecked">
+      <Card title="Page roles not checked">
+        <p className="mb-2 text-sm text-amber-900">
+          These exams are due for release within 24 hours, but nobody has checked their paper&apos;s page roles. Until then no copy is made
+          for candidates.
+        </p>
+        <ul className="divide-y divide-slate-100 text-sm">
+          {due.map((e) => (
+            <li key={e.id} className="flex items-center justify-between py-2.5">
+              <span>
+                <span className="font-medium">{e.title}</span>
+                {e.paper ? ` (${e.paper})` : ""} · release {formatLondon(e.releaseAt)}
+              </span>
+              <Link href={`/admin/exams/${e.id}`} className="text-blue-700 underline">
+                Check page roles
               </Link>
             </li>
           ))}
@@ -166,6 +198,9 @@ export default function AdminDashboard() {
     <AppShell role="admin" title="Admin dashboard">
       <Suspense fallback={null}>
         <MissingPapers />
+      </Suspense>
+      <Suspense fallback={null}>
+        <RolesUnchecked />
       </Suspense>
       <Suspense fallback={<p className="mb-6 text-sm text-slate-500">Loading the scripts figures...</p>}>
         <ScriptsOverview />

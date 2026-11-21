@@ -36,7 +36,13 @@ const REFUSALS: Record<string, [ErrorCode, number, string]> = {
   invalid_input: ["invalid_input", 400, "Please check the details you entered."],
 };
 
-function refusal(code: unknown): HttpError {
+/** The paper's page roles have not been checked yet (the database refuses every candidate's copy until then). */
+const ROLES_FAMILY = "Your paper is not ready yet. Please contact the institution.";
+const ROLES_STAFF =
+  'Check the page roles first: on the exam page, open "Page roles and hidden areas", set each page and save. No copy is made before that.';
+
+function refusal(code: unknown, staff = false): HttpError {
+  if (code === "roles_not_reviewed") return new HttpError("roles_not_reviewed", 409, staff ? ROLES_STAFF : ROLES_FAMILY);
   const r = typeof code === "string" && Object.hasOwn(REFUSALS, code) ? REFUSALS[code] : null;
   return r ? new HttpError(r[0], r[1], r[2]) : new HttpError("internal", 500, "Something went wrong. Please try again.");
 }
@@ -173,7 +179,7 @@ Deno.serve(handle(async (req) => {
     paper_version: number;
     differs_from_previous: boolean;
   };
-  if (!issued.ok) throw refusal(issued.code);
+  if (!issued.ok) throw refusal(issued.code, caller.role === "owner" || caller.role === "admin");
 
   const master = await readMaster(issued.storage_path);
   if (!master) throw new HttpError("paper_unreadable", 422, FAILED);

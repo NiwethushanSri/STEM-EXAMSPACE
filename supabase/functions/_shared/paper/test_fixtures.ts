@@ -55,6 +55,8 @@ export interface Fixture {
     kind: "paper" | "insert",
     pages: number,
     title?: string,
+    /** Whether an admin has checked the paper's page roles (no candidate's copy is made before that). Default true. */
+    reviewed?: boolean,
   ): Promise<{ id: string; path: string }>;
   cleanup(): Promise<void>;
 }
@@ -121,7 +123,7 @@ export async function setup(startsInMinutes: number): Promise<Fixture> {
       paths.push(path);
       return path;
     };
-    fx.addPaper = async (bytes, kind, pages, title) => {
+    fx.addPaper = async (bytes, kind, pages, title, reviewed = true) => {
       const path = await fx.upload(bytes);
       const row = await svc.from("exam_papers").insert({
         exam_id: examId,
@@ -131,6 +133,7 @@ export async function setup(startsInMinutes: number): Promise<Fixture> {
         storage_path: path,
         page_count: pages,
         byte_size: bytes.length,
+        pages_reviewed_at: kind === "paper" && reviewed ? new Date().toISOString() : null,
       }).select("id").single();
       if (row.error) throw new Error(`paper: ${row.error.message}`);
       return { id: row.data.id as string, path };

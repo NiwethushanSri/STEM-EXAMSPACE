@@ -21,7 +21,7 @@ export type FunctionResult<T> = { data: T } | { error: FunctionError };
 const CODES = [
   "unauthenticated", "forbidden", "not_found", "conflict", "invalid_input",
   "parent_email_is_staff", "email_in_use", "rate_limited", "invalid_credentials", "internal",
-  "paper_missing", "paper_held", "paper_not_released", "paper_closed", "wrong_sitting",
+  "paper_missing", "paper_held", "roles_not_reviewed", "paper_not_released", "paper_closed", "wrong_sitting",
   "paper_unreadable", "paper_encrypted", "paper_too_large",
 ] as const satisfies readonly ErrorCode[];
 
