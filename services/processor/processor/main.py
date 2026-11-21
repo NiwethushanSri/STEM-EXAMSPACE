@@ -65,11 +65,11 @@ def job_context(claimed: dict) -> JobContext:
     return JobContext(copies=copies, papers=papers)
 
 
-def page_paths(upload: dict, job_id: int, index: int) -> tuple[str, str]:
-    """Where the job's pictures of page `index` of an upload go in script-pages, in the job's own folder:
-    <exam>/<upload>/<job>/<index>-full.jpg and -marking.jpg. A rerun or a remask writes new paths, so the pictures of
-    a page kept with an earlier version are never overwritten."""
-    base = f"{upload['exam_id']}/{upload['id']}/{job_id}/{index}"
+def page_paths(upload: dict, job_id: int, attempt: int, index: int) -> tuple[str, str]:
+    """Where a job's attempt puts its pictures of page `index` of an upload in script-pages, in its own folder:
+    <exam>/<upload>/<job>-<attempt>/<index>-full.jpg and -marking.jpg. A rerun, a remask or a retried attempt writes
+    new paths, so no picture another page row names is ever overwritten."""
+    base = f"{upload['exam_id']}/{upload['id']}/{job_id}-{attempt}/{index}"
     return f"{base}-full.jpg", f"{base}-marking.jpg"
 
 
@@ -138,7 +138,7 @@ def _prepare(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> in
     pages = []
     for page in pipeline.iter_prepare(data, upload["kind"], upload["mime"], job_context(claimed)):
         beat.check()
-        full_path, marking_path = page_paths(upload, job["id"], page.source_index)
+        full_path, marking_path = page_paths(upload, job["id"], job["attempts"], page.source_index)
         client.upload(PAGES, full_path, page.full, "image/jpeg")
         if page.marking is not None:
             client.upload(PAGES, marking_path, page.marking, "image/jpeg")
@@ -170,7 +170,7 @@ def _remask(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> int
             provable=bool(p.get("provable")), confirmed=bool(p.get("confirmed")))
         marking_path = None
         if marking is not None:
-            marking_path = page_paths(upload, job["id"], int(p["source_index"]))[1]
+            marking_path = page_paths(upload, job["id"], job["attempts"], int(p["source_index"]))[1]
             client.upload(PAGES, marking_path, marking, "image/jpeg")
         items.append({"page_id": p["page_id"], "marking_path": marking_path, "rotation": int(p["rotation"]), "key": p["key"]})
     beat.check()

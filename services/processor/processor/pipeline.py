@@ -217,23 +217,30 @@ def remask(
     paper version's hidden areas on its copy page (fractions of the A4 copy page); `staff_areas` the areas staff
     drew on the full picture (fractions of the stored full picture, so they are painted before the turn).
 
-    The picture is turned first. Then, as one union painted white: the nominal name band, the paper's areas and the
-    staff areas; and, only when the page's geometry is proved again from the full picture with a prepare's checks
-    (its code read again as `code` page `copy_page`, then fit_page: both rules found along their length, the printed
-    rectangle, the code's scale, its aspect and its vertical scale, nothing in the identity box), the band and areas
-    placed through that fit and everything above the measured top rule (marking_image). A page whose geometry is not
-    proved gets a marking picture only when staff confirmed it (`confirmed`: they hid the name, or said there is
-    none): the nominal band, the paper's areas and the staff areas. Otherwise None: no marking picture. `provable` is
-    False for a page whose prepare flagged layout_unexpected (placed by its code alone, or its fit not proved): it is
-    never proved here."""
+    The staff areas, the nominal name band and the paper's areas are painted white on the stored picture (its own
+    frame: defence in depth, Ruling R32 c), then the picture is turned. Then, on the turned picture, as one union
+    painted white:
+    - a page that may be proved (`provable`: it has a code and its prepare did not flag layout_unexpected; every
+      page that ever had a proved marking picture is one): only when its geometry is proved again from the full
+      picture with a prepare's checks (its code read again as `code` page `copy_page`, then fit_page: both rules
+      found along their length, the printed rectangle, the code's scale, its aspect and its vertical scale, nothing
+      in the identity box), the nominal band and the areas, the band and areas placed through that fit and
+      everything above the measured top rule (marking_image). If the proof fails there is no marking picture, even
+      when staff confirmed the page (Ruling R32 b): a turned or re-read page could show its printed name elsewhere;
+    - any other page (no code, or placed by its code alone): only when staff confirmed it (`confirmed`: they hid the
+      name, or said there is none, for the page as it is turned now), the nominal band and the paper's areas.
+    Otherwise None: no marking picture."""
     if rotation not in (0, 90, 180, 270):
         raise ValueError("rotation must be a quarter turn")
     img = imaging.load_photo(full)
     painted = img.copy()
     imaging.paint_areas(painted, list(staff_areas))
+    painted = imaging.nominal_marking_image(painted, areas)  # the band and the paper's areas in the stored frame too
     clean = imaging.to_a4(_turned(img, rotation))
     page = imaging.to_a4(_turned(painted, rotation))
-    if provable and code is not None and copy_page is not None:
+    if provable:
+        if code is None or copy_page is None:
+            return None
         # Proved on the picture without the staff areas (they may cover the identity line the fit looks for); the
         # painted picture has the same geometry.
         read = imaging.read_code(clean)
@@ -241,6 +248,7 @@ def remask(
             fit = imaging.fit_page(clean, read)
             if fit.expected:
                 return imaging.encode_jpeg(imaging.marking_image(page, areas, fit))
+        return None  # never the nominal fallback for a page that may be proved
     if confirmed:
         return imaging.encode_jpeg(imaging.nominal_marking_image(page, areas))
     return None

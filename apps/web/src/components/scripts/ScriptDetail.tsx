@@ -176,7 +176,11 @@ function PageView({ detail, page, upload }: { detail: ScriptDetail; page: Detail
               another paper version, or one that does not belong here.
             </p>
           ) : (
-            <p className="text-sm text-slate-600">The full page stays as it was stored; the marking picture is made again, turned.</p>
+            <p className="text-sm text-slate-600">
+              The full page stays as it was stored. Turning a page takes its marking picture away until it is made again: a page whose
+              code reads upright gets one back only when it is turned back; a page without a code needs its name hidden (or &quot;no
+              name&quot; said) again in the exception queue.
+            </p>
           )}
           <ReasonForm
             key={`${page.pageId}|${tool}`}
@@ -287,8 +291,8 @@ export function ScriptDetailView({ detail }: { detail: ScriptDetail }) {
                   <details className="rounded border border-slate-200 p-3">
                     <summary className="cursor-pointer text-sm font-medium text-blue-800">Process this file again</summary>
                     <p className="my-2 text-sm text-slate-600">
-                      The file is read again from the original and its pages are replaced. Staff changes to its pages (turns, hidden names) are
-                      made again from scratch.
+                      The file is read again from the original and its pages are replaced. Staff changes to its pages (turns, hidden names,
+                      confirmations) are lost and must be done again.
                     </p>
                     <ReasonForm
                       scriptId={s.id}

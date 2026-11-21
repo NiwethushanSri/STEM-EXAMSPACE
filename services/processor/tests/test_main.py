@@ -127,13 +127,13 @@ def test_prepare_job_stores_pictures_and_records_pages():
     assert sha256 == hashlib.sha256(synth.fixture_bytes("copy-a.pdf")).hexdigest()
     assert [(p["source_index"], p["code"], p["copy_page"]) for p in pages] == [(i, synth.CODE_A, i + 1) for i in range(5)]
     for p in pages:
-        assert p["full_path"] == f"{EXAM}/{UPLOAD}/7/{p['source_index']}-full.jpg"  # the job's own folder
+        assert p["full_path"] == f"{EXAM}/{UPLOAD}/7-2/{p['source_index']}-full.jpg"  # the job's folder for this attempt
         assert set(p["quality"]) == {"sharpness", "brightness", "cut_off", "flags"} and p["blank"] is False
         assert p["rotation"] == 0
         assert client.stored[p["full_path"]][:2] == b"\xff\xd8"
     # The cover is not an answer page, so it has no marking picture; the answer and spare pages do.
     assert pages[0]["marking_path"] is None
-    assert [p["marking_path"] for p in pages[1:]] == [f"{EXAM}/{UPLOAD}/7/{i}-marking.jpg" for i in range(1, 5)]
+    assert [p["marking_path"] for p in pages[1:]] == [f"{EXAM}/{UPLOAD}/7-2/{i}-marking.jpg" for i in range(1, 5)]
     assert all(client.stored[p["marking_path"]][:2] == b"\xff\xd8" for p in pages[1:])
     assert all(c[1] == "script-pages" and c[3] == "image/jpeg" for c in client.named("upload"))
     assert client.named("finish") == [("finish", 7, True, None, "w-1", 2)]
@@ -219,13 +219,22 @@ def test_page_without_marking_picture_records_null(monkeypatch):
     client = FakeClient()
     main.process(client, "w-1", claimed())
     (_, _, pages, _, _, _), = client.named("record_pages")
-    assert [p["marking_path"] for p in pages] == [f"{EXAM}/{UPLOAD}/7/0-marking.jpg", None]
-    assert f"{EXAM}/{UPLOAD}/7/1-marking.jpg" not in client.stored
+    assert [p["marking_path"] for p in pages] == [f"{EXAM}/{UPLOAD}/7-1/0-marking.jpg", None]
+    assert f"{EXAM}/{UPLOAD}/7-1/1-marking.jpg" not in client.stored
 
 
-def test_page_paths_are_in_the_jobs_own_folder():
+def test_page_paths_are_in_the_folder_of_the_job_and_attempt():
     upload = claimed()["upload"]
-    assert main.page_paths(upload, 12, 3) == (f"{EXAM}/{UPLOAD}/12/3-full.jpg", f"{EXAM}/{UPLOAD}/12/3-marking.jpg")
+    assert main.page_paths(upload, 12, 2, 3) == (f"{EXAM}/{UPLOAD}/12-2/3-full.jpg", f"{EXAM}/{UPLOAD}/12-2/3-marking.jpg")
+
+
+def test_a_retried_attempt_never_overwrites_the_last_attempts_pictures(monkeypatch):
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    client = FakeClient()
+    main.process(client, "w-1", claimed(attempts=1))
+    main.process(client, "w-1", claimed(attempts=2))
+    first, second = ({c[2] for c in client.named("upload") if f"/7-{a}/" in c[2]} for a in (1, 2))
+    assert first and second and first.isdisjoint(second)
 
 
 def test_a_rerun_never_overwrites_an_earlier_runs_pictures(monkeypatch):
@@ -233,7 +242,7 @@ def test_a_rerun_never_overwrites_an_earlier_runs_pictures(monkeypatch):
     client = FakeClient()
     main.process(client, "w-1", claimed(job_id=7))
     main.process(client, "w-1", claimed(job_id=8))
-    first, second = ({c[2] for c in client.named("upload") if f"/{j}/" in c[2]} for j in (7, 8))
+    first, second = ({c[2] for c in client.named("upload") if f"/{j}-1/" in c[2]} for j in (7, 8))
     assert first and second and first.isdisjoint(second)
     assert len(client.named("upload")) == len(first) + len(second)
 
@@ -274,13 +283,13 @@ def test_remask_job_makes_marking_pictures_from_the_full_pictures_only(monkeypat
 
     # Only the full pictures are read: the original is never downloaded, and no full picture is written.
     assert client.named("download") == [("download", "script-pages", FULL_0), ("download", "script-pages", FULL_1)]
-    assert client.named("upload") == [("upload", "script-pages", f"{EXAM}/{UPLOAD}/9/0-marking.jpg", "image/jpeg")]
-    assert client.stored == {f"{EXAM}/{UPLOAD}/9/0-marking.jpg": b"new-marking-0"}
+    assert client.named("upload") == [("upload", "script-pages", f"{EXAM}/{UPLOAD}/9-1/0-marking.jpg", "image/jpeg")]
+    assert client.stored == {f"{EXAM}/{UPLOAD}/9-1/0-marking.jpg": b"new-marking-0"}
     assert client.pictures == {FULL_0: b"full-0", FULL_1: b"full-1"}
     (_, job_id, pages, worker, attempt), = client.named("record_remask")
     assert (job_id, worker, attempt) == (9, "w-1", 1)
     assert pages == [
-        {"page_id": "page-0", "marking_path": f"{EXAM}/{UPLOAD}/9/0-marking.jpg", "rotation": 90, "key": "k0"},
+        {"page_id": "page-0", "marking_path": f"{EXAM}/{UPLOAD}/9-1/0-marking.jpg", "rotation": 90, "key": "k0"},
         {"page_id": "page-1", "marking_path": None, "rotation": 0, "key": "k1"},
     ]
     assert client.named("record_pages") == []
@@ -303,7 +312,7 @@ def test_remask_with_a_real_page_hides_the_band():
     job["pages"] = [dict(job["pages"][0], turn=0, rotation=0, staff_areas=[])]
     client = FakeClient(pictures={FULL_0: page.full})
     assert main.process(client, "w-1", job) == "done"
-    marking = np.asarray(Image.open(io.BytesIO(client.stored[f"{EXAM}/{UPLOAD}/9/0-marking.jpg"])).convert("RGB"))
+    marking = np.asarray(Image.open(io.BytesIO(client.stored[f"{EXAM}/{UPLOAD}/9-1/0-marking.jpg"])).convert("RGB"))
     full = np.asarray(Image.open(io.BytesIO(page.full)).convert("RGB"))
     assert full[:90].min() < 100 and marking[:90].min() > 225 and marking[-300:].min() < 100
 

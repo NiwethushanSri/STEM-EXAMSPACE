@@ -136,10 +136,11 @@ def test_a_page_whose_fit_fails_gets_no_marking_picture_without_confirmation(unp
 
 
 def test_a_turned_confirmed_page_hides_the_staff_area_drawn_on_the_stored_picture(stored):
-    """Staff draw areas on the full picture as it is stored; turning the page later keeps them over the name."""
+    """Staff draw areas on the full picture as it is stored; turning the page later keeps them over the name. (A page
+    that may not be proved, confirmed for its new turn.)"""
     full = decode(stored)
     area = staff_area_over(synth.red(full))
-    marking = pipeline.remask(stored, 90, [], staff_areas=[area], confirmed=True)
+    marking = pipeline.remask(stored, 90, [], staff_areas=[area], provable=False, confirmed=True)
     assert marking is not None
     m = decode(marking)
     turned = imaging.to_a4(np.ascontiguousarray(np.rot90(full, -1)))  # the stored picture turned a quarter clockwise
@@ -194,11 +195,57 @@ def test_a_codeless_staff_confirmed_page_gets_a_marking_picture_with_the_staff_a
 
 def test_a_page_proved_before_that_cannot_be_proved_now_gets_no_marking_picture(stored):
     """The prepare proved this page (it had a marking picture). Turned a quarter by staff it can no longer be proved:
-    the remask makes none (the database then takes the old one away and tells staff), until staff confirm it."""
+    the remask makes none (the database then takes the old one away and tells staff), and a staff confirmation does
+    not change that for a page that may be proved (Ruling R32 b)."""
     assert pipeline.remask(stored, 0, [QUESTION_AREA], code=A, copy_page=2) is not None
     assert pipeline.remask(stored, 90, [QUESTION_AREA], code=A, copy_page=2) is None
+    area = staff_area_over(synth.red(decode(stored)))
+    assert pipeline.remask(stored, 90, [QUESTION_AREA], staff_areas=[area], code=A, copy_page=2, confirmed=True) is None
+
+
+# Ruling R32 ------------------------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("turn", [0, 90, 180, 270])
+def test_a_proved_page_confirmed_with_an_area_elsewhere_then_turned_never_shows_the_name(stored, turn):
+    """The review's probe: staff hid something else on the page (the question text, as a name written in a margin)
+    and confirmed it; later they turn it. A page that may be proved never takes the nominal band: either it is proved
+    again and the name is white, or there is no marking picture."""
     full = decode(stored)
-    area = staff_area_over(synth.red(full))
-    m = decode(pipeline.remask(stored, 90, [QUESTION_AREA], staff_areas=[area], code=A, copy_page=2, confirmed=True))
-    turned = imaging.to_a4(np.ascontiguousarray(np.rot90(full, -1)))
-    assert not (synth.red(turned) & ~white(m)).any()
+    elsewhere = staff_area_over(synth.blue(full), margin=0)
+    marking = pipeline.remask(stored, turn, [QUESTION_AREA], staff_areas=[elsewhere], code=A, copy_page=2, provable=True,
+                              confirmed=True)
+    if turn == 0:
+        assert marking is not None  # upright: proved again
+        name = synth.red(full)
+        assert name.sum() > 1000 and not (name & ~white(decode(marking))).any()
+    else:
+        assert marking is None
+
+
+def test_a_proved_page_whose_stored_picture_no_longer_proves_gets_none_even_if_confirmed(stored):
+    """The stored JPEG of a page the prepare proved fails the proof now (its top rule is gone): no marking picture,
+    staff confirmation or not."""
+    full = decode(stored).copy()
+    rule = round(imaging.TOP_RULE_PT * W / imaging.PAGE_PT[0])
+    full[rule - 6:rule + 7] = 255
+    damaged = synth.jpeg(full, quality=95)
+    area = staff_area_over(synth.red(decode(stored)))
+    assert pipeline.remask(damaged, 0, [QUESTION_AREA], code=A, copy_page=2) is None
+    assert pipeline.remask(damaged, 0, [QUESTION_AREA], staff_areas=[area], code=A, copy_page=2, confirmed=True) is None
+
+
+def test_the_band_is_also_painted_in_the_stored_frame_before_the_turn():
+    """Defence in depth (Ruling R32 c): a confirmed page with no code whose name lies in the stored picture's top band
+    is turned upside down; the name, now at the bottom, is still white."""
+    sheet = np.full((H, W, 3), 255, np.uint8)
+    cv2.putText(sheet, "Sam One  SE-2097-6601", (120, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (230, 0, 0), 4, cv2.LINE_AA)
+    sheet = synth.with_writing(sheet, "working")
+    [p] = pipeline.prepare(synth.scan_pdf([synth.scan(sheet, seed=43)]), "scan_file", PDF, ctx())
+    assert p.code is None
+    full = decode(p.full)
+    assert synth.red(full)[:BAND].sum() > 500
+    m = decode(pipeline.remask(p.full, 180, [], provable=False, confirmed=True))
+    name = synth.red(np.ascontiguousarray(np.rot90(full, 2)))
+    assert name.sum() > 500 and not (name & ~white(m)).any()
+    assert m[:BAND].min() > 225

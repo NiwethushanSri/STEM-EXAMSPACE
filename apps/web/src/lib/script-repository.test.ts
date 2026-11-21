@@ -176,5 +176,8 @@ describe("the repository actions", () => {
     expect(repoFailureMessage({ code: "script_locked" })).toContain("being marked");
     expect(repoFailureMessage({ code: "conflict", reason: "busy" })).toContain("already waiting");
     expect(repoFailureMessage({})).toBe("Something went wrong. Please try again.");
+    // Voiding a final script: results are out, which is why it cannot be voided (not "being marked").
+    expect(repoFailureMessage({ code: "script_locked" }, "void")).toContain("results are out");
+    expect(repoFailureMessage({ code: "script_locked" }, "rotate")).toContain("being marked");
   });
 });

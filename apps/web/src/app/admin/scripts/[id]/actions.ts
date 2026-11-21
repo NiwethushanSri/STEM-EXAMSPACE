@@ -45,5 +45,5 @@ export async function scriptRepositoryAction(scriptId: string, input: RepoInput)
   revalidatePath("/admin/scripts");
   if (error || !data || typeof data !== "object" || Array.isArray(data)) return { ok: false, message: GENERIC };
   const a = data as { ok?: unknown; code?: unknown; reason?: unknown };
-  return a.ok === true ? { ok: true, message: repoDoneMessage(input) } : { ok: false, message: repoFailureMessage(a) };
+  return a.ok === true ? { ok: true, message: repoDoneMessage(input) } : { ok: false, message: repoFailureMessage(a, input.action) };
 }

@@ -92,8 +92,8 @@ returns jsonb language sql stable as $$
     'code', (select code from public.paper_copies where id = pg_temp.k(p_copy)), 'copy_page', p_page, 'blank', false,
     'quality', jsonb_build_object('sharpness', 200, 'brightness', 180, 'cut_off', false, 'flags', to_jsonb(p_flags)),
     'rotation', 0,
-    'full_path', u.exam_id::text || '/' || u.id::text || '/' || p_idx || '-full.jpg',
-    'marking_path', case when p_copy is not null then u.exam_id::text || '/' || u.id::text || '/' || p_idx || '-marking.jpg' end)
+    'full_path', u.exam_id::text || '/' || u.id::text || '/' || coalesce((select j.id || '-' || (j.attempts + case when j.state = 'queued' then 1 else 0 end) from public.processing_jobs j where j.upload_id = u.id and j.kind = 'prepare' and j.state in ('queued', 'running') order by j.id desc limit 1), 'none') || '/' || p_idx || '-full.jpg',
+    'marking_path', case when p_copy is not null then u.exam_id::text || '/' || u.id::text || '/' || coalesce((select j.id || '-' || (j.attempts + case when j.state = 'queued' then 1 else 0 end) from public.processing_jobs j where j.upload_id = u.id and j.kind = 'prepare' and j.state in ('queued', 'running') order by j.id desc limit 1), 'none') || '/' || p_idx || '-marking.jpg' end)
   from public.script_uploads u where u.id = pg_temp.k(p_up)
 $$;
 create function pg_temp.run(p_up text, p_pages jsonb) returns jsonb language plpgsql as $$
@@ -103,6 +103,10 @@ declare
 begin
   update public.processing_jobs set run_after = '2000-01-01' where upload_id = pg_temp.k(p_up) and state = 'queued';
   v := public.processing_job_claim('t-worker');
+  -- The pages go to the claimed job's folder for this attempt (they may have been made before it existed, or for an
+  -- earlier run of the file).
+  p_pages := regexp_replace(p_pages::text, '/(none|[0-9]+-[0-9]+)/([0-9]+-(full|marking)[.]jpg)',
+    '/' || (v -> 'job' ->> 'id') || '-' || (v -> 'job' ->> 'attempts') || '/\2', 'g')::jsonb;
   if v is null or v -> 'upload' ->> 'id' <> pg_temp.k(p_up)::text then
     raise exception 'claimed another job';
   end if;

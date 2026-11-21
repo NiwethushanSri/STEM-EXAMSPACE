@@ -273,6 +273,7 @@ export function foundInWords(item: QueueItem): string[] {
       } else if (str(d.from) === "remask") {
         out.push("Its marking picture could not be made again after its hidden areas or its turn changed, so the old one was taken away (this is not the family's file).");
         out.push("Hide the candidate's name on the full page, or tick that there is none, then accept it.");
+        out.push("A page with a code gets its marking picture back only from its print layout: turn it back upright, or process its file again from the script's page.");
       } else if (d.marking_picture === false) {
         out.push("No marking picture could be made for this answer page.");
       }
@@ -287,7 +288,12 @@ export function foundInWords(item: QueueItem): string[] {
     case "name_visible":
       return ["A marker reported that a name can be seen on this page. Hide it, then confirm."];
     case "processing_failed": {
-      if (isRemaskFailure(item)) return ["The marking picture could not be made (this is not the family's file)."];
+      if (isRemaskFailure(item)) {
+        return [
+          "The marking pictures could not be made (this is not the family's file), so the file's old ones were taken away.",
+          "Noting it has them made again.",
+        ];
+      }
       const attempts = num(d.attempts);
       return [`The file could not be prepared${attempts !== null ? ` after ${attempts} attempts` : ""}.`];
     }
@@ -375,7 +381,9 @@ export function actionLabel(action: QueueAction, item: QueueItem): string {
             ? "Check again"
             : item.kind === "name_visible"
               ? "Name is hidden"
-              : "Noted";
+              : isRemaskFailure(item)
+                ? "Make the marking pictures again"
+                : "Noted";
     case "dismiss_missing":
       return "Confirm left blank";
     case "late_accept":

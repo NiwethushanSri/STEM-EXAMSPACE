@@ -1606,8 +1606,17 @@ isOneToOne: false
 "script_number_next":
 { Args: { "p_exam": string }; Returns: string
                            },
+"script_page_areas_key":
+{ Args: { "p_page": string }; Returns: string
+                           },
+"script_page_binding":
+{ Args: { "p_page": string }; Returns: Json
+                           },
 "script_page_bookings":
 { Args: { "p_page": string }; Returns: (string)[]
+                           },
+"script_page_confirm_given":
+{ Args: { "p_page": string }; Returns: boolean
                            },
 "script_page_confirmed":
 { Args: { "p_page": string }; Returns: boolean
@@ -1626,6 +1635,15 @@ isOneToOne: false
                            },
 "script_page_locked":
 { Args: { "p_page": string }; Returns: boolean
+                           },
+"script_page_marking_lost":
+{ Args: { "p_page": string }; Returns: undefined
+                           },
+"script_page_marking_made":
+{ Args: { "p_page": string }; Returns: undefined
+                           },
+"script_page_owners":
+{ Args: { "p_page": string }; Returns: (string)[]
                            },
 "script_page_poor":
 { Args: { "p_answer": boolean,"p_marking": string,"p_quality": Json }; Returns: boolean
@@ -1684,8 +1702,14 @@ isOneToOne: false
 "script_upload_begin":
 { Args: { "p_bytes": number,"p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string,"p_now"?: string,"p_submission": string }; Returns: Json
                            },
+"script_upload_bookings":
+{ Args: { "p_upload": string }; Returns: (string)[]
+                           },
 "script_upload_discard":
 { Args: { "p_upload": string }; Returns: Json
+                           },
+"script_upload_lock":
+{ Args: { "p_upload": string }; Returns: (string)[]
                            },
 "script_upload_never_handed_in":
 { Args: { "p_now": string,"p_upload": string }; Returns: boolean

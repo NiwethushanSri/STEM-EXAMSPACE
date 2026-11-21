@@ -81,8 +81,8 @@ create function pg_temp.page(p_up text, p_idx int, p_code text, p_page int, p_bl
   select jsonb_build_object('source_index', p_idx, 'code', p_code, 'copy_page', p_page, 'blank', p_blank,
     'quality', jsonb_build_object('sharpness', p_sharp, 'brightness', 180, 'cut_off', 'cut_off' = any (p_flags), 'flags', to_jsonb(p_flags)),
     'rotation', 0,
-    'full_path', u.exam_id::text || '/' || u.id::text || '/' || p_idx || '-full.jpg',
-    'marking_path', case when p_marking then u.exam_id::text || '/' || u.id::text || '/' || p_idx || '-marking.jpg' end)
+    'full_path', u.exam_id::text || '/' || u.id::text || '/' || coalesce((select j.id || '-' || (j.attempts + case when j.state = 'queued' then 1 else 0 end) from public.processing_jobs j where j.upload_id = u.id and j.kind = 'prepare' and j.state in ('queued', 'running') order by j.id desc limit 1), 'none') || '/' || p_idx || '-full.jpg',
+    'marking_path', case when p_marking then u.exam_id::text || '/' || u.id::text || '/' || coalesce((select j.id || '-' || (j.attempts + case when j.state = 'queued' then 1 else 0 end) from public.processing_jobs j where j.upload_id = u.id and j.kind = 'prepare' and j.state in ('queued', 'running') order by j.id desc limit 1), 'none') || '/' || p_idx || '-marking.jpg' end)
   from public.script_uploads u where u.id = pg_temp.k(p_up)
 $$;
 create function pg_temp.pg(p_up text, p_idx int, p_copy text, p_page int, p_sharp numeric default 200,
@@ -101,6 +101,10 @@ declare
 begin
   insert into public.processing_jobs (upload_id, kind) values (pg_temp.k(p_up), 'prepare');
   v := public.processing_job_claim('t-worker');
+  -- The pages go to the claimed job's folder for this attempt (they may have been made before it existed, or for an
+  -- earlier run of the file).
+  p_pages := regexp_replace(p_pages::text, '/(none|[0-9]+-[0-9]+)/([0-9]+-(full|marking)[.]jpg)',
+    '/' || (v -> 'job' ->> 'id') || '-' || (v -> 'job' ->> 'attempts') || '/\2', 'g')::jsonb;
   if v is null or v -> 'upload' ->> 'id' <> pg_temp.k(p_up)::text then
     raise exception 'claimed another job';
   end if;

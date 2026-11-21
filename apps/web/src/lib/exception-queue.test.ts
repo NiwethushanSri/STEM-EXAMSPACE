@@ -106,7 +106,7 @@ describe("foundInWords", () => {
     expect(foundInWords(item({ kind: "missing_pages", details: { pages: [], reason: "no_paper" } }))[0]).toContain("page roles");
     expect(foundInWords(item({ kind: "processing_failed", details: { kind: "prepare", attempts: 3 } }))[0]).toBe("The file could not be prepared after 3 attempts.");
     expect(foundInWords(item({ kind: "processing_failed", page: null, details: { kind: "remask", attempts: 3 } }))[0]).toBe(
-      "The marking picture could not be made (this is not the family's file).",
+      "The marking pictures could not be made (this is not the family's file), so the file's old ones were taken away.",
     );
   });
   it("names both paper versions of a duplicate when they differ", () => {
@@ -173,7 +173,7 @@ describe("actionsFor", () => {
     expect(actionLabel("reject", item({ kind: "poor_quality", upload: { ...raw().upload, source: "home" }, rejects_submission: false }))).toBe(
       "Reject this page",
     );
-    expect(actionLabel("confirm", item({ kind: "processing_failed", page: null, details: { kind: "remask" } }))).toBe("Noted");
+    expect(actionLabel("confirm", item({ kind: "processing_failed", page: null, details: { kind: "remask" } }))).toBe("Make the marking pictures again");
     expect(actionLabel("assign", item())).toBe("Use this page instead");
     expect(actionLabel("confirm", item({ kind: "poor_quality" }))).toBe("Accept as it is");
   });
@@ -277,6 +277,12 @@ describe("a page whose marking picture a remask could not make again", () => {
     const words = foundInWords(item({ kind: "poor_quality", details: { from: "remask", marking_picture: false, flags: [] } }));
     expect(words.join(" ")).toContain("not the family's file");
     expect(words.join(" ")).toContain("Hide the candidate's name");
+    // A page with a code is only ever made from its print layout (Ruling R32).
+    expect(words.join(" ")).toContain("process its file again");
+  });
+  it("says noting a remask failure makes the marking pictures again", () => {
+    const words = foundInWords(item({ kind: "processing_failed", page: null, details: { kind: "remask", attempts: 3 } }));
+    expect(words.join(" ")).toContain("made again");
   });
 });
 

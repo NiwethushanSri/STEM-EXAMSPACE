@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(114);
+select plan(126);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -69,15 +69,17 @@ insert into public.attendance (exam_id, student_id, status, marked_by, marked_at
 select pg_temp.k(t.x), pg_temp.uid(t.s), 'present', pg_temp.uid('admin'), '2031-08-04 09:00Z'
 from (values ('e', 's1'), ('e', 's2'), ('e', 's5'), ('f', 's6')) t(x, s);
 
--- The processing server (as postgres). An upload's pictures go to <exam>/<upload>/<job>/ (the job that makes them);
--- pages recorded before per-run folders sit at <exam>/<upload>/ (legacy).
+-- The processing server (as postgres). An upload's pictures go to <exam>/<upload>/<job>-<attempt>/ (the job and attempt
+-- that make them); legacy() is the upload's own folder.
 create function pg_temp.job(p_up text, p_kind text) returns bigint language sql stable as $$
   select id from public.processing_jobs where upload_id = pg_temp.k(p_up) and kind = p_kind and state in ('queued', 'running')
   order by id desc limit 1 $$;
 create function pg_temp.legacy(p_up text) returns text language sql stable as $$
   select u.exam_id::text || '/' || u.id::text || '/' from public.script_uploads u where u.id = pg_temp.k(p_up) $$;
 create function pg_temp.dir(p_up text) returns text language sql stable as $$
-  select pg_temp.legacy(p_up) || pg_temp.job(p_up, 'prepare') || '/' $$;
+  select pg_temp.legacy(p_up) || j.id || '-' || (j.attempts + case when j.state = 'queued' then 1 else 0 end) || '/'
+  from public.processing_jobs j where j.upload_id = pg_temp.k(p_up) and j.kind = 'prepare' and j.state in ('queued', 'running')
+  order by j.id desc limit 1 $$;
 create function pg_temp.page(p_up text, p_idx int, p_copy text, p_page int, p_flags text[] default '{}', p_marking boolean default true,
   p_dir text default null) returns jsonb language sql stable as $$
   select jsonb_build_object('source_index', p_idx,
@@ -96,6 +98,10 @@ declare
 begin
   update public.processing_jobs set run_after = '2000-01-01' where upload_id = pg_temp.k(p_up) and state = 'queued' and kind = 'prepare';
   v := public.processing_job_claim('t-worker');
+  -- The pages go to the claimed job's folder for this attempt (they may have been made before it existed, or for an
+  -- earlier run of the file).
+  p_pages := regexp_replace(p_pages::text, '/(none|[0-9]+-[0-9]+)/([0-9]+-(full|marking)[.]jpg)',
+    '/' || (v -> 'job' ->> 'id') || '-' || (v -> 'job' ->> 'attempts') || '/\2', 'g')::jsonb;
   if v is null or v -> 'upload' ->> 'id' <> pg_temp.k(p_up)::text or v -> 'job' ->> 'kind' <> 'prepare' then
     raise exception 'claimed another job: %', v -> 'job';
   end if;
@@ -126,8 +132,8 @@ $$;
 create function pg_temp.answer(p_claim jsonb, p_none int[] default '{}') returns jsonb language sql stable as $$
   select coalesce(jsonb_agg(jsonb_build_object('page_id', x ->> 'page_id', 'rotation', (x ->> 'rotation')::int, 'key', x ->> 'key',
     'marking_path', case when (x ->> 'source_index')::int <> all (p_none) then
-      (p_claim -> 'upload' ->> 'exam_id') || '/' || (p_claim -> 'upload' ->> 'id') || '/' || (p_claim -> 'job' ->> 'id') || '/'
-      || (x ->> 'source_index') || '-marking.jpg' end)), '[]'::jsonb)
+      (p_claim -> 'upload' ->> 'exam_id') || '/' || (p_claim -> 'upload' ->> 'id') || '/' || (p_claim -> 'job' ->> 'id') || '-'
+      || (p_claim -> 'job' ->> 'attempts') || '/' || (x ->> 'source_index') || '-marking.jpg' end)), '[]'::jsonb)
   from jsonb_array_elements(p_claim -> 'pages') x $$;
 create function pg_temp.remasked(p_claim jsonb, p_pages jsonb, p_worker text default 't-worker') returns jsonb language sql as $$
   select public.script_pages_remasked((p_claim -> 'job' ->> 'id')::bigint, p_worker, (p_claim -> 'job' ->> 'attempts')::int, p_pages) $$;
@@ -217,12 +223,11 @@ select pg_temp.run('u1', jsonb_build_array(
   pg_temp.page('u1', 4, 'q2a', 2), pg_temp.page('u1', 5, 'q2', 3), pg_temp.page('u1', 6, 'q2', 4),
   pg_temp.page('u1', 7, 'q5', 2), pg_temp.page('u1', 8, 'q5', 3, '{layout_unexpected}', false), pg_temp.page('u1', 9, null, null)));
 -- The folder of u1's first prepare job.
-create temp table prep1 as select pg_temp.legacy('u1') || max(id) || '/' as dir from public.processing_jobs where upload_id = pg_temp.k('u1') and kind = 'prepare';
+create temp table prep1 as select pg_temp.legacy('u1') || max(id) || '-1/' as dir from public.processing_jobs where upload_id = pg_temp.k('u1') and kind = 'prepare';
 grant select on prep1 to public;
--- Centre f, scanner file uf (pictures at the legacy place): fb's pages 1-2.
+-- Centre f, scanner file uf: fb's pages 1-2.
 select pg_temp.scan_file('uf', 'f', 'btf');
-select pg_temp.run('uf', jsonb_build_array(pg_temp.page('uf', 0, 'qf', 1, '{}', true, pg_temp.legacy('uf')),
-  pg_temp.page('uf', 1, 'qf', 2, '{}', true, pg_temp.legacy('uf'))));
+select pg_temp.run('uf', jsonb_build_array(pg_temp.page('uf', 0, 'qf', 1), pg_temp.page('uf', 1, 'qf', 2)));
 -- Home b3: on time, with a page with no code (4) that the family places after page 2 and staff confirm.
 select pg_temp.hand_in('s3', 'b3', 'd3', 'u3', '2031-08-04 10:40Z', '2031-08-04 10:45Z');
 select pg_temp.run('u3', jsonb_build_array(pg_temp.page('u3', 0, 'q3', 1), pg_temp.page('u3', 1, 'q3', 2), pg_temp.page('u3', 2, 'q3', 3),
@@ -238,6 +243,10 @@ select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x3_4'), 'Worki
 select is(public.script_exception_confirm(pg_temp.k('x3_4'), 'Working for question 2', true) ->> 'resolution', 'confirmed',
   'staff say there is no name on it');
 select tests.as_postgres();
+-- The processing server makes the marking pictures the confirmation asked for (the extra page's from the staff check).
+insert into res select 'r0', pg_temp.claim_remask('u3');
+select pg_temp.remasked(pg_temp.r('r0'), pg_temp.answer(pg_temp.r('r0')));
+select pg_temp.finish(pg_temp.r('r0'), true);
 -- Home b4: late.
 select pg_temp.hand_in('s4', 'b4', 'd4', 'u4', '2031-08-04 13:00Z', '2031-08-04 13:05Z');
 select pg_temp.run('u4', jsonb_build_array(pg_temp.page('u4', 0, 'q4', 1), pg_temp.page('u4', 1, 'q4', 2), pg_temp.page('u4', 2, 'q4', 3),
@@ -388,13 +397,18 @@ create temp table snap as select p.id, to_jsonb(p) - 'marking_path' as j, p.mark
 select is(pg_temp.code(pg_temp.remasked(pg_temp.r('r1'), pg_temp.answer(pg_temp.r('r1')), 'other-worker')), 'conflict',
   'only the worker holding the job may record it');
 select is(pg_temp.code(pg_temp.remasked(pg_temp.r('r1'), jsonb_set(pg_temp.answer(pg_temp.r('r1')), '{0,marking_path}',
-    to_jsonb(pg_temp.dir('u1') || '1-marking.jpg')))), 'invalid_input', 'a marking picture outside the remask job''s own folder is refused');
+    to_jsonb((select dir from prep1) || '1-marking.jpg')))), 'invalid_input', 'a marking picture outside the remask job''s own folder is refused');
 select is(pg_temp.code(pg_temp.remasked(pg_temp.r('r1'), pg_temp.answer(pg_temp.r('r1')) || jsonb_build_array(jsonb_build_object(
     'page_id', pg_temp.pid('uf', 1), 'rotation', 0, 'key', 'x', 'marking_path', null)))), 'invalid_input', 'and a page of another file');
-insert into res select 'rm1', pg_temp.remasked(pg_temp.r('r1'), pg_temp.answer(pg_temp.r('r1'), '{7,8}'));
+-- b2's page 4 already has an open poor_quality exception (blurred: it had a marking picture).
+insert into public.script_exceptions (exam_id, kind, booking_id, script_id, page_id, upload_id, details)
+values (pg_temp.k('e'), 'poor_quality', pg_temp.k('b2'), pg_temp.sid('b2'), pg_temp.pid('u1', 6), pg_temp.k('u1'),
+  '{"flags": ["blurred"], "copy_page": 4, "marking_picture": true}');
+insert into kv values ('x6', (select id from public.script_exceptions where page_id = pg_temp.pid('u1', 6) and kind = 'poor_quality'));
+insert into res select 'rm1', pg_temp.remasked(pg_temp.r('r1'), pg_temp.answer(pg_temp.r('r1'), '{6,7,8}'));
 select is(concat_ws('/', pg_temp.r('rm1') ->> 'ok', pg_temp.r('rm1') ->> 'pages', pg_temp.r('rm1') ->> 'marking', pg_temp.r('rm1') ->> 'stale'),
-  'true/8/6/0', 'the server records the new marking pictures');
-select is((pg_temp.pg('u1', 1)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r1') -> 'job' ->> 'id') || '/1-marking.jpg',
+  'true/8/5/0', 'the server records the new marking pictures');
+select is((pg_temp.pg('u1', 1)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r1') -> 'job' ->> 'id') || '-' || (pg_temp.r('r1') -> 'job' ->> 'attempts') || '/1-marking.jpg',
   'a new marking picture is in the remask job''s own folder');
 select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id where to_jsonb(p) - 'marking_path' = s.j),
   (select count(*)::int from snap), 'nothing but the marking picture changes: the full picture, rotation and the rest stay');
@@ -402,6 +416,14 @@ select is(concat_ws('/', (pg_temp.pg('u1', 7)).marking_path is null, (select mar
     (select details ->> 'from' from public.script_exceptions where page_id = pg_temp.pid('u1', 7) and kind = 'poor_quality' and state = 'open'),
     (select count(*) from public.script_exceptions where page_id = pg_temp.pid('u1', 8) and kind = 'poor_quality' and state = 'open')),
   't/t/remask/1', 'a centre answer page that loses its marking picture is raised for staff (once per page)');
+select is((select concat_ws('/', count(*), min(details ->> 'from'), min(details ->> 'marking_picture'), min(details -> 'before_remask' ->> 'marking_picture'))
+           from public.script_exceptions where page_id = pg_temp.pid('u1', 6) and kind = 'poor_quality' and state = 'open'),
+  '1/remask/false/true', 'R32: a page with an open poor_quality exception that loses its picture: merged into that one, not skipped');
+insert into kv values ('x7', pg_temp.exc('u1', 7, 'poor_quality'));
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x6'))) || ' ' || pg_temp.code(public.script_exception_confirm(pg_temp.k('x7'))),
+  'name_not_hidden name_not_hidden', 'R32: accepting either needs the name hidden or none said (marking_picture false)');
+select tests.as_postgres();
 select is(pg_temp.finish(pg_temp.r('r1'), true) ->> 'state', 'done', 'the remask job is done');
 
 -- A change while a remask job runs: the next job waits (one queued while one runs) and the stale page is not written.
@@ -416,7 +438,15 @@ select tests.as_postgres();
 select is(pg_temp.jobs('u1', 'remask', 'running') || '+' || pg_temp.jobs('u1', 'remask', 'queued'), '1+1',
   'staff hidden areas queue a remask job, which waits while one runs');
 select is(pg_temp.remasked(pg_temp.r('r2'), pg_temp.answer(pg_temp.r('r2'))) ->> 'stale', '1', 'the running job''s page 4 is stale');
-select is((pg_temp.pg('u1', 3)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r1') -> 'job' ->> 'id') || '/3-marking.jpg',
+select is(concat_ws('/', (select resolution from public.script_exceptions where id = pg_temp.k('x7')),
+    (select count(*) from public.audit_log where action = 'script_exception_marking_made' and target_id = pg_temp.k('x7')),
+    (select state || ':' || details::text from public.script_exceptions where id = pg_temp.k('x6'))),
+  'marking_made/1/open:{"flags": ["blurred"], "copy_page": 4, "marking_picture": true}',
+  'R32: once the marking pictures are made again, the exception the remask raised closes and the merged one is as it was');
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.script_exception_confirm(pg_temp.k('x6')) ->> 'resolution', 'confirmed', 'a blurred page with a marking picture is accepted as before');
+select tests.as_postgres();
+select is((pg_temp.pg('u1', 3)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r1') -> 'job' ->> 'id') || '-' || (pg_temp.r('r1') -> 'job' ->> 'attempts') || '/3-marking.jpg',
   'so its marking picture is not replaced by one made before the change');
 select is(pg_temp.finish(pg_temp.r('r2'), true) ->> 'state', 'done', 'the job finishes');
 insert into res select 'r3', pg_temp.claim_remask('u1');
@@ -432,16 +462,28 @@ select is(pg_temp.jobs('u1', 'remask', 'queued') || '/' || (select state::text f
 -- A page whose layout was unexpected cannot be proved: it gets a marking picture only once staff confirm its name is
 -- hidden (a staff area) or that there is none.
 select is(public.script_page_remask_context(pg_temp.pid('u1', 8)) ->> 'confirmed', 'false', 'not confirmed before staff look at it');
-insert into kv values ('x8', pg_temp.exc('u1', 8, 'poor_quality')), ('x7', pg_temp.exc('u1', 7, 'poor_quality'));
+insert into kv values ('x8', pg_temp.exc('u1', 8, 'poor_quality'));
 select tests.as_user(pg_temp.uid('admin'));
 select public.script_page_set_hidden_areas(pg_temp.pid('u1', 8), '[{"x":0.05,"y":0.03,"w":0.6,"h":0.05}]', 'Name across the top');
 select public.script_exception_confirm(pg_temp.k('x8'));
-select is(pg_temp.code(public.script_exception_confirm(pg_temp.k('x7'))), 'name_not_hidden',
-  'R31: a page whose marking picture a remask could not make again needs its name hidden, or none said, before it is accepted');
 select tests.as_postgres();
 select is(concat_ws('/', public.script_page_remask_context(pg_temp.pid('u1', 8)) ->> 'confirmed',
-    public.script_page_remask_context(pg_temp.pid('u1', 7)) ->> 'confirmed'),
-  'true/false', 'confirmed once staff hid the name and accepted it');
+    public.script_page_remask_context(pg_temp.pid('u1', 7)) ->> 'confirmed',
+    (select concat_ws(':', details ->> 'confirmed_rotation', details ->> 'confirmed_areas' = public.script_page_areas_key(pg_temp.pid('u1', 8)))
+     from public.script_exceptions where id = pg_temp.k('x8'))),
+  'true/false/0:t', 'confirmed once staff hid the name and accepted it, bound to the page''s turn and areas then');
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_rotate(pg_temp.pid('u1', 8), 1, 'Sideways');
+select tests.as_postgres();
+select is(public.script_page_remask_context(pg_temp.pid('u1', 8)) ->> 'confirmed', 'false', 'R32: a later turn undoes the confirmation');
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_rotate(pg_temp.pid('u1', 8), -1, 'Upright again');
+select tests.as_postgres();
+select is(public.script_page_remask_context(pg_temp.pid('u1', 8)) ->> 'confirmed', 'true', 'turned back as staff saw it, it holds again');
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_set_hidden_areas(pg_temp.pid('u1', 8), '[{"x":0.05,"y":0.03,"w":0.6,"h":0.05},{"x":0.5,"y":0.5,"w":0.1,"h":0.1}]', 'Another mark');
+select tests.as_postgres();
+select is(public.script_page_remask_context(pg_temp.pid('u1', 8)) ->> 'confirmed', 'false', 'R32: so does a change of its staff areas');
 
 -- ---------------------------------------------------------------------------------------------
 -- script_page_remove: takes a page out of a script (new version), which unsticks mixed versions.
@@ -518,7 +560,7 @@ select is(pg_temp.run('u1', jsonb_build_array(
   '10', 'the prepare job is claimed before the remask job waiting on the same file, and records the file again');
 select is(concat_ws('/', (select replaced_at is not null from public.script_pages where id = (pg_temp.r('old5') ->> 'id')::uuid),
     (select full_path from public.script_pages where id = (pg_temp.r('old5') ->> 'id')::uuid) = (select dir from prep1) || '5-full.jpg',
-    (pg_temp.pg('u1', 5)).full_path = pg_temp.legacy('u1') || (pg_temp.r('rp') ->> 'job_id') || '/5-full.jpg'),
+    (pg_temp.pg('u1', 5)).full_path = pg_temp.legacy('u1') || (pg_temp.r('rp') ->> 'job_id') || '-1/5-full.jpg'),
   't/t/t', 'a page kept with its old version keeps its own picture; the rerun''s pictures are in the new job''s folder');
 insert into res select 'r4', pg_temp.claim_remask('u1');
 select is((select count(*)::int from jsonb_array_elements(pg_temp.r('r4') -> 'pages') x
@@ -562,13 +604,24 @@ select is(public.script_exception_confirm(pg_temp.k('x5_1'), 'Checked: the name 
   'staff say there is no name on it');
 select tests.as_postgres();
 select is(concat_ws('/', pg_temp.jobs('u3', 'remask', 'queued'), public.script_page_remask_context(pg_temp.pid('u3', 1)) ->> 'confirmed',
-    (select details ->> 'no_name' from public.script_exceptions where id = pg_temp.k('x5_1')), pg_temp.state('b3')),
-  '1/true/true/verified', 'a remask is queued to make it from the staff check; the script is verified again');
+    (select details ->> 'no_name' from public.script_exceptions where id = pg_temp.k('x5_1')), pg_temp.state('b3'),
+    (select state::text from public.home_submissions where id = pg_temp.k('d3'))),
+  '1/true/true/needs_attention/received',
+  'R32: a remask is queued; nothing is open, but while its answer page has no marking picture the script is not verified');
+insert into res select 'r5b', pg_temp.claim_remask('u3');
+select pg_temp.remasked(pg_temp.r('r5b'), pg_temp.answer(pg_temp.r('r5b')));
+select pg_temp.finish(pg_temp.r('r5b'), true);
+select is(pg_temp.state('b3'), 'verified', 'once the remask makes its picture (proved again), the script is verified');
 
 -- ---------------------------------------------------------------------------------------------
 -- A remask job that fails for good: the scripts showing the file's pages are worked out again.
 -- ---------------------------------------------------------------------------------------------
 select is(pg_temp.state('b3'), 'verified', 'b3 is verified');
+-- A privacy change: a new hidden area on page 3 of version 2 queues a remask of b3's file, which fails for good.
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.set_paper_hidden_areas(pg_temp.k('pv2'), '[{"page":2,"x":0.1,"y":0.2,"w":0.3,"h":0.05},{"page":3,"x":0.6,"y":0.1,"w":0.3,"h":0.05}]')
+  -> 'changed_pages', '[3]'::jsonb, 'an area is added on page 3 of version 2');
+select tests.as_postgres();
 select pg_temp.fail_remask('u3');
 select pg_temp.fail_remask('u3');
 select is(pg_temp.fail_remask('u3') ->> 'state', 'failed', 'b3''s file''s remask job fails for good');
@@ -576,6 +629,18 @@ select is(concat_ws('/', (select details ->> 'kind' from public.script_exception
     (select script_id = pg_temp.sid('b3') from public.script_exceptions where upload_id = pg_temp.k('u3') and kind = 'processing_failed'),
     pg_temp.state('b3')),
   'remask/t/needs_attention', 'staff are told, and the home script is worked out again: it needs attention');
+select is(concat_ws('/', (select count(*) from public.script_pages where upload_id = pg_temp.k('u3') and replaced_at is null and marking_path is not null
+                           and (public.script_page_remask_context(id) ->> 'answer')::boolean),
+    (select count(*) from public.script_exceptions e join public.script_pages p on p.id = e.page_id
+     where p.upload_id = pg_temp.k('u3') and e.kind = 'poor_quality' and e.state = 'open' and e.details ->> 'from' = 'remask'),
+    (select concat_ws(':', pg_temp.kname(booking_id), script_id = pg_temp.sid('b3')) from public.script_exceptions
+     where page_id = pg_temp.k('p3_4') and kind = 'poor_quality' and state = 'open')),
+  '0/4/b3:t', 'R32: its answer pages lose their marking pictures (made before the change) and each goes to staff, the extra page on b3''s script');
+insert into kv values ('x_pf3', (select id from public.script_exceptions where upload_id = pg_temp.k('u3') and kind = 'processing_failed'));
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.script_exception_confirm(pg_temp.k('x_pf3'), 'Try again') ->> 'resolution', 'confirmed', 'staff note the failure');
+select tests.as_postgres();
+select is(pg_temp.jobs('u3', 'remask', 'queued'), 1, 'R32: noting a remask failure queues the remask again');
 select is(pg_temp.state('b1'), 'receiving', 'b1 is receiving');
 select pg_temp.fail_remask('u1');
 select is(pg_temp.fail_remask('u1') ->> 'state', 'failed', 'u1''s remask job fails for good');
@@ -604,23 +669,26 @@ insert into res select 'r6', pg_temp.claim_remask('u1');
 select is(concat_ws('/', pg_temp.at(pg_temp.r('r6'), 9) ->> 'confirmed', coalesce(pg_temp.at(pg_temp.r('r6'), 9) ->> 'code', 'none')), 'true/none',
   'the remask job is told to make it from the staff check (no code to prove it by)');
 select is(pg_temp.remasked(pg_temp.r('r6'), pg_temp.answer(pg_temp.r('r6'))) ->> 'ok', 'true', 'its marking picture is recorded');
-select is((pg_temp.pg('u1', 9)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r6') -> 'job' ->> 'id') || '/9-marking.jpg', 'page 9 has a marking picture');
+select is((pg_temp.pg('u1', 9)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r6') -> 'job' ->> 'id') || '-' || (pg_temp.r('r6') -> 'job' ->> 'attempts') || '/9-marking.jpg', 'page 9 has a marking picture');
 select pg_temp.finish(pg_temp.r('r6'), true);
 
 -- ---------------------------------------------------------------------------------------------
--- Per-run picture folders: a prepare job's pictures must be in its own folder (or, for pictures stored before, the
--- file's folder).
+-- Per-run picture folders: a prepare job's pictures must be in the folder of the job and its attempt.
 -- ---------------------------------------------------------------------------------------------
 select pg_temp.scan_file('u8', 'e', 'bt');
 update public.processing_jobs set run_after = '2000-01-01' where upload_id = pg_temp.k('u8');
 insert into res select 'p8', public.processing_job_claim('t-worker');
 select is(public.script_pages_record((pg_temp.r('p8') -> 'job' ->> 'id')::bigint, 't-worker', 1, repeat('a', 64),
-    jsonb_build_array(pg_temp.page('u8', 0, null, null, '{}', true, pg_temp.legacy('u8') || '999999/'))) ->> 'code', 'invalid_input',
+    jsonb_build_array(pg_temp.page('u8', 0, null, null, '{}', true, pg_temp.legacy('u8') || '999999-1/'))) ->> 'code', 'invalid_input',
   'pictures in another job''s folder are refused');
 select is(public.script_pages_record((pg_temp.r('p8') -> 'job' ->> 'id')::bigint, 't-worker', 1, repeat('a', 64),
+    jsonb_build_array(pg_temp.page('u8', 0, null, null, '{}', true, pg_temp.legacy('u8') || (pg_temp.r('p8') -> 'job' ->> 'id') || '-2/'))) ->> 'code',
+  'invalid_input', 'and in another attempt''s folder');
+select is(public.script_pages_record((pg_temp.r('p8') -> 'job' ->> 'id')::bigint, 't-worker', 1, repeat('a', 64),
+    jsonb_build_array(pg_temp.page('u8', 0, null, null, '{}', true, pg_temp.legacy('u8')))) ->> 'code', 'invalid_input',
+  'and in the file''s own folder (R32: no longer accepted)');
+select is(public.script_pages_record((pg_temp.r('p8') -> 'job' ->> 'id')::bigint, 't-worker', 1, repeat('a', 64),
     jsonb_build_array(pg_temp.page('u8', 0, null, null))) ->> 'ok', 'true', 'pictures in the job''s own folder are recorded');
-select is((select full_path from public.script_pages where upload_id = pg_temp.k('uf') and source_index = 0), pg_temp.legacy('uf') || '0-full.jpg',
-  'and the file''s own folder is still accepted (pictures stored before per-run folders)');
 
 select * from finish();
 rollback;

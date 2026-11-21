@@ -445,7 +445,8 @@ export function repoDoneMessage(input: RepoInput): string {
   }
 }
 
-/** What the screen says when a page tool was refused. */
-export function repoFailureMessage(a: { code?: unknown; reason?: unknown }): string {
+/** What the screen says when a page tool was refused (`action`: the tool, for a message that fits it). */
+export function repoFailureMessage(a: { code?: unknown; reason?: unknown }, action?: RepoInput["action"]): string {
+  if (action === "void" && a.code === "script_locked") return "This script is final: its results are out, so it cannot be voided.";
   return scriptMessageFor(typeof a.code === "string" ? a.code : null, typeof a.reason === "string" ? a.reason : null);
 }

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(181);
+select plan(183);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -80,8 +80,8 @@ create function pg_temp.page(p_up text, p_idx int, p_copy text, p_page int, p_sh
     'blank', false,
     'quality', jsonb_build_object('sharpness', p_sharp, 'brightness', 180, 'cut_off', false, 'flags', to_jsonb(p_flags)),
     'rotation', 0,
-    'full_path', u.exam_id::text || '/' || u.id::text || '/' || p_idx || '-full.jpg',
-    'marking_path', case when p_copy is not null and p_marking then u.exam_id::text || '/' || u.id::text || '/' || p_idx || '-marking.jpg' end)
+    'full_path', u.exam_id::text || '/' || u.id::text || '/' || coalesce((select j.id || '-' || (j.attempts + case when j.state = 'queued' then 1 else 0 end) from public.processing_jobs j where j.upload_id = u.id and j.kind = 'prepare' and j.state in ('queued', 'running') order by j.id desc limit 1), 'none') || '/' || p_idx || '-full.jpg',
+    'marking_path', case when p_copy is not null and p_marking then u.exam_id::text || '/' || u.id::text || '/' || coalesce((select j.id || '-' || (j.attempts + case when j.state = 'queued' then 1 else 0 end) from public.processing_jobs j where j.upload_id = u.id and j.kind = 'prepare' and j.state in ('queued', 'running') order by j.id desc limit 1), 'none') || '/' || p_idx || '-marking.jpg' end)
   from public.script_uploads u where u.id = pg_temp.k(p_up)
 $$;
 create function pg_temp.run(p_up text, p_pages jsonb) returns jsonb language plpgsql as $$
@@ -91,6 +91,10 @@ declare
 begin
   update public.processing_jobs set run_after = '2000-01-01' where upload_id = pg_temp.k(p_up) and state = 'queued' and kind = 'prepare';
   v := public.processing_job_claim('t-worker');
+  -- The pages go to the claimed job's folder for this attempt (they may have been made before it existed, or for an
+  -- earlier run of the file).
+  p_pages := regexp_replace(p_pages::text, '/(none|[0-9]+-[0-9]+)/([0-9]+-(full|marking)[.]jpg)',
+    '/' || (v -> 'job' ->> 'id') || '-' || (v -> 'job' ->> 'attempts') || '/\2', 'g')::jsonb;
   if v is null or v -> 'upload' ->> 'id' <> pg_temp.k(p_up)::text then
     raise exception 'claimed another job';
   end if;
@@ -141,6 +145,30 @@ begin
     raise exception 'claimed another job';
   end if;
   return public.processing_job_finish((v -> 'job' ->> 'id')::bigint, 't-worker', (v -> 'job' ->> 'attempts')::int, false, 'UnsupportedJob');
+end;
+$$;
+
+-- The processing server makes a marking picture for every page its claim of the file's waiting remask job lists.
+create function pg_temp.remask_ok(p_up text) returns jsonb language plpgsql as $$
+declare
+  v jsonb;
+  r jsonb;
+begin
+  update public.processing_jobs set run_after = '2000-01-01' where upload_id = pg_temp.k(p_up) and state = 'queued' and kind = 'remask';
+  v := public.processing_job_claim('t-worker');
+  if v is null or v -> 'upload' ->> 'id' <> pg_temp.k(p_up)::text or v -> 'job' ->> 'kind' <> 'remask' then
+    raise exception 'claimed another job';
+  end if;
+  r := public.script_pages_remasked((v -> 'job' ->> 'id')::bigint, 't-worker', (v -> 'job' ->> 'attempts')::int, (
+    select coalesce(jsonb_agg(jsonb_build_object('page_id', x ->> 'page_id', 'rotation', (x ->> 'rotation')::int, 'key', x ->> 'key',
+      'marking_path', (v -> 'upload' ->> 'exam_id') || '/' || (v -> 'upload' ->> 'id') || '/' || (v -> 'job' ->> 'id') || '-'
+        || (v -> 'job' ->> 'attempts') || '/' || (x ->> 'source_index') || '-marking.jpg')), '[]'::jsonb)
+    from jsonb_array_elements(v -> 'pages') x));
+  if r ->> 'ok' <> 'true' then
+    raise exception 'remask refused: %', r;
+  end if;
+  perform public.processing_job_finish((v -> 'job' ->> 'id')::bigint, 't-worker', (v -> 'job' ->> 'attempts')::int, true);
+  return r;
 end;
 $$;
 
@@ -459,7 +487,10 @@ insert into res select 'cc', public.scan_centre_complete(pg_temp.k('e'), pg_temp
 select is(concat_ws('/', pg_temp.r('cc') ->> 'candidates', pg_temp.r('cc') ->> 'complete', pg_temp.r('cc') ->> 'missing'), '3/1/2',
   'all scans in: b1 is complete, b2 and b4 miss pages');
 select tests.as_postgres();
-select is(pg_temp.script('b1'), 'true/verified', 'b1, with page 4 assigned and its page 5 confirmed, is verified');
+select is(pg_temp.script('b1'), 'true/needs_attention',
+  'b1 is complete, but its assigned page 4 and confirmed page 5 have no marking pictures yet: not verified (R32)');
+select pg_temp.remask_ok('u1');
+select is(pg_temp.script('b1'), 'true/verified', 'b1, with page 4 assigned and its page 5 confirmed, is verified once their marking pictures are made');
 select is(pg_temp.missing('b2') || ' ' || pg_temp.missing('b4'), 'open:[2, 4] open:[3, 4]',
   'b2''s v1 page 2 does not count for its v2 paper; b4 misses pages 3 and 4');
 
@@ -540,7 +571,8 @@ insert into res select 'lo', public.script_exceptions_list(pg_temp.k('e'));
 select is((select string_agg(x ->> 'kind', ',') from jsonb_array_elements(pg_temp.r('lo') -> 'items') x), 'missing_pages,not_expected',
   'open by default: what is still open for exam e, newest first (b2''s missing page, then b3''s page)');
 select is((select x -> 'page' ->> 'full_path' from jsonb_array_elements(pg_temp.r('lo') -> 'items') x where x ->> 'kind' = 'not_expected'),
-  pg_temp.k('e')::text || '/' || pg_temp.k('u1')::text || '/10-full.jpg', 'each item carries the full page picture''s path');
+  (select full_path from public.script_pages where upload_id = pg_temp.k('u1') and source_index = 10 and replaced_at is null),
+  'each item carries the full page picture''s path');
 select is((select concat_ws('/', x -> 'printed_for' ->> 'id' = pg_temp.k('b3')::text, x -> 'upload' ->> 'source', x -> 'details' ->> 'reason')
            from jsonb_array_elements(pg_temp.r('lo') -> 'items') x where x ->> 'kind' = 'not_expected'), 't/centre/absent',
   'and who the page was printed for, where it came from and what the server found');
@@ -736,7 +768,8 @@ select is(pg_temp.code(public.script_exception_confirm(pg_temp.exc('u8', 3, 'unc
 select is(public.script_exception_confirm(pg_temp.exc('u8', 3, 'uncoded_family_page'), 'Continuation of question 4', true) ->> 'resolution', 'confirmed',
   'the family''s placement of the page with no code is confirmed');
 select tests.as_postgres();
-select is(pg_temp.remasks('u8') || ' ' || pg_temp.script('b8'), '1 true/verified', 'still one remask job; the script is verified');
+select is(pg_temp.remasks('u8') || ' ' || pg_temp.script('b8'), '1 true/needs_attention',
+  'still one remask job; the script waits for the marking pictures of the confirmed pages (R32)');
 
 -- Until Task 11 the processor fails remask jobs: after three attempts that is a processing_failed exception. It is
 -- not the family's file: it cannot be rejected, only noted.
@@ -752,14 +785,17 @@ select is((select x ->> 'rejects_submission' from jsonb_array_elements(public.sc
 select is(pg_temp.code(public.script_exception_reject(pg_temp.k('x_pf8'), 'Broken file')), 'wrong_kind', 'and rejecting it is refused');
 select is(public.script_exception_confirm(pg_temp.k('x_pf8'), 'Marking picture comes with the script repository') ->> 'resolution', 'confirmed', 'it is noted');
 select tests.as_postgres();
+select is(pg_temp.remasks('u8') || ' ' || pg_temp.script('b8') || ' ' || (select state::text from public.home_submissions where id = pg_temp.k('d8')),
+  '1 true/needs_attention received', 'noting it queues the remask again; the family''s submission stands (R32)');
+select pg_temp.remask_ok('u8');
 select is(pg_temp.script('b8') || ' ' || (select state::text from public.home_submissions where id = pg_temp.k('d8')), 'true/verified received',
-  'and b8''s script and submission stand');
+  'once the marking pictures are made, b8''s script and submission stand');
 
 -- ---------------------------------------------------------------------------------------------
 -- resolution_keeps_original_page_row
 -- ---------------------------------------------------------------------------------------------
-select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id and to_jsonb(p) = s.j), (select count(*)::int from snap),
-  'resolution_keeps_original_page_row: every page row of the scanner file is exactly as the server recorded it');
+select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id and to_jsonb(p) - 'marking_path' = s.j - 'marking_path'), (select count(*)::int from snap),
+  'resolution_keeps_original_page_row: every page row of the scanner file is as the server recorded it (a remask re-makes only marking pictures)');
 select is((select count(*)::int from snap), 13, 'and none was deleted');
 select is(public.script_resolution_lock(pg_temp.k('x_ne10'), '{}'), array[pg_temp.k('b3')], 'the lock helper names the bookings an exception concerns');
 
