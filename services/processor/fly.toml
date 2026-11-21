@@ -2,8 +2,15 @@
 app = "stem-processor"
 primary_region = "lhr"
 
+# A stop (a deploy, a restart, a scale-down) sends SIGTERM: the worker finishes the file it is reading, claims no
+# other, and exits. It is given 300 seconds, the most Fly allows, before it is killed. A file still being read then
+# is taken up again 15 minutes later by whichever worker is running (its lock goes stale).
+kill_signal = "SIGTERM"
+kill_timeout = 300
+
 [build]
   dockerfile = "Dockerfile"
+  build-target = "runtime"
 
 [[vm]]
   size = "shared-cpu-2x"

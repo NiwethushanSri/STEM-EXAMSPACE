@@ -1,6 +1,9 @@
 services:
   processor:
-    build: .
+    # The test image (the server plus pytest and the tests); the server's own image is the Dockerfile's last stage.
+    build:
+      context: .
+      target: test
     env_file: ../../supabase/functions/.env.test.local
     environment:
       SUPABASE_URL: http://host.docker.internal:54321

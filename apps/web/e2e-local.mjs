@@ -52,25 +52,35 @@ const stop = () => {
   stopped = true;
   processor(["down"]);
 };
+
+// An interrupt (Ctrl+C) or a termination. The handlers are in place before the processing server is started, so one
+// that arrives while it starts still stops it (the signal is handled as soon as "docker compose up" returns).
+// Playwright runs as a child process (not spawnSync), so a signal during the tests reaches this script too:
+//   the first one is passed on to Playwright and, once Playwright has stopped, the processing server is stopped;
+//   a second one (or one while Playwright is not running) kills Playwright, stops the processing server and leaves
+//   at once.
+let child = null;
+let passedOn = false;
+const running = () => child !== null && child.exitCode === null && child.signalCode === null;
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    if (running() && !passedOn) {
+      passedOn = true;
+      child.kill(sig);
+      return;
+    }
+    if (running()) child.kill("SIGKILL");
+    stop();
+    process.exit(1);
+  });
+}
+
 if (!wasRunning && processor(["up", "-d", "processor"]).status !== 0) {
   console.error("e2e:local: the processing server did not start; not running tests");
   stop();
   process.exit(1);
 }
 
-// Playwright runs as a child process (not spawnSync), so an interrupt or termination reaches this script: it passes it
-// on to Playwright and, once Playwright has stopped, stops the processing server (a second signal stops at once).
-let child = null;
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(sig, () => {
-    if (child && child.exitCode === null && child.signalCode === null) {
-      child.kill(sig);
-      return;
-    }
-    stop();
-    process.exit(1);
-  });
-}
 let status = 1;
 try {
   status = await new Promise((done) => {
