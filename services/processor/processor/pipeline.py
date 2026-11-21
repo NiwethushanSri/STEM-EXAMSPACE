@@ -16,7 +16,7 @@ from processor.imaging import Area, Quality, UnreadableFile
 
 __all__ = [
     "Area", "CopyRef", "JobContext", "PaperLayout", "PreparedPage", "Quality", "UnreadableFile",
-    "is_answer_page", "iter_prepare", "prepare", "remask",
+    "is_answer_page", "iter_prepare", "page_count", "prepare", "remask",
 ]
 
 KINDS = ("home_photo", "home_pdf", "scan_file")
@@ -101,8 +101,15 @@ def prepare(data: bytes, kind: str, mime: str, ctx: JobContext) -> list[Prepared
     return list(iter_prepare(data, kind, mime, ctx))
 
 
-def iter_prepare(data: bytes, kind: str, mime: str, ctx: JobContext) -> Iterator[PreparedPage]:
-    """prepare(), one page at a time, so a long scanner file never holds all its pictures at once."""
+def page_count(data: bytes | str, mime: str) -> int:
+    """How many pages an upload has, before anything is rendered: a PDF's own page count, and 1 for a picture.
+    Raises UnreadableFile for a broken or password-protected PDF."""
+    return imaging.pdf_page_count(data) if mime == "application/pdf" else 1
+
+
+def iter_prepare(data: bytes | str, kind: str, mime: str, ctx: JobContext) -> Iterator[PreparedPage]:
+    """prepare(), one page at a time, so a long scanner file never holds all its pictures at once. `data` is the
+    upload's bytes, or the path of a file holding them (a large original is read from disk as it is needed)."""
     if kind not in KINDS:
         raise ValueError("unknown upload kind")
     pictures = imaging.render_pdf(data) if mime == "application/pdf" else iter((imaging.load_photo(data),))

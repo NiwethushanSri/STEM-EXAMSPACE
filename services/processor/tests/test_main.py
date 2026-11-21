@@ -2,6 +2,7 @@
 import hashlib
 import io
 import logging
+import os
 import signal
 import threading
 import time
@@ -67,6 +68,17 @@ class FakeClient:
             self.on_download(self)
         return self.pictures[path] if bucket == "script-pages" else self.data
 
+    def download_to(self, bucket, path, out):
+        """The original, written to `out` in pieces; returns its SHA-256."""
+        self._log("download", bucket, path)
+        if self.on_download:
+            self.on_download(self)
+        digest = hashlib.sha256()
+        for i in range(0, len(self.data), 7):
+            out.write(self.data[i:i + 7])
+            digest.update(self.data[i:i + 7])
+        return digest.hexdigest()
+
     def upload(self, bucket, path, data, content_type):
         self._log("upload", bucket, path, content_type)
         self.stored[path] = data
@@ -101,12 +113,70 @@ class FakeClient:
 
 
 def fake_pages(n=2):
-    def iter_prepare(data, kind, mime, ctx):
+    def iter_prepare(source, kind, mime, ctx):
         for i in range(n):
             yield pipeline.PreparedPage(source_index=i, code=synth.CODE_A, copy_page=i + 2, blank=False,
                                         quality=Quality(sharpness=120.0, brightness=200.0, cut_off=False, flags=[]),
                                         rotation=0, full=b"full-%d" % i, marking=b"marking-%d" % i if i == 0 else None)
     return iter_prepare
+
+
+def test_the_original_is_read_from_a_temporary_file_that_is_deleted(monkeypatch):
+    """Ruling R40 (I1): the original is streamed to a temporary file (never held whole in memory), the pipeline reads
+    it from there, and the file is gone afterwards."""
+    seen = []
+
+    def iter_prepare(source, kind, mime, ctx):
+        assert isinstance(source, str) and os.path.isfile(source)
+        with open(source, "rb") as f:
+            seen.append((source, f.read()))
+        return fake_pages()(source, kind, mime, ctx)
+
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
+    monkeypatch.setattr(pipeline, "iter_prepare", iter_prepare)
+    client = FakeClient(data=b"the original, in pieces")
+    assert main.process(client, "w-1", claimed()) == "done"
+    ((path, data),) = seen
+    assert data == b"the original, in pieces" and not os.path.exists(path)
+    (_, _, _, _, _, sha256), = client.named("record_pages")
+    assert sha256 == hashlib.sha256(b"the original, in pieces").hexdigest()
+
+
+def test_the_temporary_file_is_deleted_when_the_job_fails(monkeypatch):
+    seen = []
+
+    def iter_prepare(source, kind, mime, ctx):
+        seen.append(source)
+        raise RuntimeError("boom")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
+    monkeypatch.setattr(pipeline, "iter_prepare", iter_prepare)
+    client = FakeClient(data=b"bytes")
+    main.process(client, "w-1", claimed())
+    assert client.named("finish") == [("finish", 7, False, "RuntimeError", "w-1", 1)]
+    assert len(seen) == 1 and not os.path.exists(seen[0])
+
+
+def test_a_file_of_too_many_pages_fails_before_anything_is_rendered_or_stored(monkeypatch):
+    """Ruling R40 (I1): the page count is read before rendering; over the limit the job fails at once with the word
+    the database knows (too_many_pages), and no picture is rendered, stored or recorded."""
+    rendered = []
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: main.MAX_PAGES + 1)
+    monkeypatch.setattr(pipeline, "iter_prepare", lambda *a: rendered.append(a) or iter(()))
+    client = FakeClient(data=b"a very long scan")
+    main.process(client, "w-1", claimed(upload_kind="scan_file"))
+    assert rendered == [] and client.named("upload") == [] and client.stored == {} and client.named("record_pages") == []
+    assert client.named("finish") == [("finish", 7, False, "too_many_pages", "w-1", 1)]
+
+
+def test_a_file_of_exactly_the_limit_is_prepared(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: main.MAX_PAGES)
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    client = FakeClient(data=b"a long scan")
+    assert main.process(client, "w-1", claimed(upload_kind="scan_file")) == "done"
+    assert main.MAX_PAGES == 5000  # the database's own limit (script_pages_valid)
 
 
 def test_job_context_from_claim():
@@ -156,6 +226,7 @@ def test_other_errors_finish_with_class_name_only():
 
 
 def test_record_refused_is_a_failure(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(record={"ok": False, "code": "invalid_input"})
     main.process(client, "w-1", claimed())
@@ -163,6 +234,7 @@ def test_record_refused_is_a_failure(monkeypatch):
 
 
 def test_conflict_on_record_does_not_finish(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(record={"ok": False, "code": "conflict"})
     assert main.process(client, "w-1", claimed()) == "lost"
@@ -170,6 +242,7 @@ def test_conflict_on_record_does_not_finish(monkeypatch):
 
 
 def test_changed_original_stores_no_picture(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     job = claimed()
     job["upload"]["sha256"] = hashlib.sha256(b"the original as first recorded").hexdigest()
@@ -180,6 +253,7 @@ def test_changed_original_stores_no_picture(monkeypatch):
 
 
 def test_same_original_again_is_prepared(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     job = claimed()
     job["upload"]["sha256"] = hashlib.sha256(b"same bytes").hexdigest()
@@ -189,6 +263,7 @@ def test_same_original_again_is_prepared(monkeypatch):
 
 
 def test_changed_original_is_a_failure_not_a_lost_job(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(data=b"other bytes", record={"ok": False, "code": "conflict", "reason": "sha256_mismatch"})
     assert main.process(client, "w-1", claimed()) == "queued"
@@ -198,6 +273,7 @@ def test_changed_original_is_a_failure_not_a_lost_job(monkeypatch):
 
 
 def test_lost_lock_stops_before_recording(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 3)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages(3))
     client = FakeClient(beats=False, on_download=lambda c: time.sleep(0.3))
     assert main.process(client, "w-1", claimed(), heartbeat_seconds=0.05) == "lost"
@@ -206,6 +282,7 @@ def test_lost_lock_stops_before_recording(monkeypatch):
 
 
 def test_heartbeat_keeps_a_long_job_alive(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(on_download=lambda c: time.sleep(0.35))
     assert main.process(client, "w-1", claimed(attempts=3), heartbeat_seconds=0.1) == "done"
@@ -215,6 +292,7 @@ def test_heartbeat_keeps_a_long_job_alive(monkeypatch):
 
 
 def test_page_without_marking_picture_records_null(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient()
     main.process(client, "w-1", claimed())
@@ -226,6 +304,7 @@ def test_page_without_marking_picture_records_null(monkeypatch):
 def test_kept_rerun_deletes_the_pictures_it_stored(monkeypatch):
     """The database kept the file's pages as they were (staff worked on them while the job waited): no page row
     names this job's pictures, so they are deleted again, and the job is done."""
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(record={"ok": True, "kept": True, "reason": "hidden_areas", "pages": 2})
     assert main.process(client, "w-1", claimed()) == "done"
@@ -238,6 +317,7 @@ def test_kept_rerun_deletes_the_pictures_it_stored(monkeypatch):
 
 
 def test_kept_rerun_is_done_even_when_the_pictures_cannot_be_deleted(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(record={"ok": True, "kept": True, "reason": "script_locked", "pages": 2},
                         remove_error=RuntimeError("storage down"))
@@ -248,6 +328,7 @@ def test_kept_rerun_is_done_even_when_the_pictures_cannot_be_deleted(monkeypatch
 
 def test_recorded_pages_keep_their_pictures(monkeypatch):
     """A record that replaced the pages (not kept), a refused one and a lost job delete nothing."""
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     for record in ({"ok": True, "pages": 2}, {"ok": True, "kept": False, "pages": 2}, {"ok": False, "code": "invalid_input"},
                    {"ok": False, "code": "conflict"}):
@@ -262,6 +343,7 @@ def test_page_paths_are_in_the_folder_of_the_job_and_attempt():
 
 
 def test_a_retried_attempt_never_overwrites_the_last_attempts_pictures(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient()
     main.process(client, "w-1", claimed(attempts=1))
@@ -271,6 +353,7 @@ def test_a_retried_attempt_never_overwrites_the_last_attempts_pictures(monkeypat
 
 
 def test_a_rerun_never_overwrites_an_earlier_runs_pictures(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient()
     main.process(client, "w-1", claimed(job_id=7))
@@ -382,6 +465,7 @@ def test_other_job_kinds_are_not_run():
 
 
 def test_logs_carry_ids_counts_and_timings_only(monkeypatch, caplog):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     caplog.set_level(logging.DEBUG, logger="processor")
     main.process(FakeClient(), "w-1", claimed())
@@ -407,6 +491,7 @@ def test_run_once_with_nothing_to_do_returns():
 
 
 def test_run_once_runs_one_job(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(jobs=[claimed(job_id=1), claimed(job_id=2)])
     assert main.run(client, "w-1", once=True) == 1
@@ -426,6 +511,7 @@ def test_run_waits_two_seconds_when_idle():
 def test_run_survives_an_unexpected_error(monkeypatch, caplog):
     """An answer process() does not expect (a finish result that is not an object, a claim without its upload)
     fails that job with the error's class name only, and the worker carries on."""
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     caplog.set_level(logging.DEBUG, logger="processor")
     stop = threading.Event()
@@ -456,12 +542,27 @@ def test_run_survives_an_unexpected_error(monkeypatch, caplog):
 
 @pytest.mark.skipif(threading.current_thread() is not threading.main_thread(), reason="signals need the main thread")
 def test_sigterm_stops_after_the_current_job(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(jobs=[claimed(job_id=1), claimed(job_id=2)], on_download=lambda c: signal.raise_signal(signal.SIGTERM))
     before = signal.getsignal(signal.SIGTERM)
     assert main.run(client, "w-1") == 1
     assert [c[1] for c in client.named("finish")] == [1]
     assert signal.getsignal(signal.SIGTERM) is before
+
+
+@pytest.mark.skipif(threading.current_thread() is not threading.main_thread(), reason="signals need the main thread")
+def test_sigint_stops_after_the_current_job_like_sigterm(monkeypatch):
+    """Ruling R40 (I5): an interrupt is a graceful stop too. The job in hand is finished, no other is claimed, and
+    the old handler is put back."""
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
+    monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
+    client = FakeClient(jobs=[claimed(job_id=1), claimed(job_id=2)], on_download=lambda c: signal.raise_signal(signal.SIGINT))
+    before = signal.getsignal(signal.SIGINT)
+    assert main.run(client, "w-1") == 1
+    assert [c[1:3] for c in client.named("finish")] == [(1, True)]
+    assert len(client.named("claim")) == 1
+    assert signal.getsignal(signal.SIGINT) is before
 
 
 # Discarded draft files ------------------------------------------------------------------------------------------
@@ -517,6 +618,7 @@ def test_run_cleans_up_again_after_the_interval():
 
 
 def test_run_cleans_up_between_jobs_never_during_one(monkeypatch):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     stop = threading.Event()
 
@@ -537,6 +639,7 @@ def test_run_cleans_up_between_jobs_never_during_one(monkeypatch):
 
 
 def test_run_survives_a_failed_cleanup_and_logs_no_paths(monkeypatch, caplog):
+    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     caplog.set_level(logging.DEBUG, logger="processor")
     client = FakeClient(jobs=[claimed(job_id=1)], discarded=DISCARDED,

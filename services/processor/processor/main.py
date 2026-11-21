@@ -9,11 +9,11 @@ and outcome words only: never file names, storage paths, codes or page contents.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import signal
 import socket
+import tempfile
 import threading
 import time
 from typing import Any, Callable
@@ -29,6 +29,7 @@ IDLE_SECONDS = 2.0  # between claims when there is nothing to do
 HEARTBEAT_SECONDS = 30.0  # the job's lock is renewed this often while it runs (a quiet job is reclaimed after 15 min)
 CLEANUP_SECONDS = 60.0  # discarded draft files are looked for at most this often, between jobs
 CLEANUP_BATCH = 100  # discarded files deleted per look (one storage request)
+MAX_PAGES = 5000  # a file of more pages is not read (the database takes at most this many pages of one file)
 
 
 class LostJob(Exception):
@@ -41,6 +42,10 @@ class RecordRefused(Exception):
 
 class OriginalChanged(Exception):
     """The original's SHA-256 differs from the one recorded on an earlier run: it must never change."""
+
+
+class TooManyPages(Exception):
+    """The file has more than MAX_PAGES pages: nothing is rendered or stored, and the job is not tried again."""
 
 
 class UnsupportedJob(Exception):
@@ -126,29 +131,40 @@ class _Heartbeat:
 
 
 def _prepare(client: Any, worker_id: str, claimed: dict, beat: _Heartbeat) -> int:
-    """A prepare job: downloads the original and hashes it (SHA-256, recorded with the pages; a hash that differs from
-    the one an earlier run recorded fails the job before any picture is stored, and the database checks it again),
-    prepares and stores the pages in the job's folder and records them. When the database answers that it kept the
-    file's pages as they were (kept: staff worked on them, or a script being marked shows them, while the job waited),
-    no page row names this job's pictures, so they are deleted again (a failure to delete is logged, never fails the
-    job). Returns the page count."""
+    """A prepare job: streams the original to a temporary file, hashing it on the way (SHA-256, recorded with the
+    pages; a hash that differs from the one an earlier run recorded fails the job before any picture is stored, and the
+    database checks it again). The original is never held whole in memory, and the temporary file is deleted whatever
+    happens. The page count is read before anything is rendered: a file of more than MAX_PAGES pages fails at once
+    (TooManyPages), with nothing rendered or stored. Then the pages are prepared and stored in the job's folder, and
+    recorded. When the database answers that it kept the file's pages as they were (kept: staff worked on them, or a
+    script being marked shows them, while the job waited), no page row names this job's pictures, so they are deleted
+    again (a failure to delete is logged, never fails the job). Returns the page count."""
     job, upload = claimed["job"], claimed["upload"]
-    data = client.download(UPLOADS, upload["storage_path"])
-    sha256 = hashlib.sha256(data).hexdigest()
-    if upload.get("sha256") and upload["sha256"] != sha256:
-        raise OriginalChanged()  # before any picture is stored
-    beat.check()
-    pages = []
-    stored: list[str] = []
-    for page in pipeline.iter_prepare(data, upload["kind"], upload["mime"], job_context(claimed)):
+    fd, original = tempfile.mkstemp(prefix="original-")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            sha256 = client.download_to(UPLOADS, upload["storage_path"], out)
+        if upload.get("sha256") and upload["sha256"] != sha256:
+            raise OriginalChanged()  # before any picture is stored
         beat.check()
-        full_path, marking_path = page_paths(upload, job["id"], job["attempts"], page.source_index)
-        client.upload(PAGES, full_path, page.full, "image/jpeg")
-        stored.append(full_path)
-        if page.marking is not None:
-            client.upload(PAGES, marking_path, page.marking, "image/jpeg")
-            stored.append(marking_path)
-        pages.append(page_record(page, full_path, marking_path if page.marking is not None else None))
+        if pipeline.page_count(original, upload["mime"]) > MAX_PAGES:
+            raise TooManyPages()  # before anything is rendered
+        pages = []
+        stored: list[str] = []
+        for page in pipeline.iter_prepare(original, upload["kind"], upload["mime"], job_context(claimed)):
+            beat.check()
+            full_path, marking_path = page_paths(upload, job["id"], job["attempts"], page.source_index)
+            client.upload(PAGES, full_path, page.full, "image/jpeg")
+            stored.append(full_path)
+            if page.marking is not None:
+                client.upload(PAGES, marking_path, page.marking, "image/jpeg")
+                stored.append(marking_path)
+            pages.append(page_record(page, full_path, marking_path if page.marking is not None else None))
+    finally:
+        try:
+            os.unlink(original)
+        except OSError:
+            log.warning("job %s: could not delete its temporary file", job["id"])
     beat.check()
     result = client.record_pages(job["id"], pages, worker=worker_id, attempt=job["attempts"], sha256=sha256)
     if not result or not result.get("ok"):
@@ -218,6 +234,8 @@ def process(client: Any, worker_id: str, claimed: dict, *, heartbeat_seconds: fl
         return "lost"
     except UnreadableFile:
         ok, error = False, "unreadable"
+    except TooManyPages:
+        ok, error = False, "too_many_pages"  # the database fails the file at once and tells staff why
     except Exception as exc:
         ok, error = False, type(exc).__name__
 
@@ -260,23 +278,32 @@ def cleanup(client: Any) -> int:
     return len(items)
 
 
-def _on_sigterm(stop: threading.Event) -> Callable[[], None]:
-    """Sets `stop` on SIGTERM (only possible in the main thread); returns what puts the old handler back."""
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)  # the host's stop (fly.toml: kill_signal) and an interrupt
+
+
+def _on_stop_signals(stop: threading.Event) -> Callable[[], None]:
+    """Sets `stop` on SIGTERM or SIGINT (only possible in the main thread), so either one lets the job in hand finish
+    and then ends the loop; returns what puts the old handlers back."""
     if threading.current_thread() is not threading.main_thread():
         return lambda: None
-    previous = signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    return lambda: signal.signal(signal.SIGTERM, previous)
+    previous = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in STOP_SIGNALS}
+
+    def restore() -> None:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+    return restore
 
 
 def run(client: Any, worker_id: str, *, once: bool = False, stop: threading.Event | None = None,
         idle_seconds: float = IDLE_SECONDS, heartbeat_seconds: float = HEARTBEAT_SECONDS,
         cleanup_seconds: float = CLEANUP_SECONDS) -> int:
-    """Claims and runs jobs until SIGTERM (or `stop`), finishing the current job first; waits `idle_seconds`
+    """Claims and runs jobs until SIGTERM or SIGINT (or `stop`), finishing the current job first; waits `idle_seconds`
     when there is nothing to do. Before a claim, when `cleanup_seconds` have passed since the last one (and at the
     start), deletes discarded draft files (cleanup; a failure is logged and tried again next time). With `once`,
     claims once and runs at most that job. Returns the jobs run."""
     stop = stop or threading.Event()
-    restore = _on_sigterm(stop)
+    restore = _on_stop_signals(stop)
     ran = 0
     next_cleanup = time.monotonic()
     try:

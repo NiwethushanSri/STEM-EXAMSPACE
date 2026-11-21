@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  SCAN_FILE_ADVICE,
   SCAN_MAX_BYTES,
   SCAN_POLL_MS,
   SCAN_POLL_MAX_FAILURES,
@@ -119,6 +120,7 @@ describe("scanFileType", () => {
 describe("scanFileProblem", () => {
   it("takes files up to 1 GB", () => {
     expect(SCAN_MAX_BYTES).toBe(1073741824);
+    expect(SCAN_FILE_ADVICE).toBe("Keep each scan file to about 500 pages: smaller files are read sooner, and a file that fails is quicker to scan again.");
     expect(scanFileProblem(1)).toBeNull();
     expect(scanFileProblem(SCAN_MAX_BYTES)).toBeNull();
     expect(scanFileProblem(SCAN_MAX_BYTES + 1)).toBe("file_too_large");

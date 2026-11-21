@@ -107,6 +107,10 @@ describe("foundInWords", () => {
     ]);
     expect(foundInWords(item({ kind: "missing_pages", details: { pages: [], reason: "no_paper" } }))[0]).toContain("page roles");
     expect(foundInWords(item({ kind: "processing_failed", details: { kind: "prepare", attempts: 3 } }))[0]).toBe("The file could not be prepared after 3 attempts.");
+    // A file of too many pages is not read at all (Ruling R40): staff are told to split it.
+    const tooMany = foundInWords(item({ kind: "processing_failed", details: { kind: "prepare", attempts: 1, reason: "too_many_pages" } }));
+    expect(tooMany[0]).toBe("The file has more than 5,000 pages, so it was not read.");
+    expect(tooMany.join(" ")).toContain("about 500 pages");
     expect(foundInWords(item({ kind: "processing_failed", page: null, details: { kind: "remask", attempts: 3 } }))[0]).toBe(
       "The marking pictures could not be made (this is not the family's file), so the file's old ones were taken away.",
     );
@@ -245,6 +249,7 @@ describe("words", () => {
     expect(KIND_LABEL.uncoded_family_page).toBe("Page added by the family");
     expect(resolutionLabel("dismissed")).toBe("Confirmed left blank");
     expect(resolutionLabel("marking_made")).toBe("Marking picture made");
+    expect(resolutionLabel("processed")).toBe("File processed again");
     expect(resolutionLabel("something_new")).toBe("something_new");
   });
   it("says why an assignment or a changed page was refused", () => {

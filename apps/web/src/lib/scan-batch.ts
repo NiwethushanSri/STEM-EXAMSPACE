@@ -9,6 +9,9 @@ export const SCAN_POLL_MAX_FAILURES = 3;
 /** The largest scanner file: 1 GiB, as the bucket and scan_upload_begin allow. */
 export const SCAN_MAX_BYTES = 1073741824;
 /** What the file picker offers. */
+/** Shown by "Add scan files" (Ruling R40): large files are read, but smaller ones are safer to retry. */
+export const SCAN_FILE_ADVICE =
+  "Keep each scan file to about 500 pages: smaller files are read sooner, and a file that fails is quicker to scan again.";
 export const SCAN_ACCEPT = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
 
 /** Each current page counted once (pages = matched + blank + flagged + duplicates + setAside): flagged pages have an

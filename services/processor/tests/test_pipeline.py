@@ -629,3 +629,36 @@ def test_real_rule_in_shadow_on_pile_flags_or_hides(share):
         for data, kind, mime in ((synth.jpeg(img), "home_photo", "image/jpeg"), (app_cropped(stack), "scan_file", PDF)):
             [p] = pipeline.prepare(data, kind, mime, tag_ctx())
             assert_hidden_or_flagged(p)
+
+
+# Ruling R40 (I1) --------------------------------------------------------------------------------------------------
+
+
+def test_page_count_is_read_without_rendering(tmp_path, monkeypatch):
+    """A PDF's page count comes from the file itself; a picture is one page. Nothing is rendered for it."""
+    monkeypatch.setattr(imaging, "_render_pages", lambda *a: pytest.fail("rendered"))
+    data = synth.fixture_bytes("copy-a.pdf")
+    path = tmp_path / "original"
+    path.write_bytes(data)
+    assert pipeline.page_count(data, "application/pdf") == 5
+    assert pipeline.page_count(str(path), "application/pdf") == 5
+    assert pipeline.page_count(b"anything", "image/jpeg") == 1
+    with pytest.raises(pipeline.UnreadableFile):
+        pipeline.page_count(b"not a pdf at all", "application/pdf")
+
+
+def test_prepare_reads_a_file_on_disk_like_its_bytes(tmp_path):
+    """The original is prepared from a temporary file: the same pages as from its bytes, for a PDF and for a photo."""
+    data = synth.fixture_bytes("copy-a.pdf")
+    pdf = tmp_path / "original-pdf"
+    pdf.write_bytes(data)
+    from_bytes = pipeline.prepare(data, "scan_file", "application/pdf", make_ctx())
+    from_file = list(pipeline.iter_prepare(str(pdf), "scan_file", "application/pdf", make_ctx()))
+    assert [(p.source_index, p.code, p.copy_page, p.full) for p in from_file] == \
+        [(p.source_index, p.code, p.copy_page, p.full) for p in from_bytes]
+    shot = synth.jpeg(synth.scan(synth.render("copy-a.pdf", 1), seed=5))
+    photo = tmp_path / "original-jpg"
+    photo.write_bytes(shot)
+    [a] = pipeline.prepare(shot, "scan_file", "image/jpeg", make_ctx())
+    [b] = list(pipeline.iter_prepare(str(photo), "scan_file", "image/jpeg", make_ctx()))
+    assert (a.code, a.copy_page, a.full) == (b.code, b.copy_page, b.full)

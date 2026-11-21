@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(185);
+select plan(194);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -1662,6 +1662,44 @@ select is(public.script_pages_record((pg_temp.r('p8') -> 'job' ->> 'id')::bigint
   'and in the file''s own folder (R32: no longer accepted)');
 select is(public.script_pages_record((pg_temp.r('p8') -> 'job' ->> 'id')::bigint, 't-worker', 1, repeat('a', 64),
     jsonb_build_array(pg_temp.page('u8', 0, null, null))) ->> 'ok', 'true', 'pictures in the job''s own folder are recorded');
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R40 (I1): a file of too many pages fails at once, and staff are told why.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.scan_file('u20', 'e', 'bt');
+update public.processing_jobs set run_after = '2000-01-01' where upload_id = pg_temp.k('u20');
+insert into res select 'p20', public.processing_job_claim('t-worker');
+select is(public.processing_job_finish((pg_temp.r('p20') -> 'job' ->> 'id')::bigint, 't-worker', 1, false, 'too_many_pages') ->> 'state', 'failed',
+  'R40: a file of more than 5000 pages is not tried again: its first attempt fails it');
+select is((select concat_ws('/', u.state, e.state, e.details ->> 'reason', e.details ->> 'attempts', j.state, j.last_error)
+           from public.script_uploads u
+           join public.script_exceptions e on e.upload_id = u.id and e.kind = 'processing_failed'
+           join public.processing_jobs j on j.upload_id = u.id
+           where u.id = pg_temp.k('u20')), 'failed/open/too_many_pages/1/failed/too_many_pages',
+  'R40: the file is failed and its open exception says why (too_many_pages)');
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R40 (m1): a failed file that is later processed settles its own "could not be processed" exception.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.scan_file('u21', 'e', 'bt');
+select pg_temp.fail_prepare('u21');
+select pg_temp.fail_prepare('u21');
+select is(pg_temp.fail_prepare('u21') ->> 'state', 'failed', 'a file fails for good after three attempts');
+insert into kv values ('x_pf21', (select id from public.script_exceptions where upload_id = pg_temp.k('u21') and kind = 'processing_failed' and state = 'open'));
+insert into res select 'd21', pg_temp.dash('2031-08-05 12:00Z');
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.script_upload_reprocess(pg_temp.k('u21'), 'The scanner file was fine: read it again') ->> 'ok', 'true', 'staff have it processed again');
+select tests.as_postgres();
+select is(pg_temp.run('u21', jsonb_build_array(pg_temp.page('u21', 0, null, null))) ->> 'ok', 'true', 'and this time it is read');
+select is((select concat_ws('/', state, resolution, resolved_by is null, reason) from public.script_exceptions where id = pg_temp.k('x_pf21')),
+  'resolved/processed/t/The file was processed again.',
+  'R40 m1: its open processing_failed exception is closed, with no actor');
+select is((select count(*)::int from public.audit_log where action = 'script_exception_processed' and target_type = 'script_exception'
+           and target_id = pg_temp.k('x_pf21') and actor_id is null and reason = 'The file was processed again.'), 1, 'R40 m1: and audited');
+select is((pg_temp.dash('2031-08-05 12:00Z') ->> 'failed_jobs')::int - (pg_temp.r('d21') ->> 'failed_jobs')::int, -1,
+  'R40 m1: the count of files that could not be processed drops by one on the dashboard');
+select is((select state from public.script_exceptions where upload_id = pg_temp.k('u20') and kind = 'processing_failed'), 'open',
+  'the exception of another file is left alone');
 
 select * from finish();
 rollback;

@@ -324,6 +324,12 @@ function foundWords(item: QueueItem): string[] {
           "Noting it has them made again.",
         ];
       }
+      if (str(d.reason) === "too_many_pages") {
+        return [
+          "The file has more than 5,000 pages, so it was not read.",
+          "Scan the pages again in smaller files (about 500 pages each), then reject this file.",
+        ];
+      }
       const attempts = num(d.attempts);
       return [`The file could not be prepared${attempts !== null ? ` after ${attempts} attempts` : ""}.`];
     }
@@ -519,6 +525,7 @@ const RESOLUTIONS: Record<string, string> = {
   one_version: "Pages made one version",
   set_aside: "Set aside with its page",
   marking_made: "Marking picture made",
+  processed: "File processed again",
   submission_rejected: "Submission rejected",
   pages_arrived: "Pages arrived",
   not_expected: "Candidate no longer expected",

@@ -7,6 +7,7 @@ import { storeFile } from "@/lib/home-upload";
 import { uploadResumable } from "@/lib/resumable-upload";
 import {
   SCAN_ACCEPT,
+  SCAN_FILE_ADVICE,
   SCAN_POLL_MAX_FAILURES,
   SCAN_POLL_MS,
   completeFailureMessage,
@@ -417,6 +418,7 @@ function BatchRow({
         </ul>
       )}
 
+      {open && <p className="mt-3 text-xs text-slate-600">{SCAN_FILE_ADVICE}</p>}
       {open ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <label className={`cursor-pointer rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 ${FOCUS_WITHIN}`}>

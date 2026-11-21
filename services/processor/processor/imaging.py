@@ -252,8 +252,22 @@ def _measure_copy(img: np.ndarray) -> np.ndarray:
 # Reading files -------------------------------------------------------------------------------------------
 
 
-def render_pdf(data: bytes, dpi: int = 200) -> Iterator[np.ndarray]:
-    """The pages of a PDF as RGB pictures, one at a time. Opening happens now, so a broken or
+def pdf_page_count(source: bytes | str) -> int:
+    """How many pages a PDF has (its bytes, or the path of a file), read from the file's own page tree: nothing is
+    rendered. Raises UnreadableFile for a broken or password-protected PDF."""
+    try:
+        doc = pdfium.PdfDocument(source)
+        try:
+            return len(doc)
+        finally:
+            doc.close()
+    except Exception:
+        raise UnreadableFile("The PDF could not be opened: it is broken or password protected.") from None
+
+
+def render_pdf(data: bytes | str, dpi: int = 200) -> Iterator[np.ndarray]:
+    """The pages of a PDF (its bytes, or the path of a file, which is then read as it is needed and never held whole
+    in memory) as RGB pictures, one at a time. Opening happens now, so a broken or
     password-protected PDF raises UnreadableFile here; a page that fails later raises it when reached."""
     try:
         doc = pdfium.PdfDocument(data)
@@ -284,12 +298,12 @@ def _render_pages(doc: pdfium.PdfDocument, count: int, dpi: int) -> Iterator[np.
         doc.close()
 
 
-def load_photo(data: bytes) -> np.ndarray:
-    """A JPEG, PNG, HEIC or HEIF photo as an RGB picture, turned as its EXIF orientation says, and scaled
-    down to at most MAX_PHOTO_SIDE px on its longer side. A picture of more than MAX_DECODE_PIXELS (as
-    its header says, after a JPEG's reduced decode) is refused before it is decoded."""
+def load_photo(data: bytes | str) -> np.ndarray:
+    """A JPEG, PNG, HEIC or HEIF photo (its bytes, or the path of a file) as an RGB picture, turned as its EXIF
+    orientation says, and scaled down to at most MAX_PHOTO_SIDE px on its longer side. A picture of more than
+    MAX_DECODE_PIXELS (as its header says, after a JPEG's reduced decode) is refused before it is decoded."""
     try:
-        with Image.open(io.BytesIO(data)) as im:
+        with Image.open(io.BytesIO(data) if isinstance(data, (bytes, bytearray)) else data) as im:
             im.draft("RGB", (MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))  # JPEG: decode a huge photo at a smaller scale
             if im.size[0] * im.size[1] > MAX_DECODE_PIXELS:
                 raise ValueError("too large")
