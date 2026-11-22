@@ -370,13 +370,13 @@ Deno.test("marking_alert_goes_to_lead_and_admins", async () => {
     assertEquals(sent.map((s) => s.template), ["script_receipt", "script_receipt", "script_marking_alert", "script_marking_alert"]);
     assertEquals(sent.slice(2).map((s) => s.to), ["lead@example.test", "admin@example.test"]);
     assertEquals(db.marks, [{ id: 1, ok: true }, { id: 7, ok: true }]);
-    assertEquals(sent[2].data, { exam: "GCSE Maths Paper 1", script_number: "S-ABC-0002", kind: "picture_changed" });
+    assertEquals(sent[2].data, { exam: "GCSE Maths Paper 1", script_number: "S-ABC-0002", kind: "picture_changed", count: "1" });
   });
 });
 
 Deno.test("marking_alert_email_has_no_candidate_or_marker_name", () => {
   const data = dataFor(markingAlert, "Lena");
-  assertEquals(Object.keys(data).sort(), ["exam", "kind", "script_number"]); // no name of anyone, not even the recipient's
+  assertEquals(Object.keys(data).sort(), ["count", "exam", "kind", "script_number"]); // no name of anyone, not even the recipient's
   // Even when it is handed names by mistake, the email shows none of them.
   for (const kind of ["picture_changed", "picture_missing", "name_visible", "pages_set_aside", "pages_changed"]) {
     const mail = _renderForTest("script_marking_alert", {
@@ -401,10 +401,35 @@ Deno.test("the sentence of each kind of marking alert", () => {
   );
   assertEquals(
     markingAlertLine("picture_missing"),
-    "A page of this script lost its marking picture during marking. The script is on hold until an admin takes it back.",
+    "A page of this script lost its marking picture during marking. The script is on hold until it is handed back.",
   );
   assertEquals(markingAlertLine("something_else"), "A script being marked needs attention.");
   const mail = _renderForTest("script_marking_alert", { exam: "GCSE Maths", kind: "name_visible", script_number: "S-ABC-0002" });
   assert(mail.subject.includes("GCSE Maths"), mail.subject);
-  assert(mail.html.includes("Script: S-ABC-0002"), mail.html);
+  assert(mail.html.includes("Script: S-ABC-0002"), mail.html); // an email with no count is about one script
+});
+
+Deno.test("a grouped marking alert says how many scripts it is about and names no one script", async () => {
+  await quiet(async () => {
+    // The database groups the alerts of one exam and kind into the email that still waits (migration 008).
+    const db = fakeDb([{ ...markingAlert, count: 12 }]);
+    const sent: { template: string; data: Record<string, string> }[] = [];
+    const h = makeHandler(deps({ svc: () => db.svc, send: (_to, template, data) => (sent.push({ template, data }), Promise.resolve(true)) }));
+    await h(req());
+    assertEquals(sent.map((s) => [s.template, s.data.count]), [["script_marking_alert", "12"], ["script_marking_alert", "12"]]);
+    const mail = _renderForTest("script_marking_alert", sent[0].data);
+    assert(mail.html.includes("Page pictures of 12 scripts changed during marking. The scripts are on hold until you release them."), mail.html);
+    assert(!mail.html.includes("Script:") && !mail.html.includes("S-ABC-0002"), mail.html);
+  });
+  assertEquals(
+    markingAlertLine("picture_missing", 3),
+    "Pages of 3 scripts lost their marking pictures during marking. The scripts are on hold until they are handed back.",
+  );
+  assertEquals(markingAlertLine("name_visible", 2), "Markers reported a visible name on 2 scripts. Staff must hide the names and hand the scripts back.");
+  assertEquals(markingAlertLine("pages_set_aside", 4), "Scanned pages arrived for 4 scripts that are being marked. They were set aside.");
+  assertEquals(
+    markingAlertLine("pages_changed", 5),
+    "The pages of 5 scripts changed while they were with staff. Their markers have been asked to check their marks.",
+  );
+  assertEquals(markingAlertLine("picture_changed", 0), markingAlertLine("picture_changed", 1)); // never "0 scripts"
 });

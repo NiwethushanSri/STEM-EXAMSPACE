@@ -1167,14 +1167,14 @@ isOneToOne: false
                   ]
                 },"script_pages": {
                   Row: {
-                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"full_rotation": number,"id": string,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"full_rotation": number,"id": string,"marking_inputs": string | null,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"full_rotation"?: number,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"full_rotation"?: number,"id"?: string,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   Update: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"full_rotation"?: number,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"full_rotation"?: number,"id"?: string,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
                   }
                   Relationships: [
                     {
@@ -1768,6 +1768,9 @@ isOneToOne: false
 "marking_alerts_list":
 { Args: { "p_exam"?: string,"p_state"?: string }; Returns: Json
                            },
+"marking_alerts_release_all":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
 "marking_assign":
 { Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
@@ -1794,6 +1797,9 @@ isOneToOne: false
                            },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
+                           },
+"marking_mask_key":
+{ Args: { "p_copy": string,"p_copy_page": number,"p_page": string,"p_rotation": number }; Returns: string
                            },
 "marking_missing":
 { Args: { "p_marking": string,"p_unit": string }; Returns: Json

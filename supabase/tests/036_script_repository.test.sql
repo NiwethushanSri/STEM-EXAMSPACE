@@ -1360,7 +1360,9 @@ select is(concat_ws('/', pg_temp.r('rm1') ->> 'ok', pg_temp.r('rm1') ->> 'pages'
   'true/8/5/0', 'the server records the new marking pictures');
 select is((pg_temp.pg('u1', 1)).marking_path, pg_temp.legacy('u1') || (pg_temp.r('r1') -> 'job' ->> 'id') || '-' || (pg_temp.r('r1') -> 'job' ->> 'attempts') || '/1-marking.jpg',
   'a new marking picture is in the remask job''s own folder');
-select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id where to_jsonb(p) - 'marking_path' = s.j),
+-- marking_inputs (migration 20261122000008) is the key of what the marking picture hides, written with each picture.
+select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id
+           where to_jsonb(p) - 'marking_path' - 'marking_inputs' = s.j - 'marking_inputs'),
   (select count(*)::int from snap), 'nothing but the marking picture changes: the full picture, rotation and the rest stay');
 select is(concat_ws('/', (pg_temp.pg('u1', 7)).marking_path is null, (select marking_path from snap where id = pg_temp.pid('u1', 7)) is not null,
     (select details ->> 'from' from public.script_exceptions where page_id = pg_temp.pid('u1', 7) and kind = 'poor_quality' and state = 'open'),

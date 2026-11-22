@@ -5,7 +5,8 @@
 // function only sends. The database hands out the families' notices before staff alerts, and one staff alert per
 // kind of problem and file, with how many problems it is about (migration 076). A marking alert (migration 008: a
 // picture changed or went while a script was being marked, a marker reported a visible name, pages were set aside or
-// changed) goes to the subject's lead marker and the owner and admin accounts, handed out as a staff alert is.
+// changed) goes to the subject's lead marker and the owner and admin accounts, handed out as a staff alert is; one
+// email per exam and kind while it waits, with how many scripts it is about.
 //
 // Rules:
 // - Without EMAIL_PROVIDER nothing is sent and nothing is claimed or marked, so turning email on later cannot
@@ -45,7 +46,8 @@ export interface Notice {
   page_count: number | null;
   pages: number[] | null;
   exception_kind: string | null;
-  /** How many problems a staff alert is about (pages of one file, or scripts of one exam). */
+  /** How many problems a staff alert is about (pages of one file, or scripts of one exam), or how many marking alerts of
+   * one exam and kind a marking alert is about. */
   count?: number | null;
   /** A marking alert's kind: picture_changed, picture_missing, name_visible, pages_set_aside or pages_changed. */
   alert_kind?: string | null;
@@ -82,7 +84,7 @@ export function londonTime(iso: string | null): string {
 export function dataFor(n: Notice, firstName: string | null): Record<string, string> {
   const d: Record<string, string> = { exam: n.exam ?? "", script_number: n.script_number ?? "" };
   if (n.kind === "staff_alert") return { ...d, kind: n.exception_kind ?? "", count: String(n.count && n.count > 0 ? n.count : 1) };
-  if (n.kind === "marking_alert") return { ...d, kind: n.alert_kind ?? "" };
+  if (n.kind === "marking_alert") return { ...d, kind: n.alert_kind ?? "", count: String(n.count && n.count > 0 ? n.count : 1) };
   d.name = firstName?.trim() || "there";
   if (n.kind === "receipt") {
     d.seq = n.submission_seq == null ? "" : String(n.submission_seq);

@@ -2,17 +2,22 @@
 -- back from marking and handing it back, pages set aside for a script being marked, and the marking alerts with their
 -- emails.
 --
--- A page picture of a script being marked (ready to mark, being marked or marked) changes: its pieces that are taken or
--- submitted go on hold (picture_changed, or picture_missing when the picture is gone) and the lead marker and admins
--- get an alert and an email. Holds keep their marks; a hold on a piece that is on hold does not run out (Task 5). The
--- lead (or an admin) releases a picture_changed alert once every page has a picture again, the script is not busy and
--- it is not taken back; the markers carry on, their Next script holds restarted at now + 2 hours. A missing picture is
--- never released: an admin takes the script back. While an alert other than name_visible is open, the subject's lead
--- may read the script's marking pictures (marking_picture_allowed); never once marking has closed (Ruling R11).
+-- A page picture of a script being marked (ready to mark, being marked or marked) is made to hide something else (its
+-- rotation, staff or paper hidden areas: script_pages.marking_inputs, the key written as each picture is stored): its
+-- pieces that are taken or submitted go on hold (picture_changed) and the lead marker and admins get an alert and an
+-- email. A picture made again from the same inputs (a remask lists every answer page of its file) holds nothing. A
+-- picture that goes (picture_missing) holds every piece of the script, open ones too, until the script is handed back.
+-- Holds keep their marks; a hold on a piece that is on hold does not run out (Task 5). The lead (or an admin) releases
+-- a picture_changed alert, or all of an exam's at once, once every page has a picture again, the script is not busy
+-- and it is not taken back; the markers carry on, their Next script holds restarted at now + 2 hours. A missing
+-- picture is never released: an admin takes the script back. While an alert other than name_visible is open, the
+-- subject's lead may read the script's marking pictures (marking_picture_allowed); never once marking has closed
+-- (Ruling R11).
 --
 -- A marker who sees a name presses "Name visible" (marking_name_visible: the piece and the page, no text the marker
--- could type a name into): a name_visible exception for the page, their hold and marking end (name_seen), Next script
--- never offers them that piece again, and the whole script is taken back from the markers. Taking back (also by an
+-- could type a name into): a name_visible exception for the page; on every piece of the script their holds and
+-- markings in progress end (name_seen) and Next script never offers them the piece again; and the whole script is
+-- taken back from the markers. Taking back (also by an
 -- admin, with a reason) puts every piece of the script on hold (name_visible or taken_back), keeps the other markers'
 -- holds and markings, and returns the script to staff (needs attention, then worked out again by script_evaluate), so
 -- the Phase 2 page tools work on it again. It never comes back by itself: marking_exam_sync leaves a taken-back script
@@ -24,13 +29,15 @@
 -- A page scanned for a script being marked is set aside by Phase 2 (a not_expected exception, reason script_locked):
 -- that raises a pages_set_aside alert, and changes nothing markers see.
 --
--- An alert is one row per script and kind while open (marking_alerts_one_open) and one email: script_notices takes the
--- kind marking_alert, with the exam and the alert (alert_id). Its recipients are the subject's lead marker and the
+-- An alert is one row per script and kind while open (marking_alerts_one_open); its email (script_notices kind
+-- marking_alert, with the exam and the alert: alert_id) is grouped per exam and kind while one waits to be sent, and
+-- says how many alerts it is about. Its recipients are the subject's lead marker and the
 -- active owner and admin accounts. Nothing in an alert, its list or its email names the candidate or a marker: the
 -- script number and the index number only.
 --
--- Lock order (Ruling R9): the marker's advisory lock (exclusive in marking_name_visible, which adds an exclusion,
--- Ruling R10), then the exam's marking row (for share), then the booking's advisory lock (taking back, handing back and
+-- Lock order (Ruling R9): the marker's advisory lock (exclusive in marking_name_visible, which adds exclusions; shared,
+-- in uuid order, for the markers of a script handed back, whose pieces may go back to them: Ruling R10), then the exam's
+-- marking row (for share), then the booking's advisory lock (taking back, handing back and
 -- Name visible: Phase 2's script_evaluate takes the hand-in's row), then the script's row, then its pieces in id order,
 -- then their assignments and markings. The picture trigger runs inside Phase 2's record of new pictures, which already
 -- holds the bookings' locks and the page rows: it takes the rows of the scripts being marked that show a page of the
@@ -38,12 +45,14 @@
 -- piece, then the marking, so the two wait for each other in one order.
 --
 -- Changed, each from its latest definition:
---   marking_picture_allowed (20261122000007): also true for the subject's lead marker, for a marking picture of a script
---     with an open alert other than name_visible (and no open name_visible exception on the page), while the exam's
---     marking is open.
+--   marking_picture_allowed (20261122000007): also true for the subject's lead marker, not blocked for the candidate,
+--     for a marking picture of a script being marked and not taken back, with an open alert other than name_visible
+--     (and no open name_visible exception on the page), while the exam's marking is open.
 --   script_detail (20261120000065): the script also says taken_back_at and taken_back_reason.
 --   script_notice_recipients (20261120000055): a marking_alert goes to the subject's lead marker and the active owner
 --     and admin accounts.
+--   script_notice_count (20261120000076): a marking_alert's email counts the alerts of its exam and kind since it was
+--     queued.
 --   script_notice_content (20261120000076): a marking_alert's exam is the notice's, and every notice also says
 --     alert_kind (the kind of its marking alert; null for the other kinds).
 --   script_notice_next and script_notice_given_up (20261122000001): a marking_alert is handed out and given up as a
@@ -90,7 +99,9 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- Internal: an alert of this kind for the script, unless one is open already (one open per script and kind), and its
--- one email. Returns the new alert, or null when one was open.
+-- email. The emails are grouped per exam and kind, as Phase 2 groups staff alerts (20261120000076): an alert raised
+-- while the email of its exam and kind still waits to be sent (not claimed, under 6 hours old) joins it, and the email
+-- says how many alerts it is about (script_notice_count). Returns the new alert, or null when one was open.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_alert_raise(p_script uuid, p_kind text, p_unit uuid, p_page uuid)
 returns uuid
@@ -101,23 +112,31 @@ as $$
 declare
   v_exam uuid;
   v_id uuid;
+  v_key text;
 begin
   select s.exam_id into v_exam from public.scripts s where s.id = p_script;
   insert into public.marking_alerts (exam_id, kind, script_id, unit_id, page_id)
   values (v_exam, p_kind, p_script, p_unit, p_page)
   on conflict (script_id, kind) where state = 'open' do nothing
   returning id into v_id;
-  if v_id is not null then
-    insert into public.script_notices (kind, script_id, exam_id, alert_id) values ('marking_alert', p_script, v_exam, v_id);
+  v_key := concat_ws('|', v_exam, 'marking_alert', p_kind);
+  if v_id is not null and not exists (
+       select 1 from public.script_notices n
+       where n.kind = 'marking_alert' and n.dedupe_key = v_key and n.sent_at is null and n.claimed_at is null
+         and n.skipped_at is null and n.created_at > now() - interval '6 hours') then
+    insert into public.script_notices (kind, script_id, exam_id, alert_id, dedupe_key)
+    values ('marking_alert', p_script, v_exam, v_id, v_key);
   end if;
   return v_id;
 end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- Internal: the script's pieces that are taken or submitted go on hold for p_hold_reason (a piece already on hold
--- keeps its reason, except that a missing picture outweighs a changed one), with an alert of p_alert_kind about the
--- page (marking_alert_raise). The caller holds the script's row (taken again here, in the same order).
+-- Internal: the script's pieces that are taken or submitted go on hold for p_hold_reason; for picture_missing every
+-- piece does, open ones too, so nobody is handed a page with no picture (only handing the script back lifts that). A
+-- piece already on hold keeps its reason, except that a missing picture outweighs a changed one. Then an alert of
+-- p_alert_kind about the page (marking_alert_raise). The caller holds the script's row (taken again here, in the same
+-- order).
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_script_hold(p_script uuid, p_hold_reason text, p_alert_kind text, p_page uuid)
 returns void
@@ -130,16 +149,86 @@ begin
   update public.marking_units u
   set on_hold = true,
     hold_reason = case when u.on_hold and u.hold_reason is distinct from 'picture_changed' then u.hold_reason else p_hold_reason end
-  where u.script_id = p_script and u.state in ('taken', 'submitted');
+  where u.script_id = p_script and (p_hold_reason = 'picture_missing' or u.state in ('taken', 'submitted'));
   perform public.marking_alert_raise(p_script, p_alert_kind, null, p_page);
 end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- A page's marking picture changed (or went: picture_missing) while a script being marked shows it
--- (marking_script_pages): that script's pieces are held (marking_script_hold). The rows of every script being marked that
--- shows a page of the same file are taken first, in id order, so a record that changes several scripts' pictures (a
--- remask of a scan file) takes them in one order whatever the order of its pages.
+-- What a page's marking picture hides, as a key (md5): its rotation, its staff hidden areas and the paper hidden areas
+-- of its copy page (each in a stable order: by place, not by when they were saved), and the name band rule (a
+-- constant; change it if the processor's band rule changes). p_copy and p_copy_page are the page's copy and copy page
+-- (for a page with no code, the slot a script shows it at).
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_mask_key(p_page uuid, p_rotation int, p_copy uuid, p_copy_page int)
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select md5(jsonb_build_object(
+    'band', 'name_band_1',
+    'rotation', p_rotation,
+    'staff_areas', coalesce((
+      select jsonb_agg(jsonb_build_array(trim_scale(a.x), trim_scale(a.y), trim_scale(a.w), trim_scale(a.h)) order by a.x, a.y, a.w, a.h)
+      from public.script_page_hidden_areas a where a.page_id = p_page), '[]'::jsonb),
+    'paper_areas', coalesce((
+      select jsonb_agg(jsonb_build_array(trim_scale(a.x), trim_scale(a.y), trim_scale(a.w), trim_scale(a.h)) order by a.x, a.y, a.w, a.h)
+      from public.paper_copies c join public.paper_hidden_areas a on a.paper_id = c.paper_id and a.page = p_copy_page
+      where c.id = p_copy), '[]'::jsonb))::text)
+$$;
+
+-- The key of what the page's current marking picture was made to hide (null: no marking picture). Written when a
+-- picture is stored (marking_picture_inputs), so a picture made again from the same inputs (a remask lists every answer
+-- page of its file) is told apart from one that hides something else.
+alter table public.script_pages add column marking_inputs text;
+
+-- Before a page row is stored with a marking picture, or its marking picture changes: the key of the inputs now. A
+-- page with a code uses its own copy page; a page with no code, the slot a script shows it at (script_page_copy).
+create function public.marking_picture_inputs()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_copy uuid := new.copy_id;
+  v_copy_page int := new.copy_page;
+begin
+  if tg_op = 'UPDATE' and old.marking_path is not distinct from new.marking_path then
+    new.marking_inputs := old.marking_inputs;
+    return new;
+  end if;
+  if new.marking_path is null then
+    new.marking_inputs := null;
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and v_copy is null then
+    select t.copy_id, t.copy_page into v_copy, v_copy_page from public.script_page_copy(new.id) t;
+  end if;
+  new.marking_inputs := public.marking_mask_key(new.id, new.rotation, v_copy, v_copy_page);
+  return new;
+end;
+$$;
+
+create trigger marking_picture_inputs before insert or update of marking_path on public.script_pages
+  for each row
+  execute function public.marking_picture_inputs();
+
+-- The pictures already stored count as made from their page's inputs now.
+update public.script_pages p
+set marking_inputs = public.marking_mask_key(p.id, p.rotation, t.copy_id, t.copy_page)
+from public.script_pages q cross join lateral public.script_page_copy(q.id) t
+where q.id = p.id and p.marking_path is not null and p.replaced_at is null;
+
+-- ---------------------------------------------------------------------------------------------
+-- A page's marking picture went (picture_missing), or was made again to hide something else (picture_changed: its
+-- inputs key differs; a first picture, with no key before, counts as changed), while a script being marked shows it
+-- (marking_script_pages): that script's pieces are held (marking_script_hold). A picture made again from the same
+-- inputs holds nothing, raises no alert and sends no email. The rows of every script being marked that shows a page of
+-- the same file are taken first, in id order, so a record that changes several scripts' pictures (a remask of a scan
+-- file) takes them in one order whatever the order of its pages.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_on_page_picture()
 returns trigger
@@ -203,7 +292,8 @@ $$;
 
 create trigger marking_on_page_picture after update of marking_path on public.script_pages
   for each row
-  when (old.marking_path is distinct from new.marking_path)
+  when (old.marking_path is distinct from new.marking_path
+        and (new.marking_path is null or new.marking_inputs is distinct from old.marking_inputs))
   execute function public.marking_on_page_picture();
 
 -- ---------------------------------------------------------------------------------------------
@@ -271,7 +361,8 @@ $$;
 -- and not blocked for the candidate: the rule of a question added after opening, Task 2): in progress again, its piece
 -- taken, with an assigned hold (no time limit) unless the piece has an open one. Otherwise it is set aside (unapproved,
 -- or conflict) and its piece is open. A pages_changed alert when any changed. Returns how many went back to their
--- markers. The caller holds the locks.
+-- markers. The caller holds the keys of those markers (shared, in uuid order: a piece going back to its marker is a
+-- hand-out, Ruling R10), then the script's locks.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_units_refresh(p_script uuid)
 returns int
@@ -342,13 +433,18 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- marking_name_visible: the holder of the piece (or the marker of its submitted marking) says p_page shows the
--- candidate's name. No text is taken: a marker might type the name. Refused as opening is (marking_work_blocked;
--- a submitted piece once marking has closed is still reported), and invalid_input for a page the piece does not show.
--- In one transaction: a name_visible exception for the page ({"from": "marker"}); the caller's hold ends (name_seen)
--- and their marking is set aside (name_seen); the piece is open; Next script never offers it to them again (an
--- exclusion); the script is taken back from the markers (marking_script_take_back_as); a name_visible alert; audit
--- marking_name_visible. Returns {ok}.
+-- marking_name_visible: a marker says p_page shows the candidate's name. No text is taken: a marker might type the
+-- name. A name a marker saw is always reportable: the caller holds the piece, or has a live marking on it that is not
+-- set aside (in progress or submitted), even after their hold ran out, on hold or after marking closed. Refused:
+-- invalid_input (also a page the piece does not show), not_found, forbidden (no such claim). In one transaction:
+--   a name_visible exception for the page ({"from": "marker"}), unless one is open for it already;
+--   on every piece of the script, the caller's holds end (name_seen), their markings in progress are set aside
+--     (name_seen) and Next script never offers them the piece again (an exclusion); their marking of the reported
+--     piece is set aside whatever its state; their submitted markings of other pieces stand (the alert tells admins,
+--     who may take them back); the pieces they no longer hold are open;
+--   the script is taken back from the markers (marking_script_take_back_as), unless it was already;
+--   a name_visible alert; audit marking_name_visible.
+-- Returns {ok}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_name_visible(p_unit uuid, p_page uuid)
 returns jsonb
@@ -360,48 +456,58 @@ declare
   v_actor uuid := auth.uid();
   v_u public.marking_units%rowtype;
   v_x public.scripts%rowtype;
-  v_status text;
-  v_why text;
+  v_ended uuid[];
 begin
   if p_unit is null or p_page is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
-  -- Ruling R10: the marker's advisory lock, exclusive (an exclusion is added), first of all.
+  -- Ruling R10: the marker's advisory lock, exclusive (exclusions are added), first of all.
   perform pg_advisory_xact_lock(hashtextextended('marker:' || v_actor::text, 0));
   select * into v_u from public.marking_units u where u.id = p_unit;
   if not found then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
   perform public.marking_script_lock(v_u.script_id);
-  select * into v_u from public.marking_units u where u.id = p_unit;
   select * into v_x from public.scripts s where s.id = v_u.script_id;
-  select m.status into v_status from public.markings m
-  where m.unit_id = p_unit and m.kind = 'live' and m.marker_id = v_actor for update;
-  -- Only the piece's holder, or the marker of its submitted marking.
-  if v_status is distinct from 'submitted' and not exists (
-       select 1 from public.marking_assignments a
-       where a.unit_id = p_unit and a.kind = 'live' and a.marker_id = v_actor and a.ended_at is null) then
+  perform 1 from public.markings m
+  where m.kind = 'live' and m.marker_id = v_actor
+    and m.unit_id in (select u.id from public.marking_units u where u.script_id = v_x.id)
+  order by m.id
+  for update;
+  if not exists (select 1 from public.marking_assignments a
+                 where a.unit_id = p_unit and a.kind = 'live' and a.marker_id = v_actor and a.ended_at is null)
+     and not exists (select 1 from public.markings m
+                     where m.unit_id = p_unit and m.kind = 'live' and m.marker_id = v_actor and m.status in ('in_progress', 'submitted')) then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
   end if;
-  v_why := public.marking_work_blocked(p_unit, v_actor, null);
-  if v_why is not null and not (v_why = 'marking_closed' and v_status = 'submitted') then
-    return jsonb_build_object('ok', false, 'code', v_why);
-  end if;
-  if not exists (select 1 from public.marking_script_pages(v_u.script_id) x where x.page_id = p_page) then
+  if not exists (select 1 from public.marking_script_pages(v_x.id) x where x.page_id = p_page) then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
 
   insert into public.script_exceptions (exam_id, kind, booking_id, script_id, page_id, upload_id, details)
   select v_x.exam_id, 'name_visible', v_x.booking_id, v_x.id, p.id, p.upload_id, '{"from": "marker"}'::jsonb
-  from public.script_pages p where p.id = p_page;
-  update public.marking_assignments a set ended_at = now(), end_reason = 'name_seen'
-  where a.unit_id = p_unit and a.kind = 'live' and a.marker_id = v_actor and a.ended_at is null;
+  from public.script_pages p
+  where p.id = p_page
+    and not exists (select 1 from public.script_exceptions e where e.page_id = p_page and e.kind = 'name_visible' and e.state = 'open');
+  with ended as (
+    update public.marking_assignments a set ended_at = now(), end_reason = 'name_seen'
+    where a.kind = 'live' and a.marker_id = v_actor and a.ended_at is null
+      and a.unit_id in (select u.id from public.marking_units u where u.script_id = v_x.id)
+    returning a.unit_id
+  )
+  select coalesce(array_agg(e.unit_id), '{}') into v_ended from ended e;
   update public.markings m set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'name_seen'
-  where m.unit_id = p_unit and m.kind = 'live' and m.marker_id = v_actor and m.status <> 'set_aside';
-  update public.marking_units set state = 'open' where id = p_unit;
-  insert into public.marking_unit_exclusions (unit_id, marker_id, reason) values (p_unit, v_actor, 'name_seen')
+  where m.kind = 'live' and m.marker_id = v_actor
+    and m.unit_id in (select u.id from public.marking_units u where u.script_id = v_x.id)
+    and (m.status = 'in_progress' or (m.unit_id = p_unit and m.status = 'submitted'));
+  update public.marking_units u set state = 'open'
+  where (u.id = p_unit or u.id = any (v_ended)) and u.state <> 'open';
+  insert into public.marking_unit_exclusions (unit_id, marker_id, reason)
+  select u.id, v_actor, 'name_seen' from public.marking_units u where u.script_id = v_x.id
   on conflict do nothing;
-  perform public.marking_script_take_back_as(v_x.id, v_actor, 'name_visible');
+  if v_x.state in ('ready_to_mark', 'marking', 'marked') and v_x.taken_back_at is null then
+    perform public.marking_script_take_back_as(v_x.id, v_actor, 'name_visible');
+  end if;
   perform public.marking_alert_raise(v_x.id, 'name_visible', p_unit, p_page);
   insert into public.audit_log (actor_id, action, target_type, target_id)
   values (v_actor, 'marking_name_visible', 'marking_unit', p_unit);
@@ -459,7 +565,8 @@ $$;
 -- mark again (so its extra pages are written down again) and the pieces whose pages changed are refreshed
 -- (marking_units_refresh); the holds for taken_back, name_visible, picture_changed and picture_missing are lifted and
 -- the Next script holds restart at now + 2 hours; its state follows its pieces (marking_script_state). Its open alerts
--- close (handed_back) before the refresh raises any pages_changed alert. Audited (marking_script_handed_back).
+-- close (handed_back) before the refresh raises any pages_changed alert. Audited (marking_script_handed_back). The keys
+-- of the markers of its live markings are taken first (shared, in uuid order), then the script's locks.
 -- Refused also: forbidden, invalid_input, not_found, conflict with reason not_taken_back. Returns {ok, state, reopened}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_script_hand_back(p_script uuid, p_reason text default null)
@@ -474,6 +581,7 @@ declare
   v_reason text := public.script_resolution_reason(p_reason);
   v_x public.scripts%rowtype;
   v_reopened int;
+  v_marker uuid;
 begin
   if not public.is_staff_admin() then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
@@ -487,6 +595,16 @@ begin
   if not exists (select 1 from public.scripts s where s.id = p_script) then
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
+  -- Ruling R10: a submitted piece may go back to its marker (marking_units_refresh), as a hand-out does, so the markers
+  -- of the script's live markings have their keys taken (shared, in uuid order) before the script's locks. While the
+  -- script is taken back its pieces are on hold, so no new marking appears meanwhile.
+  for v_marker in
+    select distinct m.marker_id from public.markings m join public.marking_units u on u.id = m.unit_id
+    where u.script_id = p_script and m.kind = 'live' and m.status <> 'set_aside'
+    order by 1
+  loop
+    perform pg_advisory_xact_lock_shared(hashtextextended('marker:' || v_marker::text, 0));
+  end loop;
   perform public.marking_script_lock(p_script);
   select * into v_x from public.scripts s where s.id = p_script;
   if v_x.taken_back_at is null then
@@ -647,6 +765,76 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
+-- marking_alerts_release_all: an admin or the subject's lead releases, with one reason, every open picture_changed
+-- alert of the exam that marking_alert_can_release allows (the others stay open), as marking_alert_release does each
+-- one: the scripts' rows are taken in id order, then their pieces. One audit row for the exam
+-- (marking_alerts_released_all) says how many were released. Refused: forbidden, invalid_input, reason_required,
+-- not_found. Returns {ok, released} (how many alerts).
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_alerts_release_all(p_exam uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_reason text := public.script_resolution_reason(p_reason);
+  v_subject bigint;
+  v_units uuid[];
+  v_n int := 0;
+  r record;
+begin
+  if p_exam is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  select e.subject_id into v_subject from public.exams e where e.id = p_exam;
+  if not found then
+    return jsonb_build_object('ok', false, 'code', case when public.is_staff_admin() then 'not_found' else 'forbidden' end);
+  end if;
+  if not public.is_staff_admin() and not public.is_lead_for(v_actor, v_subject) then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  if v_reason is null then
+    return jsonb_build_object('ok', false, 'code', 'reason_required');
+  end if;
+
+  -- Ruling R9: the exam's marking row, the scripts' rows in id order, their pieces; then the alerts.
+  perform 1 from public.exam_marking m where m.exam_id = p_exam for share;
+  perform 1 from public.scripts s
+  where s.id in (select a.script_id from public.marking_alerts a where a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open')
+  order by s.id
+  for no key update;
+  perform 1 from public.marking_units u
+  where u.script_id in (select a.script_id from public.marking_alerts a where a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open')
+  order by u.id
+  for update;
+  for r in
+    select a.id, a.script_id from public.marking_alerts a
+    where a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open'
+    order by a.script_id
+    for update
+  loop
+    continue when public.marking_alert_can_release(r.script_id) is not null;
+    with released as (
+      update public.marking_units u set on_hold = false, hold_reason = null
+      where u.script_id = r.script_id and u.on_hold and u.hold_reason = 'picture_changed'
+      returning u.id
+    )
+    select coalesce(array_agg(x.id), '{}') into v_units from released x;
+    update public.marking_assignments a set hold_until = now() + interval '2 hours'
+    where a.unit_id = any (v_units) and a.kind = 'live' and a.ended_at is null and a.how = 'next';
+    update public.marking_alerts set state = 'closed', closed_by = v_actor, closed_at = now(), resolution = 'released', reason = v_reason
+    where id = r.id;
+    v_n := v_n + 1;
+  end loop;
+  insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+  values (v_actor, 'marking_alerts_released_all', 'exam', p_exam, v_reason || ' (alerts released: ' || v_n || ')');
+  return jsonb_build_object('ok', true, 'released', v_n);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
 -- marking_alert_note: an admin or the subject's lead closes a pages_set_aside or pages_changed alert (noted; wrong_kind
 -- for any other), with a reason. Audited (marking_alert_noted). Refused also: forbidden, invalid_input,
 -- reason_required, not_found, conflict with reason closed. Returns {ok}.
@@ -694,9 +882,10 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- marking_picture_allowed: as 20261122000007, and also true for the subject's lead marker when p_name is the current
--- marking picture of a page that a script shows (marking_script_pages) whose exam's marking is open, and the script has
--- an open alert other than name_visible and no open name_visible alert, and no open name_visible exception is on the
--- page: the lead looks at the pictures before releasing a hold.
+-- marking picture of a page that a script shows (marking_script_pages) whose exam's marking is open, the script is
+-- ready to mark, being marked or marked and not taken back, the lead is not blocked for its candidate
+-- (marking_marker_blocked), the script has an open alert other than name_visible and no open name_visible alert, and
+-- no open name_visible exception is on the page: the lead looks at the pictures before releasing a hold.
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.marking_picture_allowed(p_name text)
 returns boolean
@@ -735,10 +924,13 @@ as $$
     or exists (
       select 1 from scripts x
       join public.scripts s on s.id = x.id
+      join public.bookings b on b.id = s.booking_id
       join public.exams e on e.id = s.exam_id
       join public.exam_marking m on m.exam_id = s.exam_id
       where m.opened_at is not null and m.closed_at is null
+        and s.state in ('ready_to_mark', 'marking', 'marked') and s.taken_back_at is null
         and public.is_lead_for((select auth.uid()), e.subject_id)
+        and not public.marking_marker_blocked((select auth.uid()), b.student_id)
         and exists (select 1 from public.marking_alerts a where a.script_id = s.id and a.state = 'open' and a.kind <> 'name_visible')
         and not exists (select 1 from public.marking_alerts a where a.script_id = s.id and a.state = 'open' and a.kind = 'name_visible')
         and not exists (select 1 from pages pg join public.script_exceptions v on v.page_id = pg.id
@@ -910,6 +1102,35 @@ as $$
       and not exists (select 1 from public.script_notices_sent s where s.notice_id = p_notice.id and s.profile_id = r.id)
     order by lower(r.email), r.rnk
   ) x
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- script_notice_count: as 20261120000076, and a marking alert's email is about the alerts of its exam and kind raised
+-- since it was queued (marking_alert_raise groups them). At least 1.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.script_notice_count(p_notice public.script_notices)
+returns int
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select greatest(1, case
+    when p_notice.kind = 'marking_alert' then (
+      select count(*)::int from public.marking_alerts a
+      where a.exam_id = p_notice.exam_id and a.created_at >= p_notice.created_at
+        and a.kind = (select k.kind from public.marking_alerts k where k.id = p_notice.alert_id))
+    when p_notice.kind <> 'staff_alert' then 1
+    when p_notice.exception_kind = 'needs_attention' then (
+      select count(*)::int from public.scripts s
+      where s.exam_id = p_notice.exam_id and s.source = 'home' and s.attention_notified_at >= p_notice.created_at)
+    else (
+      select count(*)::int from public.script_exceptions e
+      where e.exam_id = p_notice.exam_id and e.kind::text = p_notice.exception_kind and e.created_at >= p_notice.created_at
+        and case when p_notice.group_id is null then e.upload_id is null
+                 else e.upload_id in (select u.id from public.script_uploads u
+                                      where u.id = p_notice.group_id or u.submission_id = p_notice.group_id) end)
+  end)
 $$;
 
 -- ---------------------------------------------------------------------------------------------
@@ -1086,15 +1307,19 @@ revoke execute on function public.marking_on_set_aside() from public, anon, auth
 revoke execute on function public.marking_script_take_back_as(uuid, uuid, text) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_units_refresh(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_alert_can_release(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_mask_key(uuid, int, uuid, int) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_picture_inputs() from public, anon, authenticated, service_role;
 revoke execute on function public.marking_name_visible(uuid, uuid) from public, anon;
 revoke execute on function public.marking_script_take_back(uuid, text) from public, anon;
 revoke execute on function public.marking_script_hand_back(uuid, text) from public, anon;
 revoke execute on function public.marking_alerts_list(uuid, text) from public, anon;
 revoke execute on function public.marking_alert_release(uuid, text) from public, anon;
 revoke execute on function public.marking_alert_note(uuid, text) from public, anon;
+revoke execute on function public.marking_alerts_release_all(uuid, text) from public, anon;
 grant execute on function public.marking_name_visible(uuid, uuid) to authenticated;
 grant execute on function public.marking_script_take_back(uuid, text) to authenticated;
 grant execute on function public.marking_script_hand_back(uuid, text) to authenticated;
 grant execute on function public.marking_alerts_list(uuid, text) to authenticated;
 grant execute on function public.marking_alert_release(uuid, text) to authenticated;
 grant execute on function public.marking_alert_note(uuid, text) to authenticated;
+grant execute on function public.marking_alerts_release_all(uuid, text) to authenticated;

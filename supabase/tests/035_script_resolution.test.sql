@@ -816,7 +816,9 @@ select is(pg_temp.script('b8') || ' ' || (select state::text from public.home_su
 -- ---------------------------------------------------------------------------------------------
 -- resolution_keeps_original_page_row
 -- ---------------------------------------------------------------------------------------------
-select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id and to_jsonb(p) - 'marking_path' = s.j - 'marking_path'), (select count(*)::int from snap),
+-- marking_inputs (migration 20261122000008) is the key of what the marking picture hides, written with each picture.
+select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id
+           and to_jsonb(p) - 'marking_path' - 'marking_inputs' = s.j - 'marking_path' - 'marking_inputs'), (select count(*)::int from snap),
   'resolution_keeps_original_page_row: every page row of the scanner file is as the server recorded it (a remask re-makes only marking pictures)');
 select is((select count(*)::int from snap), 13, 'and none was deleted');
 select is(public.script_resolution_lock(pg_temp.k('x_ne10'), '{}'), array[pg_temp.k('b3')], 'the lock helper names the bookings an exception concerns');

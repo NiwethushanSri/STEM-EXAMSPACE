@@ -1006,12 +1006,12 @@ select pg_temp.put(array[pg_temp.path('p:p1:1')]);
 select tests.as_user(pg_temp.uid('m1'));
 select is(pg_temp.seen(array[pg_temp.r('old_paths') ->> 0]), 0, 'once a page''s marking picture changes, the old one cannot be read');
 select is(public.marking_picture_allowed(pg_temp.r('old_paths') ->> 0), false, 'marking_picture_allowed says the same');
--- Task 7: the change also puts the piece on hold (picture_changed) until the lead marker releases it, so the new
--- picture cannot be read meanwhile either.
-select is(pg_temp.seen(array[pg_temp.path('p:p1:1')]), 0, 'nor the new one while the piece is on hold for the change');
+-- Task 7: this picture was made again from the same inputs (no hidden area or turn changed), so the piece is not held
+-- and its holder reads the new picture.
+select is(pg_temp.seen(array[pg_temp.path('p:p1:1')]), 1, 'the new one, made again from the same inputs, can be read');
 select tests.as_postgres();
-select is((select hold_reason from public.marking_units where id = pg_temp.u('p1') and on_hold), 'picture_changed',
-  'the piece is on hold because its picture changed');
+select is((select on_hold from public.marking_units where id = pg_temp.u('p1')), false,
+  'the piece is not on hold: what the picture hides did not change');
 
 -- ---------------------------------------------------------------------------------------------
 -- student_and_parent_read_no_marking_table_or_picture: a1's candidate and a parent of theirs; and a marker reads no
