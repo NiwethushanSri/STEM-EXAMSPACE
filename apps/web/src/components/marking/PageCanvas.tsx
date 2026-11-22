@@ -34,6 +34,8 @@ export type PageCanvasProps = {
   /** The picture could not be shown, even after asking again. */
   pictureFailed: boolean;
   onPictureError: () => void;
+  /** The picture has loaded. */
+  onPictureLoad: () => void;
   onRetryPicture: () => void;
   /** This page's annotations (the marker's own: there are no others on screen). */
   annotations: SavedAnnotation[];
@@ -295,6 +297,8 @@ export function PageCanvas(p: PageCanvasProps) {
     if (g && (("id" in g && g.id === e.pointerId) || (g.kind === "pinch" && g.ids.includes(e.pointerId)))) {
       gesture.current = null;
       clearLive();
+      // A pen or highlighter stroke the browser broke off is kept as far as it went; anything else is dropped.
+      if (g.kind === "draw" && (g.tool === "pen" || g.tool === "highlight") && g.points.length >= 2 && !p.disabled) finishDraw(g);
     }
   }
 
@@ -372,6 +376,7 @@ export function PageCanvas(p: PageCanvasProps) {
                       const a = img.naturalWidth / img.naturalHeight;
                       setAspects((m) => (m[pageId] === a ? m : { ...m, [pageId]: a }));
                     }
+                    p.onPictureLoad();
                   }}
                   onError={p.onPictureError}
                 />

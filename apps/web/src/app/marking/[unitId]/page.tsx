@@ -13,7 +13,8 @@ async function Gate({ params }: { params: Promise<{ unitId: string }> }) {
   await requireStaff(MARKING_ROLES);
   const { unitId } = await params;
   if (!isUuid(unitId)) notFound();
-  return <MarkingScreen unitId={unitId} />;
+  // Keyed by the piece, so "Next script" on the screen opens the next piece with nothing kept from this one.
+  return <MarkingScreen key={unitId} unitId={unitId} />;
 }
 
 /** The marking screen: full screen, with no staff side menu. */

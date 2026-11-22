@@ -2,16 +2,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useEffectEvent, useId, useRef, useState, useSyncExternalStore, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useEffect, useEffectEvent, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { markingScreenMessageFor, type Json } from "@stem/shared";
-import { giveBack } from "@/app/marking/actions";
+import { giveBack, nextScript } from "@/app/marking/actions";
 import { MarkPanel, MARK_INPUT_ID } from "@/components/marking/MarkPanel";
 import { PageCanvas } from "@/components/marking/PageCanvas";
 import { QuestionList } from "@/components/marking/QuestionList";
 import { FOCUS, type ScreenTool } from "@/components/marking/ToolBar";
 import { reasonProblem } from "@/lib/exception-queue";
 import { keyAction, type Action } from "@/lib/marking-keys";
-import { holdText } from "@/lib/marking-lists";
+import { holdText, nextScriptTarget, parseMyWork } from "@/lib/marking-lists";
 import { nextQuestionId, unitTotal, validMark } from "@/lib/marking-marks";
 import { act, applyOps, fromServer, redo, undo, type MarkingState, type Op, type SavedAnnotation } from "@/lib/marking-model";
 import { ZOOM_MAX, ZOOM_MIN, isPhone } from "@/lib/marking-pointer";
@@ -39,6 +39,11 @@ const COVER_CODES: Partial<Record<SaveStatus, string>> = {
   closed: "marking_closed",
 };
 
+/** A picture's link older than this is asked for again before the picture is shown (links last MARKING_URL_SECONDS). */
+const LINK_FRESH_MS = (MARKING_URL_SECONDS - 30) * 1000;
+const NO_ANNOTATIONS: SavedAnnotation[] = [];
+const NO_URLS: Record<string, string> = {};
+
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : null);
 
@@ -61,13 +66,16 @@ export function MarkingScreen({ unitId }: { unitId: string }) {
   if (width !== null && !isPhone(width) && !opened) setOpened(true);
   const [visit, setVisit] = useState(0);
   const refusedPaths = useRef(new Set<string>());
+  // Next.js keeps a page it leaves, hidden (Activity, with Cache Components), and can show it again (Back). The piece
+  // is then opened afresh, with the server's marks and rev and what is stored unsent, never the copy kept from before.
+  useLayoutEffect(() => () => setVisit((v) => v + 1), []);
   if (width === null) return <p className="p-6 text-sm text-slate-600">Opening the script...</p>;
   const phone = isPhone(width);
   return (
     <>
       {phone && (
         <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-4 p-6">
-          <p className="text-base font-semibold text-slate-900">Marking needs a computer or an iPad.</p>
+          <h1 className="text-base font-semibold text-slate-900">Marking needs a computer or an iPad.</h1>
           <Link href="/marking" className={`${QUIET} self-start`}>
             Back to Marking
           </Link>
@@ -96,6 +104,7 @@ function Workspace({ unitId, active, onReload, refusedPaths }: { unitId: string;
 
   const frame = (body: ReactNode) => (
     <main className={`mx-auto flex min-h-dvh max-w-lg flex-col justify-center gap-4 p-6 ${active ? "" : "hidden"}`}>
+      <h1 className="sr-only">Marking</h1>
       {body}
       <div className="flex flex-wrap gap-2">
         <Link href="/marking" className={QUIET}>
@@ -205,8 +214,12 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const [fingerDraw, setFingerDraw] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
+  /** What had focus when the questions drawer opened; it gets focus back when the drawer closes. */
+  const listOpener = useRef<HTMLElement | null>(null);
   const [dialog, setDialog] = useState<DialogKind>(null);
+  /** Submit is running: input stops until it answers (the ref stops it at once, before the next render). */
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
   /** A refusal of Submit that takes the page away (a hold, marking closed, the script no longer the marker's). */
   const [stop, setStop] = useState<{ code: string; reason?: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -214,17 +227,22 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const tries = useRef<Record<string, number>>({});
+  /** When each picture's link was signed, and the pictures whose link is being asked for. */
+  const signedAt = useRef<Record<string, number>>({});
+  const asking = useRef(new Set<string>());
   const queue = useRef<SaveQueue | null>(null);
   const rev = useRef(piece.marking.rev);
   const last = useRef<Obj | null>(null);
   const touchDevice = useSyncExternalStore(noSubscribe, () => navigator.maxTouchPoints > 0, () => false);
 
-  const hooksFor = (): QueueHooks => ({ markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog("reason"), onRefused: setRefusal });
+  // A change after submit asks for its reason, unless another box is open (its banner offers the reason then).
+  const askReason = () => setDialog((d) => d ?? "reason");
+  const hooksFor = (): QueueHooks => ({ markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: askReason, onRefused: setRefusal });
 
   // The save queue lives as long as the screen; operations left from an earlier visit at this rev are sent first.
   useEffect(() => {
     if (readOnly) return;
-    const q = queueAt(piece.marking.rev, { markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog("reason"), onRefused: setRefusal });
+    const q = queueAt(piece.marking.rev, { markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog((d) => d ?? "reason"), onRefused: setRefusal });
     queue.current = q;
     if (boot.pending.length > 0) q.push(boot.pending);
     // The queue in use (Submit starts a new one) warns before the tab closes with changes not yet sent.
@@ -251,16 +269,6 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     };
   }, []);
 
-  // Signed links for the marking pictures marking_unit_open returned, and no other. A refused link means the picture
-  // may have changed: the piece is opened again (once per picture). Read only after marking closed: none (Ruling R11).
-  const sign = (path: string) => signPicture(path, { setUrls, setFailed, refusedPaths, onReload });
-  const signAll = useEffectEvent(() => {
-    for (const p of pages) if (p.markingPath) void sign(p.markingPath);
-  });
-  useEffect(() => {
-    if (!readOnly) signAll();
-  }, [readOnly, pages]);
-
   const page = pages[pageIndex] ?? null;
   const current = questions.find((q) => q.id === currentId) ?? null;
   const entry = current ? model.marks[current.id] : undefined;
@@ -272,10 +280,42 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   );
   const missing = totals.missing.map((id) => questions.find((q) => q.id === id)?.label ?? "");
   const coverCode = stop?.code ?? COVER_CODES[status] ?? null;
+  /** The page is taken away (a hold, new pictures, the hold ended, marking closed): no picture is shown or asked for. */
+  const covered = readOnly || coverCode !== null;
   const stale = status === "stale";
-  const stopped = readOnly || coverCode !== null || stale || status === "refused" || status === "reason_required";
-  const pageAnnotations = page ? model.annotations.filter((a) => a.page_id === page.pageId) : [];
+  const stopped = busy || covered || stale || status === "refused" || status === "reason_required";
+  const pageId = page?.pageId ?? null;
+  const pageAnnotations = useMemo(() => (pageId ? model.annotations.filter((a) => a.page_id === pageId) : NO_ANNOTATIONS), [model.annotations, pageId]);
   const questionPages = pagesFor(current, questions, pages);
+
+  // ---------------------------------------------------------------------------------------------
+  // Pictures: signed links for the marking pictures marking_unit_open returned, and no other, asked for when the page
+  // is shown and when its thumbnail appears (a link older than LINK_FRESH_MS is asked for again, and the old one is
+  // not shown). A refused link means the picture may have changed: the piece is opened again (once per picture).
+  // Under a cover, and read only after marking closed (Ruling R11): none.
+  // ---------------------------------------------------------------------------------------------
+  const sign = (path: string) => {
+    if (asking.current.has(path)) return;
+    asking.current.add(path);
+    const onSigned = () => {
+      signedAt.current[path] = Date.now();
+    };
+    void signPicture(path, { setUrls, setFailed, refusedPaths, onReload, onSigned }).finally(() => asking.current.delete(path));
+  };
+  const showPicture = (path: string | null) => {
+    if (!path || covered) return;
+    const at = signedAt.current[path];
+    if (at !== undefined && Date.now() - at < LINK_FRESH_MS) return;
+    if (at !== undefined) {
+      delete signedAt.current[path];
+      setUrls((m) => withoutKey(m, path));
+    }
+    sign(path);
+  };
+  const showShownPicture = useEffectEvent(() => showPicture(page?.markingPath ?? null));
+  useEffect(() => {
+    showShownPicture();
+  }, [page?.markingPath, covered]);
 
   // ---------------------------------------------------------------------------------------------
   // Changes: each goes through the model (with its undo) and the save queue.
@@ -286,8 +326,10 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     setModel(next.state);
     queue.current?.push(next.send);
   };
+  /** Input has stopped, or Submit is running: nothing changes. */
+  const locked = () => stopped || submitting.current;
   const apply = (ops: Op[]) => {
-    if (!stopped) commit(act(modelRef.current, ops));
+    if (!locked()) commit(act(modelRef.current, ops));
   };
   const setMark = (questionId: string, mark: number | null, na: boolean) => {
     const prev = modelRef.current.marks[questionId] ?? { mark: null, na: false };
@@ -295,10 +337,10 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     apply([{ op: "mark", question_id: questionId, mark, na }]);
   };
   const onUndo = () => {
-    if (!stopped) commit(undo(modelRef.current));
+    if (!locked()) commit(undo(modelRef.current));
   };
   const onRedo = () => {
-    if (!stopped) commit(redo(modelRef.current));
+    if (!locked()) commit(redo(modelRef.current));
   };
   const deleteSelected = () => {
     if (!selectedId) return;
@@ -309,7 +351,20 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const showPage = (i: number) => {
     const next = Math.max(0, Math.min(pages.length - 1, i));
     if (next !== pageIndex) setSelectedId(null);
+    // Its link is asked for now, before the page is drawn, so one that has run out is never shown.
+    showPicture(pages[next]?.markingPath ?? null);
     setPageIndex(next);
+  };
+  const openList = () => {
+    listOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setListOpen(true);
+  };
+  /** Closes the questions drawer (if open) and gives focus back to what opened it. */
+  const closeList = () => {
+    if (!listOpen) return;
+    setListOpen(false);
+    listOpener.current?.focus();
+    listOpener.current = null;
   };
   /** A question chosen in the list (or with the keys): its first part to mark is current, and its first page shows. */
   const chooseQuestion = (q: ScreenQuestion) => {
@@ -317,7 +372,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     setCurrentId(leaf.id);
     const first = pagesFor(q, questions, pages)[0];
     if (first !== undefined) showPage(first);
-    setListOpen(false);
+    closeList();
   };
 
   const run = (a: Action) => {
@@ -373,6 +428,16 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   // Keyboard on the whole window, through keyAction. Ctrl+Z inside a text box is the box's own undo.
   const onKey = useEffectEvent((e: KeyboardEvent) => {
     if (!active || dialog !== null || e.defaultPrevented) return;
+    // The questions drawer takes the keys while it is open: Escape closes it, nothing else is a shortcut.
+    if (listOpen) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeList();
+      }
+      return;
+    }
+    // While Submit runs nothing changes, and the keys do nothing.
+    if (busy || submitting.current) return;
     const t = e.target instanceof HTMLElement ? e.target : null;
     const typing = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
     const a = keyAction(
@@ -396,21 +461,21 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   // ---------------------------------------------------------------------------------------------
   // Pictures.
   // ---------------------------------------------------------------------------------------------
+  // A picture that fails to load is asked for once more; a load counts as a fresh start.
   const pictureError = (path: string) => {
     const n = (tries.current[path] ?? 0) + 1;
     tries.current[path] = n;
-    if (n === 1) void sign(path);
+    if (n === 1) sign(path);
     else setFailed((m) => ({ ...m, [path]: true }));
+  };
+  const pictureLoaded = (path: string) => {
+    tries.current[path] = 0;
   };
   const retryPicture = (path: string) => {
     tries.current[path] = 0;
     setFailed((m) => ({ ...m, [path]: false }));
-    setUrls((m) => {
-      const { [path]: _gone, ...rest } = m;
-      void _gone;
-      return rest;
-    });
-    void sign(path);
+    setUrls((m) => withoutKey(m, path));
+    sign(path);
   };
 
   const openScheme = async () => {
@@ -437,23 +502,41 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   // ---------------------------------------------------------------------------------------------
   const submit = async () => {
     if (busy || stopped || missing.length > 0) return;
+    // A note or mark being typed is kept first (its box saves when it loses focus), then input stops until Submit
+    // answers, so no change can be made at the rev being submitted.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    submitting.current = true;
     setBusy(true);
     setNotice(null);
-    // A note being typed is kept first (its box saves when it loses focus).
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    try {
+      await submitNow();
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  };
+  const submitNow = async () => {
     const q = queue.current;
-    if (q && !(await q.flush())) return setBusy(false);
-    const { data, error } = await createClient().rpc("marking_submit", { p_marking: markingId, p_rev: rev.current });
-    setBusy(false);
+    if (q && !(await q.flush())) return;
+    const atRev = rev.current;
+    const { data, error } = await createClient().rpc("marking_submit", { p_marking: markingId, p_rev: atRev });
     const d = obj(data);
     if (error || !d) return setNotice(markingScreenMessageFor("internal"));
     if (d.ok === true && typeof d.rev === "number") {
-      // Submit moves the rev on: the queue starts again from it, with no reason yet for this visit.
+      // Submit moves the rev on: the queue starts again from it, with no reason yet for this visit. Anything still
+      // waiting in the old queue (input stops while Submit runs, so normally nothing) moves to the new one, and the
+      // server asks for its reason. Its stored copy is how it moves; if that cannot be read, the piece is opened again
+      // so the screen shows only what is saved.
       rev.current = d.rev;
+      const waiting = q?.pending() ?? 0;
+      const moved = waiting > 0 ? restorePending(markingId, atRev) : [];
       q?.dispose();
-      queue.current = queueAt(d.rev, hooksFor());
+      const next = queueAt(d.rev, hooksFor());
+      queue.current = next;
       setStatus("saved");
       setSubmitted(true);
+      if (moved.length < waiting) return onReload();
+      if (moved.length > 0) next.push(moved);
       return;
     }
     const code = typeof d.code === "string" ? d.code : "internal";
@@ -470,6 +553,10 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     setNotice(markingScreenMessageFor(code, reason));
   };
 
+  /** Before the piece leaves the screen (Name visible, Give back, Next script): what is waiting is sent if it can be. */
+  const saveFirst = async () => {
+    await queue.current?.flush();
+  };
   /** Leaves for the marker home once the piece is no longer theirs; what was not saved goes with it. */
   const leave = () => {
     queue.current?.discard();
@@ -489,9 +576,15 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
       <p role="alert" className="text-base font-medium text-slate-900">
         {markingScreenMessageFor(coverCode, stop?.reason)}
       </p>
-      <Link href="/marking" className={QUIET}>
-        Back to Marking
-      </Link>
+      <div className="flex flex-wrap items-start gap-2">
+        {/* The words say to press Next script: the hold ended, or the script is no longer the marker's. */}
+        {(coverCode === "hold_expired" || (coverCode === "conflict" && stop?.reason === "set_aside")) && (
+          <NextScriptButton unitId={piece.unit.id} saveFirst={saveFirst} onSame={onReload} />
+        )}
+        <Link href="/marking" className={QUIET}>
+          Back to Marking
+        </Link>
+      </div>
     </div>
   ) : null;
 
@@ -508,9 +601,10 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
       questionPages={questionPages}
       onPage={(i) => {
         showPage(i);
-        setListOpen(false);
+        closeList();
       }}
-      urls={urls}
+      urls={covered ? NO_URLS : urls}
+      onThumb={showPicture}
     />
   );
 
@@ -523,11 +617,11 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
           </svg>
           Marking
         </Link>
-        <button type="button" aria-expanded={listOpen} onClick={() => setListOpen(true)} className={`${QUIET} min-[1200px]:hidden`}>
+        <button type="button" aria-expanded={listOpen} onClick={openList} className={`${QUIET} min-[1200px]:hidden`}>
           Questions
         </button>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-900">{piece.unit.examTitle}</p>
+          <h1 className="truncate text-sm font-semibold text-slate-900">{piece.unit.examTitle}</h1>
           <p className="truncate text-sm text-slate-600">
             {piece.unit.paper}
             {piece.unit.groupLabel ? ` · ${piece.unit.groupLabel}` : ""}
@@ -546,7 +640,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
         {holdLine && <p className="text-sm text-slate-600">{holdLine}</p>}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {!readOnly && page && (
-            <button type="button" className={QUIET} onClick={() => setDialog("name")}>
+            <button type="button" className={QUIET} disabled={busy} onClick={() => setDialog("name")}>
               Name visible
             </button>
           )}
@@ -573,6 +667,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
               </button>
             </>
           )}
+          {!readOnly && submitted && !covered && <NextScriptButton unitId={piece.unit.id} saveFirst={saveFirst} onSame={onReload} />}
         </div>
       </header>
 
@@ -596,13 +691,13 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
           <div className="fixed inset-0 z-40 flex min-[1200px]:hidden">
             <div role="dialog" aria-modal="true" aria-label="Questions" className="flex h-full w-72 max-w-[85vw] flex-col border-r border-slate-200 bg-white shadow-xl">
               <div className="flex justify-end border-b border-slate-200 p-2">
-                <button type="button" autoFocus className={QUIET} onClick={() => setListOpen(false)}>
+                <button type="button" autoFocus className={QUIET} onClick={closeList}>
                   Close
                 </button>
               </div>
               <div className="min-h-0 flex-1">{list}</div>
             </div>
-            <button type="button" aria-label="Close the questions" className={`flex-1 bg-slate-900/30 ${FOCUS}`} onClick={() => setListOpen(false)} />
+            <button type="button" aria-label="Close the questions" className={`flex-1 bg-slate-900/30 ${FOCUS}`} onClick={closeList} />
           </div>
         )}
         <main className="flex min-w-0 flex-1 flex-col">
@@ -611,9 +706,10 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
             pageIndex={pageIndex}
             pageCount={pages.length}
             onPage={showPage}
-            url={page?.markingPath && !failed[page.markingPath] ? (urls[page.markingPath] ?? null) : null}
+            url={!covered && page?.markingPath && !failed[page.markingPath] ? (urls[page.markingPath] ?? null) : null}
             pictureFailed={!!(page?.markingPath && failed[page.markingPath])}
             onPictureError={() => page?.markingPath && pictureError(page.markingPath)}
+            onPictureLoad={() => page?.markingPath && pictureLoaded(page.markingPath)}
             onRetryPicture={() => page?.markingPath && retryPicture(page.markingPath)}
             annotations={pageAnnotations}
             selectedId={selectedId}
@@ -658,9 +754,17 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
       </div>
 
       {dialog === "name" && page && (
-        <NameVisibleDialog unitId={piece.unit.id} pageId={page.pageId} pageNumber={pageIndex + 1} pageCount={pages.length} onClose={() => setDialog(null)} onDone={leave} />
+        <NameVisibleDialog
+          unitId={piece.unit.id}
+          pageId={page.pageId}
+          pageNumber={pageIndex + 1}
+          pageCount={pages.length}
+          saveFirst={saveFirst}
+          onClose={() => setDialog(null)}
+          onDone={leave}
+        />
       )}
-      {dialog === "give_back" && <GiveBackDialog unitId={piece.unit.id} onClose={() => setDialog(null)} onDone={leave} />}
+      {dialog === "give_back" && <GiveBackDialog unitId={piece.unit.id} saveFirst={saveFirst} onClose={() => setDialog(null)} onDone={leave} />}
       {dialog === "reason" && (
         <ReasonDialog
           onClose={() => setDialog(null)}
@@ -689,10 +793,12 @@ async function signPicture(
     setFailed: Dispatch<SetStateAction<Record<string, boolean>>>;
     refusedPaths: RefObject<Set<string>>;
     onReload: () => void;
+    onSigned: () => void;
   },
 ): Promise<void> {
   const { data, error } = await createClient().storage.from("script-pages").createSignedUrl(path, MARKING_URL_SECONDS);
   if (!error && data?.signedUrl) {
+    h.onSigned();
     h.setUrls((m) => ({ ...m, [path]: data.signedUrl }));
     h.setFailed((m) => ({ ...m, [path]: false }));
     return;
@@ -704,6 +810,54 @@ async function signPicture(
     return;
   }
   h.setFailed((m) => ({ ...m, [path]: true }));
+}
+
+function withoutKey<T>(m: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in m)) return m;
+  const { [key]: _gone, ...rest } = m;
+  void _gone;
+  return rest;
+}
+
+/** "Next script" on the screen: the piece's exam (and question group) from marking_my_work, then marking_next, as on
+ * the marker home. What is waiting is sent first if it can be. The same piece again (a hold renewed) is opened again. */
+function NextScriptButton({ unitId, saveFirst, onSame }: { unitId: string; saveFirst: () => Promise<void>; onSame: () => void }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const go = async () => {
+    setBusy(true);
+    setMessage(null);
+    await saveFirst();
+    const { data, error } = await createClient().rpc("marking_my_work", {});
+    const work = error ? null : parseMyWork(data);
+    if (!work) {
+      setBusy(false);
+      return setMessage(markingScreenMessageFor("internal"));
+    }
+    const target = nextScriptTarget(work, unitId);
+    // Not in the list any more: the marker home has the exams and their Next script buttons.
+    if (!target) return router.push("/marking");
+    const r = await nextScript(target.examId, target.groupId);
+    if (!r.ok) {
+      setBusy(false);
+      return setMessage(r.message);
+    }
+    if (r.unitId === unitId) return onSame();
+    router.push(`/marking/${r.unitId}`);
+  };
+  return (
+    <span className="inline-flex flex-wrap items-center gap-2">
+      <button type="button" className={PRIMARY} disabled={busy} onClick={() => void go()}>
+        {busy ? "Finding a script..." : "Next script"}
+      </button>
+      {message && (
+        <span role="alert" className="text-sm text-amber-900">
+          {message}
+        </span>
+      )}
+    </span>
+  );
 }
 
 /** The pages to outline for a question: its own (or its parts'), else those of the question it is part of. */
@@ -789,6 +943,16 @@ function ScreenDialog({ title, children, confirmLabel, busy, onConfirm, onCancel
     if (!busy) onCancel();
   };
   const onEscape = useEffectEvent(close);
+  // Focus goes back to what had it when the box opened (a layout effect: before the box moves focus to Cancel). It
+  // moves once the closing render is done, as the opener may be enabled again by that same render.
+  useLayoutEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      queueMicrotask(() => {
+        if (opener?.isConnected) opener.focus();
+      });
+    };
+  }, []);
   useEffect(() => {
     cancel.current?.focus();
     const onKey = (e: KeyboardEvent) => {
@@ -819,7 +983,23 @@ function ScreenDialog({ title, children, confirmLabel, busy, onConfirm, onCancel
 }
 
 /** "Name visible": the page the marker is looking at, no text box (nothing a name could be typed into). */
-function NameVisibleDialog({ unitId, pageId, pageNumber, pageCount, onClose, onDone }: { unitId: string; pageId: string; pageNumber: number; pageCount: number; onClose: () => void; onDone: () => void }) {
+function NameVisibleDialog({
+  unitId,
+  pageId,
+  pageNumber,
+  pageCount,
+  saveFirst,
+  onClose,
+  onDone,
+}: {
+  unitId: string;
+  pageId: string;
+  pageNumber: number;
+  pageCount: number;
+  saveFirst: () => Promise<void>;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
@@ -831,6 +1011,7 @@ function NameVisibleDialog({ unitId, pageId, pageNumber, pageCount, onClose, onD
       onConfirm={async () => {
         setBusy(true);
         setError(null);
+        await saveFirst();
         const { data, error: e } = await createClient().rpc("marking_name_visible", { p_unit: unitId, p_page: pageId });
         const d = obj(data);
         if (!e && d?.ok === true) return onDone();
@@ -852,7 +1033,7 @@ function NameVisibleDialog({ unitId, pageId, pageNumber, pageCount, onClose, onD
 }
 
 /** Giving the script back: an optional reason, then it is free for others to mark. */
-function GiveBackDialog({ unitId, onClose, onDone }: { unitId: string; onClose: () => void; onDone: () => void }) {
+function GiveBackDialog({ unitId, saveFirst, onClose, onDone }: { unitId: string; saveFirst: () => Promise<void>; onClose: () => void; onDone: () => void }) {
   const id = useId();
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -866,6 +1047,7 @@ function GiveBackDialog({ unitId, onClose, onDone }: { unitId: string; onClose: 
       onConfirm={async () => {
         setBusy(true);
         setError(null);
+        await saveFirst();
         const r = await giveBack(unitId, reason);
         if (r.ok) return onDone();
         setBusy(false);

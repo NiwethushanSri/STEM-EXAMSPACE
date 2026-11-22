@@ -137,6 +137,18 @@ export function parseMyWork(data: unknown): MyWork | null {
   };
 }
 
+/** Where "Next script" on the marking screen looks: the exam of the piece on the screen and, for an exam marked by
+ * question, its question group (found by its label, which is unique in an exam). Null when the piece is not in the
+ * marker's list or the exam's marking has closed. */
+export function nextScriptTarget(work: MyWork, unitId: string): { examId: string; groupId: string | null } | null {
+  const piece = work.pieces.find((p) => p.unitId === unitId);
+  const exam = piece ? work.exams.find((e) => e.examId === piece.examId) : undefined;
+  if (!piece || !exam || exam.closed) return null;
+  if (exam.mode !== "by_question") return { examId: exam.examId, groupId: null };
+  const group = exam.groups.find((g) => g.label === piece.groupLabel);
+  return group ? { examId: exam.examId, groupId: group.id } : null;
+}
+
 /** A marker's piece: "On hold", "Submitted" or "In progress" (held, or their hold ran out with it in progress). */
 export function pieceStateLabel(p: MyPiece): string {
   if (p.onHold) return "On hold";

@@ -245,7 +245,7 @@ export async function pieceOf(unitId: string): Promise<{ scriptNumber: string; i
 type PointerInit = { pointerId: number; pointerType: "pen" | "touch"; x: number; y: number; pressure: number; buttons: number };
 
 /** Fires pointer events (bubbling, as a real pen or finger does) at points given as fractions of the element. */
-async function firePointers(page: Page, selector: string, events: ({ type: "pointerdown" | "pointermove" | "pointerup" } & PointerInit)[]): Promise<void> {
+async function firePointers(page: Page, selector: string, events: ({ type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel" } & PointerInit)[]): Promise<void> {
   await page.evaluate(
     ({ selector, events }) => {
       const el = document.querySelector(selector);
@@ -277,12 +277,19 @@ async function firePointers(page: Page, selector: string, events: ({ type: "poin
 const down = (p: Omit<PointerInit, "pressure" | "buttons">, pressure: number) => ({ type: "pointerdown" as const, ...p, pressure, buttons: 1 });
 const move = (p: Omit<PointerInit, "pressure" | "buttons">, pressure: number) => ({ type: "pointermove" as const, ...p, pressure, buttons: 1 });
 const up = (p: Omit<PointerInit, "pressure" | "buttons">) => ({ type: "pointerup" as const, ...p, pressure: 0, buttons: 0 });
+const cancel = (p: Omit<PointerInit, "pressure" | "buttons">) => ({ type: "pointercancel" as const, ...p, pressure: 0, buttons: 0 });
 
 /**
  * A pen stroke (pointer 1, pressure 0.5) through `points`, fractions of the element. With `touchDuring`, a finger
- * (pointer 2) goes down, moves along those points and lifts half way through the stroke, as a resting palm does.
+ * (pointer 2) goes down, moves along those points and lifts half way through the stroke, as a resting palm does. With
+ * `cancel`, the browser breaks the stroke off at its last point (pointercancel) instead of the pen lifting.
  */
-export async function penStroke(page: Page, selector: string, points: [number, number][], opts: { touchDuring?: [number, number][] } = {}): Promise<void> {
+export async function penStroke(
+  page: Page,
+  selector: string,
+  points: [number, number][],
+  opts: { touchDuring?: [number, number][]; cancel?: boolean } = {},
+): Promise<void> {
   const pen = (p: [number, number]) => ({ pointerId: 1, pointerType: "pen" as const, x: p[0], y: p[1] });
   const finger = (p: [number, number]) => ({ pointerId: 2, pointerType: "touch" as const, x: p[0], y: p[1] });
   const half = Math.max(1, Math.floor(points.length / 2));
@@ -292,7 +299,7 @@ export async function penStroke(page: Page, selector: string, points: [number, n
     ...points.slice(1, half).map((p) => move(pen(p), 0.5)),
     ...(palm.length ? [down(finger(palm[0]), 0.5), ...palm.slice(1).map((p) => move(finger(p), 0.5)), up(finger(palm[palm.length - 1]))] : []),
     ...points.slice(half).map((p) => move(pen(p), 0.5)),
-    up(pen(points[points.length - 1])),
+    (opts.cancel ? cancel : up)(pen(points[points.length - 1])),
   ];
   await firePointers(page, selector, events);
 }

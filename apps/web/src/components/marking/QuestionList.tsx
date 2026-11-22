@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffectEvent, useLayoutEffect } from "react";
 import type { MarkEntry } from "@/lib/marking-marks";
 import { PAGE_ASPECT } from "@/lib/page-view";
 import { formatMark, questionMarkText, type ScreenPage, type ScreenQuestion } from "@/lib/marking-screen";
@@ -9,7 +10,8 @@ import { FOCUS } from "@/components/marking/ToolBar";
  * The left area: every question of the piece with its mark so far ("NR", or a dash for none yet), the running total,
  * then the page thumbnails, the pages of the current question outlined. Choosing a question makes it current (the
  * screen shows its first page); choosing a thumbnail shows that page. `urls` holds the signed links the screen asked
- * for; a page without one shows its number only.
+ * for; a page without one shows its number only. A thumbnail asks for its link (onThumb) when it appears, so an old one
+ * is never shown; under a cover the screen passes no links and asks for none.
  */
 export function QuestionList({
   questions,
@@ -23,6 +25,7 @@ export function QuestionList({
   questionPages,
   onPage,
   urls,
+  onThumb,
 }: {
   questions: ScreenQuestion[];
   marks: Record<string, MarkEntry>;
@@ -35,6 +38,8 @@ export function QuestionList({
   questionPages: number[];
   onPage: (index: number) => void;
   urls: Record<string, string>;
+  /** A thumbnail of this picture appeared: the screen asks for its link unless a recent one is still good. */
+  onThumb: (path: string) => void;
 }) {
   const current = questions.find((q) => q.id === currentId);
   const outlined = new Set(questionPages);
@@ -91,12 +96,7 @@ export function QuestionList({
                     outlined.has(i) ? "border-blue-600 ring-2 ring-blue-600" : "border-slate-300"
                   } ${i === pageIndex ? "bg-blue-50" : ""}`}
                 >
-                  <span className="block overflow-hidden bg-slate-100" style={{ aspectRatio: `${PAGE_ASPECT}` }}>
-                    {url && (
-                      // eslint-disable-next-line @next/next/no-img-element -- a 120-second signed link to a private picture, not optimisable
-                      <img src={url} alt="" draggable={false} className="block h-full w-full object-contain" />
-                    )}
-                  </span>
+                  <Thumb path={p.markingPath} url={url} onThumb={onThumb} />
                   <span className="mt-1 block text-center text-sm text-slate-700">
                     {i + 1}
                     {p.extra ? " (extra)" : ""}
@@ -108,6 +108,23 @@ export function QuestionList({
         </ul>
       </section>
     </nav>
+  );
+}
+
+/** A page's small picture; it asks for its link before it is first drawn. */
+function Thumb({ path, url, onThumb }: { path: string | null; url: string | undefined; onThumb: (path: string) => void }) {
+  const ask = useEffectEvent((p: string) => onThumb(p));
+  // Before paint, so a link that has run out is dropped before its picture could show broken.
+  useLayoutEffect(() => {
+    if (path) ask(path);
+  }, [path]);
+  return (
+    <span className="block overflow-hidden bg-slate-100" style={{ aspectRatio: `${PAGE_ASPECT}` }}>
+      {url && (
+        // eslint-disable-next-line @next/next/no-img-element -- a 120-second signed link to a private picture, not optimisable
+        <img src={url} alt="" draggable={false} className="block h-full w-full object-contain" />
+      )}
+    </span>
   );
 }
 

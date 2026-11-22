@@ -4,7 +4,7 @@
  * (the index number only, Ruling R4). The database checks every rule again. */
 import type { AnnotationKind } from "@/lib/annotations";
 import { ANNOTATION_KINDS } from "@/lib/annotations";
-import type { MarkEntry } from "@/lib/marking-marks";
+import { markButtons, type MarkEntry } from "@/lib/marking-marks";
 import type { OpenedMarking } from "@/lib/marking-model";
 import { ZOOM_MAX, ZOOM_MIN } from "@/lib/marking-pointer";
 
@@ -213,6 +213,13 @@ export function questionPageIndexes(q: ScreenQuestion | undefined, questions: Sc
 /** The question to mark when a question in the list is chosen: itself, or its first part to mark. */
 export function firstLeaf(q: ScreenQuestion, questions: ScreenQuestion[]): ScreenQuestion {
   return family(q, questions).find((x) => x.leaf) ?? q;
+}
+
+/** How a question's mark is given: the buttons (none when there would be more than 21), and the number box, shown
+ * whenever the maximum is over 9 (beside the buttons), since a digit key then goes to the box (keyAction). */
+export function markControls(max: number, step: 0.5 | 1): { buttons: number[] | null; box: boolean } {
+  const buttons = markButtons(max, step);
+  return { buttons, box: buttons === null || max > 9 };
 }
 
 /** Zoom steps of the zoom buttons and keys (1 is the page's width fitting the area). */

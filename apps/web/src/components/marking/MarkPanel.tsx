@@ -2,12 +2,12 @@
 
 import { useId, useState } from "react";
 import { FOCUS } from "@/components/marking/ToolBar";
-import { markButtons, validMark, type MarkEntry } from "@/lib/marking-marks";
-import { formatMark, type ScreenQuestion } from "@/lib/marking-screen";
+import { validMark, type MarkEntry } from "@/lib/marking-marks";
+import { formatMark, markControls, type ScreenQuestion } from "@/lib/marking-screen";
 
 /** The longest note to the lead marker the database keeps. */
 export const LEAD_NOTE_MAX = 1000;
-/** The id of the mark box, which a number key focuses for a question out of more than 9. */
+/** The id of the mark box, which a number key focuses for a question out of more than 9 (the box is then shown). */
 export const MARK_INPUT_ID = "marking-mark-input";
 
 const BTN = `inline-flex min-h-11 min-w-11 items-center justify-center rounded border px-2 text-sm font-semibold tabular-nums disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS}`;
@@ -18,7 +18,8 @@ const marksWord = (n: number) => `${formatMark(n)} ${n === 1 ? "mark" : "marks"}
 
 /**
  * The right area: the current question, out of its maximum, with its marking points, alternatives and guidance; the
- * mark buttons (or a number box when there would be more than 21), "+½" for a question in half marks, "NR"; the mark
+ * mark buttons (up to 21) and, for a question out of more than 9, a number box beside them (the number box alone when
+ * there would be more than 21 buttons), "+½" for a question in half marks, "NR"; the mark
  * scheme PDF; and the private note to the lead marker. `disabled` when input has stopped or the piece is read only.
  */
 export function MarkPanel({
@@ -92,7 +93,7 @@ export function MarkPanel({
 
 function QuestionMarks({ question: q, entry, onMark, disabled }: { question: ScreenQuestion; entry: MarkEntry | undefined; onMark: (mark: number | null, na: boolean) => void; disabled: boolean }) {
   const max = q.maxMark ?? 0;
-  const buttons = markButtons(max, q.step);
+  const { buttons, box } = markControls(max, q.step);
   const current = entry && !entry.na ? entry.mark : null;
   const nr = !!entry?.na;
   const [typed, setTyped] = useState<string | null>(null);
@@ -130,7 +131,7 @@ function QuestionMarks({ question: q, entry, onMark, disabled }: { question: Scr
         </p>
       </div>
 
-      {buttons ? (
+      {buttons && (
         <div className="flex flex-wrap gap-1" role="group" aria-label={`Mark for question ${q.label}`}>
           {buttons.map((v) => (
             <button
@@ -148,7 +149,8 @@ function QuestionMarks({ question: q, entry, onMark, disabled }: { question: Scr
             </button>
           ))}
         </div>
-      ) : (
+      )}
+      {box && (
         <div>
           <label htmlFor={MARK_INPUT_ID} className="block text-sm font-medium text-slate-800">
             Mark (0 to {formatMark(max)})

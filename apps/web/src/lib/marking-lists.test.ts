@@ -3,6 +3,7 @@ import {
   alertKindText,
   deadlineText,
   holdText,
+  nextScriptTarget,
   parseAlerts,
   parseMyWork,
   parseProgress,
@@ -151,6 +152,35 @@ describe("parseMyWork", () => {
       exams: [],
       pieces: [],
     });
+  });
+});
+
+describe("nextScriptTarget", () => {
+  const work = (mode: "whole" | "by_question", closed = false) =>
+    parseMyWork({
+      ok: true,
+      approved: true,
+      lead_subjects: [],
+      exams: [
+        { exam_id: "e1", title: "Physics mock", paper: "Paper 1", subject: "Physics", mode, closed, left: 3,
+          groups: mode === "by_question" ? [{ id: "g1", label: "Section A", left: 1 }, { id: "g2", label: "Section B", left: 2 }] : [] },
+        { exam_id: "e2", title: "Biology mock", paper: "Paper 2", subject: "Biology", mode: "whole", closed: false, left: 1, groups: [] },
+      ],
+      pieces: [
+        { unit_id: "u1", exam_id: "e1", script_number: "P1-0007", group_label: mode === "by_question" ? "Section B" : null, state: "submitted" },
+        { unit_id: "u2", exam_id: "e2", script_number: "B2-0001", group_label: null, state: "taken" },
+      ],
+    })!;
+  it("finds the exam of the piece on the screen", () => {
+    expect(nextScriptTarget(work("whole"), "u1")).toEqual({ examId: "e1", groupId: null });
+    expect(nextScriptTarget(work("whole"), "u2")).toEqual({ examId: "e2", groupId: null });
+  });
+  it("finds the question group of a piece marked by question, by its label", () => {
+    expect(nextScriptTarget(work("by_question"), "u1")).toEqual({ examId: "e1", groupId: "g2" });
+  });
+  it("is null for a piece not in the list, or an exam whose marking has closed", () => {
+    expect(nextScriptTarget(work("whole"), "u9")).toBeNull();
+    expect(nextScriptTarget(work("whole", true), "u1")).toBeNull();
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { firstLeaf, labelList, markText, parseOpened, questionMarkText, questionPageIndexes, zoomStepIn, zoomStepOut } from "./marking-screen";
+import { keyAction } from "./marking-keys";
+import { firstLeaf, labelList, markControls, markText, parseOpened, questionMarkText, questionPageIndexes, zoomStepIn, zoomStepOut } from "./marking-screen";
 
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -139,5 +140,24 @@ describe("zoom steps and lists", () => {
   it("names at most six questions", () => {
     expect(labelList(["1", "2"])).toBe("1, 2");
     expect(labelList(["1", "2", "3", "4", "5", "6", "7", "8"])).toBe("1, 2, 3, 4, 5, 6 and 2 more");
+  });
+});
+
+describe("markControls", () => {
+  it("gives buttons up to 21 marks, and the number box whenever a digit key goes to it", () => {
+    expect(markControls(5, 1)).toEqual({ buttons: [0, 1, 2, 3, 4, 5], box: false });
+    expect(markControls(12, 1)).toEqual({ buttons: Array.from({ length: 13 }, (_, i) => i), box: true });
+    expect(markControls(30, 1)).toEqual({ buttons: null, box: true });
+    expect(markControls(10, 0.5).box).toBe(true);
+  });
+  it("shows the box for every maximum a digit key focuses it for, so no key is lost", () => {
+    const digit = (max: number, step: 0.5 | 1) => keyAction({ key: "7", ctrl: false, meta: false, shift: false, alt: false, typing: false }, { max, step });
+    for (const step of [0.5, 1] as const) {
+      for (let max = step; max <= 100; max += step) {
+        const c = markControls(max, step);
+        expect(c.box || c.buttons !== null).toBe(true);
+        if (digit(max, step)?.type === "focus_mark") expect(c.box, `out of ${max}`).toBe(true);
+      }
+    }
   });
 });

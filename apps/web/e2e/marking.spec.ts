@@ -17,9 +17,10 @@ import {
 import { noSidewaysScroll } from "./scripts";
 
 // The marking screen (Phase 3A Task 12) on a computer and on an iPad with Apple Pencil, against the local stack. One
-// exam with three verified home scripts; the tests run in order and each takes the next script with Next script:
-// the first is marked and submitted, the second takes pen and finger and then reports a name, the third meets a
-// second screen. Every row and file is removed afterwards.
+// exam with four verified home scripts; the tests run in order and each takes the next script with Next script:
+// the first is marked and submitted, the second is submitted while the marker tries to change it (and Next script on
+// the screen then opens the third), the third takes pen and finger and then reports a name, the fourth meets a second
+// screen. Every row and file is removed afterwards.
 
 let examId: string;
 let marker: Login;
@@ -33,7 +34,7 @@ test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
   await assertNoOwner();
-  ({ examId, marker, admin, students } = await seedMarkingExam({ scripts: 3 }));
+  ({ examId, marker, admin, students } = await seedMarkingExam({ scripts: 4 }));
 });
 test.beforeEach(async () => {
   await clearLoginAttempts();
@@ -57,6 +58,7 @@ async function nextScript(page: Page): Promise<string> {
 }
 
 const saved = (page: Page) => expect(page.getByTestId("save-status")).toHaveText("Saved");
+const SUBMIT_RPC = "**/rest/v1/rpc/marking_submit";
 
 test.describe("on a computer", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -66,6 +68,7 @@ test.describe("on a computer", () => {
     const piece = await pieceOf(unitId);
     await expect(page.getByTestId("index-number")).toHaveText(piece.indexNumber);
     await expect(page.getByText("Name hidden", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     const html = await page.content();
     for (const s of students) {
       expect(html).not.toContain(s.firstName);
@@ -111,6 +114,57 @@ test.describe("on a computer", () => {
     await expect.poll(async () => (await markingOf(unitId))?.total).toBe(10);
     await noSidewaysScroll(page, "the marking screen");
   });
+
+  test("submit_takes_no_input_while_it_runs", async ({ page }) => {
+    const unitId = await nextScript(page);
+    for (const [label, mark] of [["1", "2 marks"], ["2", "1 mark"], ["3", "3 marks"]]) {
+      await page.getByTestId(`question-${label}`).click();
+      await page.getByRole("button", { name: mark, exact: true }).click();
+    }
+    await page.getByRole("button", { name: "Tick", exact: true }).click();
+    await saved(page);
+    await expect.poll(() => marksOf(unitId)).toEqual({ "1": 2, "2": 1, "3": 3 });
+
+    // marking_submit is held back while the marker tries to change the script.
+    let release = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    await page.route(SUBMIT_RPC, async (route) => {
+      if (route.request().method() === "POST") await held;
+      await route.continue();
+    });
+    let saves = 0;
+    page.on("request", (r) => {
+      if (r.url().includes("/rest/v1/rpc/marking_save")) saves++;
+    });
+    await page.getByRole("button", { name: "Submit", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Submitting…" })).toBeDisabled();
+    // Input has stopped: the mark buttons and the tools are disabled, the page takes no tick, a key changes nothing.
+    await expect(page.getByRole("button", { name: "5 marks", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Tick", exact: true })).toBeDisabled();
+    await page.keyboard.press("5");
+    await page.getByTestId("page-surface").click({ position: { x: 200, y: 160 } });
+    await expect(page.getByTestId("question-3-mark")).toHaveText("3");
+    await expect(page.locator('[data-annotation-kind="tick"]')).toHaveCount(0);
+    expect(saves).toBe(0);
+    release();
+
+    // Submitted, and "Saved" is true: nothing was sent at the old rev and nothing is waiting.
+    await expect(page.getByText("Submitted. You can still change it until marking closes.")).toBeVisible();
+    await saved(page);
+    await page.unroute(SUBMIT_RPC);
+    await expect.poll(async () => (await markingOf(unitId))?.status).toBe("submitted");
+    expect(saves).toBe(0);
+    expect(await marksOf(unitId)).toEqual({ "1": 2, "2": 1, "3": 3 });
+    expect(await annotationKinds(unitId)).toEqual([]);
+
+    // Next script on the screen opens the next script.
+    await page.getByRole("button", { name: "Next script", exact: true }).click();
+    await page.waitForURL((u) => /^\/marking\/[0-9a-f-]{36}$/.test(u.pathname) && !u.pathname.endsWith(unitId));
+    // The screen left behind (kept hidden by Next.js) holds no copy of the submitted script: only one page is there.
+    await expect(page.getByTestId("page-surface")).toHaveCount(1);
+    await expect(page.getByTestId("page-surface")).toBeVisible();
+    await expect(page.getByTestId("index-number")).not.toHaveText((await pieceOf(unitId)).indexNumber);
+  });
 });
 
 test.describe("on an iPad", () => {
@@ -143,6 +197,23 @@ test.describe("on an iPad", () => {
     await penStroke(page, SURFACE, [[0.3, 0.3], [0.32, 0.31], [0.34, 0.33], [0.36, 0.34]], { touchDuring: [[0.6, 0.6], [0.65, 0.62], [0.7, 0.64]] });
     await saved(page);
     await expect.poll(() => annotationKinds(unitId)).toEqual(["pen", "pen"]);
+
+    // A stroke the browser breaks off (pointercancel) is kept as far as it went.
+    await penStroke(page, SURFACE, [[0.5, 0.5], [0.55, 0.52], [0.6, 0.55], [0.65, 0.56]], { cancel: true });
+    await saved(page);
+    await expect.poll(() => annotationKinds(unitId)).toEqual(["pen", "pen", "pen"]);
+
+    // The questions drawer takes no shortcut; Escape closes it and focus goes back to the button that opened it.
+    const questions = page.getByRole("button", { name: "Questions", exact: true });
+    await questions.click();
+    const drawer = page.getByRole("dialog", { name: "Questions" });
+    await expect(drawer).toBeVisible();
+    await page.keyboard.press("3");
+    await page.keyboard.press("Escape");
+    await expect(drawer).toHaveCount(0);
+    await expect(questions).toBeFocused();
+    await expect(page.getByTestId("question-1-mark")).toHaveText("–");
+    await saved(page);
     await noSidewaysScroll(page, "the marking screen on an iPad");
   });
 });
@@ -162,6 +233,10 @@ test.describe("on a phone", () => {
     await expect(page.getByRole("link", { name: /Marking/ })).toBeVisible();
     await page.waitForLoadState("networkidle");
     expect(signs).toEqual([]);
+    // No sideways scroll at the phone's own width (a wider window would open the piece).
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), { message: "the phone message at 390 px wide" })
+      .toBeLessThanOrEqual(0);
   });
 });
 
@@ -172,13 +247,31 @@ test.describe("reporting a name", () => {
     const unitId = await nextScript(page);
     expect(unitId).toBe(secondUnit);
     const { scriptNumber } = await pieceOf(unitId);
-    await page.getByRole("button", { name: "Name visible" }).click();
+    const nameVisible = page.getByRole("button", { name: "Name visible" });
+
+    // Cancelled, the box gives focus back to the button that opened it.
+    await nameVisible.click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(nameVisible).toBeFocused();
+
+    // A mark given just before is saved before the script leaves.
+    const order: string[] = [];
+    page.on("request", (r) => {
+      const m = /\/rest\/v1\/rpc\/(marking_save|marking_name_visible)$/.exec(new URL(r.url()).pathname);
+      if (m && r.method() === "POST") order.push(m[1]);
+    });
+    const saveAnswer = page.waitForResponse((r) => r.url().includes("/rest/v1/rpc/marking_save") && r.request().method() === "POST");
+    await page.keyboard.press("2");
+    await nameVisible.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("Does this page show the candidate's name? The script will go back to staff and leave your list.");
     await expect(dialog).toContainText("Page 1");
     await expect(dialog.getByRole("textbox")).toHaveCount(0);
     await dialog.getByRole("button", { name: "Name visible" }).click();
+    expect((await (await saveAnswer).json()).ok).toBe(true);
     await page.waitForURL(/\/marking$/);
+    expect(order).toEqual(["marking_save", "marking_name_visible"]);
     await expect(page.getByRole("region", { name: "Your scripts" })).not.toContainText(scriptNumber);
 
     const staff = await browser.newPage();
