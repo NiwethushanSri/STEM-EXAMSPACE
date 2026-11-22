@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(142);
+select plan(143);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -101,6 +101,10 @@ create function pg_temp.put(p_path text, p_size bigint) returns void language sq
   values ('mark-schemes', p_path, jsonb_build_object('size', p_size, 'mimetype', 'application/pdf')) $$;
 create function pg_temp.visible(p_path text) returns int language sql stable as $$
   select count(*)::int from storage.objects where bucket_id = 'mark-schemes' and name = p_path $$;
+-- Opens e2's marking by hand (or shuts it again), as postgres, around a read of its mark scheme PDF.
+create function pg_temp.e2_open(p_open boolean) returns void language sql as $$
+  insert into public.exam_marking (exam_id, opened_at) values (pg_temp.k('e2'), case when p_open then now() end)
+  on conflict (exam_id) do update set opened_at = excluded.opened_at $$;
 grant execute on function pg_temp.q(text, text, text, numeric, jsonb), pg_temp.st(jsonb, jsonb, jsonb), pg_temp.base(jsonb),
   pg_temp.draft(jsonb), pg_temp.edit(jsonb, uuid, jsonb), pg_temp.without(jsonb, uuid), pg_temp.plus(jsonb, jsonb),
   pg_temp.save(text, jsonb, text), pg_temp.code(text, jsonb, text), pg_temp.get(text), pg_temp.qid(text, text, text),
@@ -504,20 +508,30 @@ insert into res values ('f2', public.mark_scheme_file_begin(pg_temp.k('e2'), 200
 insert into kv select 'f2', (pg_temp.r('f2') ->> 'file_id')::uuid;
 select pg_temp.put(pg_temp.r('f2') ->> 'storage_path', 2000);
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('m1'));
+select is(array[pg_temp.visible(pg_temp.r('f1') ->> 'storage_path'), pg_temp.visible(pg_temp.r('f2') ->> 'storage_path')], array[0, 0],
+  'marker_of_subject_reads_stored_file_and_other_marker_cannot: before marking opens a marker of the subject reads no PDF (20261122000013)');
+-- From here m1 leads the subject, and e2's marking is opened by hand around each read: the lead reads the PDF of an
+-- exam whose marking is open (050 tests that rule). It is shut again so that the teacher can go on changing the PDF.
+select tests.as_postgres();
+update public.marker_approvals set lead = true where marker_id = pg_temp.uid('m1');
+select pg_temp.e2_open(true);
+select tests.as_user(pg_temp.uid('m1'));
 select is(array[pg_temp.visible(pg_temp.r('f1') ->> 'storage_path'), pg_temp.visible(pg_temp.r('f2') ->> 'storage_path')], array[1, 0],
-  'marker_of_subject_reads_stored_file_and_other_marker_cannot: a marker of the subject reads the stored PDF, not one still uploading');
+  'once marking is open the lead reads the stored PDF, not one still uploading');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('m2'));
 select is(pg_temp.visible(pg_temp.r('f1') ->> 'storage_path'), 0, 'a marker of another subject cannot');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('teacher2'));
 select is(pg_temp.visible(pg_temp.r('f1') ->> 'storage_path'), 0, 'nor a teacher of another subject');
-select tests.as_postgres(); select tests.as_user(pg_temp.uid('teacher'));
+select tests.as_postgres(); select pg_temp.e2_open(false); select tests.as_user(pg_temp.uid('teacher'));
 select is(public.mark_scheme_file_stored(pg_temp.k('f2')) ->> 'ok', 'true', 'a second PDF is stored');
 select tests.as_postgres();
 select is((select string_agg(state, ',' order by byte_size) from public.exam_mark_scheme_files where id in (pg_temp.k('f1'), pg_temp.k('f2'))),
   'removed,stored', 'and replaces the first');
+select pg_temp.e2_open(true);
 select tests.as_user(pg_temp.uid('m1'));
 select is(array[pg_temp.visible(pg_temp.r('f1') ->> 'storage_path'), pg_temp.visible(pg_temp.r('f2') ->> 'storage_path')], array[0, 1],
   'the marker now reads only the new one');
+select tests.as_postgres(); select pg_temp.e2_open(false);
 
 -- ----- student_cannot_read_mark_scheme -----
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('s1'));
@@ -529,8 +543,9 @@ select tests.as_postgres(); select tests.as_user(pg_temp.uid('teacher'));
 select is(public.mark_scheme_file_remove(pg_temp.k('f2'), null) ->> 'code', 'reason_required', 'removing the PDF needs a reason');
 select is(public.mark_scheme_file_remove(pg_temp.k('f2'), 'Wrong file') ->> 'ok', 'true', 'with one it is removed');
 select is(pg_temp.get('e2') -> 'mark_scheme_file', 'null'::jsonb, 'the structure has no PDF now');
-select tests.as_postgres(); select tests.as_user(pg_temp.uid('m1'));
+select tests.as_postgres(); select pg_temp.e2_open(true); select tests.as_user(pg_temp.uid('m1'));
 select is(pg_temp.visible(pg_temp.r('f2') ->> 'storage_path'), 0, 'and the marker cannot read it');
+select tests.as_postgres(); select pg_temp.e2_open(false);
 
 -- ----- structure_save_writes_audit -----
 select tests.as_postgres();
