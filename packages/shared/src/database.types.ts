@@ -1051,17 +1051,23 @@ isOneToOne: false
                   ]
                 },"script_notices": {
                   Row: {
-                    "attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"skipped_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
+                    "alert_id": string | null,"attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"skipped_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
                   }
                   ComputedFields: "script_notice_content" | "script_notice_count" | "script_notice_recipients"
                   Insert: {
-                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
+                    "alert_id"?: string | null,"attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Update: {
-                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
+                    "alert_id"?: string | null,"attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Relationships: [
                     {
+      foreignKeyName: "script_notices_alert_id_fkey"
+      columns: ["alert_id"]
+isOneToOne: false
+      referencedRelation: "marking_alerts"
+      referencedColumns: ["id"]
+    },{
       foreignKeyName: "script_notices_exception_id_fkey"
       columns: ["exception_id"]
 isOneToOne: false
@@ -1747,6 +1753,21 @@ isOneToOne: false
 "markers_list":
 { Args: Record<PropertyKey, never>; Returns: Json
                            },
+"marking_alert_can_release":
+{ Args: { "p_script": string }; Returns: string
+                           },
+"marking_alert_note":
+{ Args: { "p_alert": string,"p_reason": string }; Returns: Json
+                           },
+"marking_alert_raise":
+{ Args: { "p_kind": string,"p_page": string,"p_script": string,"p_unit": string }; Returns: string
+                           },
+"marking_alert_release":
+{ Args: { "p_alert": string,"p_reason": string }; Returns: Json
+                           },
+"marking_alerts_list":
+{ Args: { "p_exam"?: string,"p_state"?: string }; Returns: Json
+                           },
 "marking_assign":
 { Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
@@ -1779,6 +1800,9 @@ isOneToOne: false
                            },
 "marking_my_work":
 { Args: { "p_now"?: string }; Returns: Json
+                           },
+"marking_name_visible":
+{ Args: { "p_page": string,"p_unit": string }; Returns: Json
                            },
 "marking_next":
 { Args: { "p_exam": string,"p_group"?: string,"p_now"?: string }; Returns: Json
@@ -1813,6 +1837,15 @@ isOneToOne: false
 "marking_script_busy":
 { Args: { "p_script": string }; Returns: boolean
                            },
+"marking_script_hand_back":
+{ Args: { "p_reason"?: string,"p_script": string }; Returns: Json
+                           },
+"marking_script_hold":
+{ Args: { "p_alert_kind": string,"p_hold_reason": string,"p_page": string,"p_script": string }; Returns: undefined
+                           },
+"marking_script_lock":
+{ Args: { "p_script": string }; Returns: undefined
+                           },
 "marking_script_pages":
 { Args: { "p_script": string }; Returns: {
               "copy_page": number,"extra": boolean,"marking_path": string,"n": number,"page_id": string,"rotation": number
@@ -1820,6 +1853,12 @@ isOneToOne: false
                            },
 "marking_script_state":
 { Args: { "p_script": string }; Returns: undefined
+                           },
+"marking_script_take_back":
+{ Args: { "p_reason": string,"p_script": string }; Returns: Json
+                           },
+"marking_script_take_back_as":
+{ Args: { "p_actor": string,"p_reason": string,"p_script": string }; Returns: undefined
                            },
 "marking_script_waiting":
 { Args: { "p_now": string,"p_script": string }; Returns: string
@@ -1877,6 +1916,9 @@ isOneToOne: false
                            },
 "marking_units_pick":
 { Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: (string)[]
+                           },
+"marking_units_refresh":
+{ Args: { "p_script": string }; Returns: number
                            },
 "marking_work_blocked":
 { Args: { "p_now": string,"p_unit": string,"p_user": string }; Returns: string

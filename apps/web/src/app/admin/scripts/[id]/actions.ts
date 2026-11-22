@@ -24,18 +24,22 @@ function valid(scriptId: string, input: RepoInput): boolean {
     case "remove":
       return Number.isInteger(input.copyPage) && input.copyPage > 0;
     case "void":
+    case "take_back":
       return true;
+    case "hand_back":
+      return typeof input.reason === "string";
     default:
       return false;
   }
 }
 
-/** A page tool of the script repository (turn a page, process a file again, take a page out, void the script), each
- * with a reason that goes into the audit log. The database checks every rule again. */
+/** A page tool of the script repository (turn a page, process a file again, take a page out, void the script, take
+ * the script back from the markers or hand it back), each with a reason that goes into the audit log (optional when
+ * handing back). The database checks every rule again. */
 export async function scriptRepositoryAction(scriptId: string, input: RepoInput): Promise<RepoActionResult> {
   await requireStaff(["admin", "owner"]);
   if (!input || typeof input !== "object" || !valid(scriptId, input)) return { ok: false, message: GENERIC };
-  const problem = reasonProblem(typeof input.reason === "string" ? input.reason : "", true);
+  const problem = reasonProblem(typeof input.reason === "string" ? input.reason : "", input.action !== "hand_back");
   if (problem) return { ok: false, message: problem };
 
   const { fn, args } = repoRpc(scriptId, input);

@@ -322,6 +322,12 @@ const scriptConflicts: Record<string, string> = {
   busy: "This file is already waiting to be processed, or is being processed now. Wait until it has finished.",
   void: "This script is already void.",
   changed: "This script changed while you were working. Refresh the page and try again.",
+  // Taking a script back from the markers and handing it back (marking_script_take_back, marking_script_hand_back).
+  not_marking: "This script is not being marked, so there is nothing to take back.",
+  taken_back: "This script is already taken back from the markers.",
+  not_taken_back: "This script is not taken back from the markers.",
+  not_verified: "The script must be verified before it goes back to the markers. Settle its open problems first.",
+  pictures_updating: "Its marking pictures are being made again. Hand it back when they are ready.",
 };
 
 /** Message for a script repository RPC failure code (and a conflict's reason); unknown codes get the generic message. */

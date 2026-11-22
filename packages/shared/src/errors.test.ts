@@ -214,6 +214,15 @@ describe("scriptMessageFor", () => {
     expect(scriptMessageFor("conflict", "changed")).toContain("changed");
     expect(scriptMessageFor("conflict")).toContain("changed");
   });
+  it("says why a script is not taken back or handed back", () => {
+    expect(scriptMessageFor("conflict", "not_marking")).toBe("This script is not being marked, so there is nothing to take back.");
+    expect(scriptMessageFor("conflict", "taken_back")).toBe("This script is already taken back from the markers.");
+    expect(scriptMessageFor("conflict", "not_taken_back")).toBe("This script is not taken back from the markers.");
+    expect(scriptMessageFor("conflict", "not_verified")).toBe(
+      "The script must be verified before it goes back to the markers. Settle its open problems first.",
+    );
+    expect(scriptMessageFor("conflict", "pictures_updating")).toBe("Its marking pictures are being made again. Hand it back when they are ready.");
+  });
   it("falls back to the generic message", () => {
     expect(scriptMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(scriptMessageFor("__proto__")).toBe("Something went wrong. Please try again.");

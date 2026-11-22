@@ -1,7 +1,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { _renderForTest, staffAlertLine } from "../_shared/email.ts";
-import { type Deps, makeHandler, type Notice } from "./handler.ts";
+import { _renderForTest, markingAlertLine, staffAlertLine } from "../_shared/email.ts";
+import { dataFor, type Deps, makeHandler, type Notice } from "./handler.ts";
 
 const quiet = async (fn: () => Promise<void>) => {
   const l = console.log, e = console.error;
@@ -34,8 +34,9 @@ function fakeDb(notices: Notice[], clock: () => number = () => 0) {
   const svc = {
     rpc: (name: string, args: Record<string, unknown> = {}) => {
       if (name === "script_notice_next") {
-        // As the SQL hands them out (migration 076): the families' notices first, then staff alerts.
-        const ordered = [...notices.filter((n) => n.kind !== "staff_alert"), ...notices.filter((n) => n.kind === "staff_alert")];
+        // As the SQL hands them out (migrations 076 and 008): the families' notices first, then staff and marking alerts.
+        const staff = (n: Notice) => n.kind === "staff_alert" || n.kind === "marking_alert";
+        const ordered = [...notices.filter((n) => !staff(n)), ...notices.filter(staff)];
         for (const n of ordered) {
           const s = state.get(n.id)!;
           if (s.sent || s.attempts >= 3 || (s.claimedAt >= 0 && s.claimedAt > clock() - s.attempts * 5 * MIN)) continue;
@@ -114,6 +115,24 @@ const alert: Notice = {
   page_count: null,
   pages: null,
   exception_kind: "late",
+};
+
+const markingAlert: Notice = {
+  id: 7,
+  kind: "marking_alert",
+  recipients: [
+    { profile_id: "u-l", email: "lead@example.test", first_name: "Lena" },
+    { profile_id: "u-a", email: "admin@example.test", first_name: "Ada" },
+  ],
+  exam: "GCSE Maths Paper 1",
+  script_number: "S-ABC-0002",
+  submission_seq: null,
+  at: "2031-06-09T09:00:00Z",
+  page_count: 3,
+  pages: [1, 2, 3],
+  exception_kind: null,
+  count: 1,
+  alert_kind: "picture_changed",
 };
 
 Deno.test("handler_rejects_wrong_secret", async () => {
@@ -334,4 +353,58 @@ Deno.test("notices given up after 3 attempts are counted in the result", async (
     }
     assertEquals(body.given_up, 1);
   });
+});
+
+Deno.test("marking_alert_goes_to_lead_and_admins", async () => {
+  await quiet(async () => {
+    // The database lists the subject's lead marker and the active owner and admin accounts (migration 008).
+    const db = fakeDb([markingAlert, receipt]);
+    const sent: { to: string; template: string; data: Record<string, string> }[] = [];
+    const h = makeHandler(deps({
+      svc: () => db.svc,
+      send: (to, template, data) => (sent.push({ to, template, data }), Promise.resolve(true)),
+    }));
+    const body = await (await h(req())).json();
+    assertEquals(body, { notices: 2, sent: 4, failed: 0, given_up: 0 });
+    // The family's receipt still goes first; then the marking alert, to each of its people once.
+    assertEquals(sent.map((s) => s.template), ["script_receipt", "script_receipt", "script_marking_alert", "script_marking_alert"]);
+    assertEquals(sent.slice(2).map((s) => s.to), ["lead@example.test", "admin@example.test"]);
+    assertEquals(db.marks, [{ id: 1, ok: true }, { id: 7, ok: true }]);
+    assertEquals(sent[2].data, { exam: "GCSE Maths Paper 1", script_number: "S-ABC-0002", kind: "picture_changed" });
+  });
+});
+
+Deno.test("marking_alert_email_has_no_candidate_or_marker_name", () => {
+  const data = dataFor(markingAlert, "Lena");
+  assertEquals(Object.keys(data).sort(), ["exam", "kind", "script_number"]); // no name of anyone, not even the recipient's
+  // Even when it is handed names by mistake, the email shows none of them.
+  for (const kind of ["picture_changed", "picture_missing", "name_visible", "pages_set_aside", "pages_changed"]) {
+    const mail = _renderForTest("script_marking_alert", {
+      ...data, kind, name: "Zanzibar Smith", student_name: "Zanzibar Smith", marker_name: "Mara One", first_name: "Lena",
+    });
+    for (const n of ["Zanzibar", "Smith", "Mara", "Lena"]) assert(!mail.html.includes(n) && !mail.subject.includes(n), `${kind}: ${n}`);
+    assert(mail.html.includes("GCSE Maths Paper 1") && mail.html.includes("S-ABC-0002"), kind);
+    assert(mail.html.includes(markingAlertLine(kind)), kind);
+  }
+});
+
+Deno.test("the sentence of each kind of marking alert", () => {
+  assertEquals(
+    markingAlertLine("picture_changed"),
+    "A page picture of this script changed during marking. The script is on hold until you release it.",
+  );
+  assertEquals(markingAlertLine("name_visible"), "A marker reported a visible name. Staff must hide it and hand the script back.");
+  assertEquals(markingAlertLine("pages_set_aside"), "Scanned pages arrived for a script that is being marked. They were set aside.");
+  assertEquals(
+    markingAlertLine("pages_changed"),
+    "The pages of a script changed while it was with staff. Its marker has been asked to check their marks.",
+  );
+  assertEquals(
+    markingAlertLine("picture_missing"),
+    "A page of this script lost its marking picture during marking. The script is on hold until an admin takes it back.",
+  );
+  assertEquals(markingAlertLine("something_else"), "A script being marked needs attention.");
+  const mail = _renderForTest("script_marking_alert", { exam: "GCSE Maths", kind: "name_visible", script_number: "S-ABC-0002" });
+  assert(mail.subject.includes("GCSE Maths"), mail.subject);
+  assert(mail.html.includes("Script: S-ABC-0002"), mail.html);
 });
