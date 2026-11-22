@@ -4,6 +4,8 @@ import {
   deadlineText,
   holdText,
   nextScriptTarget,
+  firstShownText,
+  listHasMore,
   parseAlerts,
   parseMyWork,
   parseProgress,
@@ -265,6 +267,15 @@ describe("parseAlerts and their words", () => {
     expect(parseAlerts({ ok: true, alerts: [alert] })![0]).toMatchObject({ id: "a1", kind: "picture_changed", canRelease: false, releaseBlocked: "picture_unchecked", pageN: 2 });
     expect(parseAlerts({ ok: true, alerts: [{ ...alert, can_release: true, release_blocked: null }] })![0]).toMatchObject({ canRelease: true, releaseBlocked: null });
     expect(parseAlerts({ ok: true, alerts: [{ ...alert, kind: "something_new" }] })).toEqual([]);
+  });
+  it("list_says_when_it_was_cut_short: more is read from the answer, and the line names how many are shown", () => {
+    expect(listHasMore({ ok: true, alerts: [alert], more: true })).toBe(true);
+    expect(listHasMore({ ok: true, alerts: [alert], more: false })).toBe(false);
+    expect(listHasMore({ ok: true, units: [] })).toBe(false);
+    expect(listHasMore({ ok: false, code: "forbidden", more: true })).toBe(false);
+    expect(listHasMore(null)).toBe(false);
+    expect(firstShownText(500)).toBe("Showing the first 500.");
+    expect(firstShownText(2000)).toBe("Showing the first 2,000.");
   });
   it("gives each reason one plain sentence", () => {
     expect(releaseBlockedText("picture_unchecked")).toBe("Release waits for a staff check of the new marking picture.");

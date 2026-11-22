@@ -47,6 +47,17 @@ const okAnswer = (data: unknown): Obj | null => {
   return d && d.ok === true ? d : null;
 };
 
+/** Whether a list answer says it was cut short: marking_units_list (2,000) and marking_alerts_list (500) send
+ * `more: true` when more matched than they list. */
+export function listHasMore(data: unknown): boolean {
+  return okAnswer(data)?.more === true;
+}
+
+/** "Showing the first 500." for a list cut short at n rows. */
+export function firstShownText(n: number): string {
+  return `Showing the first ${n.toLocaleString("en-GB")}.`;
+}
+
 export type MarkingMode = "whole" | "by_question";
 export type UnitState = "open" | "taken" | "submitted";
 export const UNIT_STATES: readonly UnitState[] = ["open", "taken", "submitted"];

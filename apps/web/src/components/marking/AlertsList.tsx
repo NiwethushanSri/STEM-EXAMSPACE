@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Badge } from "@/components/AppShell";
 import { ReasonDialog } from "@/components/papers/ReasonDialog";
 import { noteAlert, releaseAlert, releaseAllAlerts, type MarkingActionResult } from "@/app/marking/actions";
-import { alertKindText, releaseBlockedText, ukDayTime, type AlertKind, type AlertRow } from "@/lib/marking-lists";
+import { alertKindText, firstShownText, releaseBlockedText, ukDayTime, type AlertKind, type AlertRow } from "@/lib/marking-lists";
 
 const QUIET = "min-h-11 rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
 
@@ -26,8 +26,8 @@ type Step =
 /** The open marking alerts, by exam, for the lead marker of their subjects or an admin: "Release" for a changed
  * picture (or one plain sentence saying why it waits), "Noted" for changed or set-aside pages, and "Release all" for an
  * exam. Each asks for a reason. The script number and index number only; no candidate name. `scriptLinks` links each
- * script to its admin page. */
-export function AlertsList({ alerts, scriptLinks = false }: { alerts: AlertRow[]; scriptLinks?: boolean }) {
+ * script to its admin page. `more`: the list was cut short (marking_alerts_list sends at most 500), and says so. */
+export function AlertsList({ alerts, scriptLinks = false, more = false }: { alerts: AlertRow[]; scriptLinks?: boolean; more?: boolean }) {
   const router = useRouter();
   const [step, setStep] = useState<Step | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,6 +60,7 @@ export function AlertsList({ alerts, scriptLinks = false }: { alerts: AlertRow[]
     <div className="space-y-5">
       <div aria-live="polite">{done && <p className="text-sm text-green-800">{done}</p>}</div>
       {alerts.length === 0 && <p className="text-sm text-slate-600">Nothing needs your attention.</p>}
+      {more && <p className="text-sm text-slate-600">{firstShownText(alerts.length)}</p>}
       {exams.map((e) => (
         <section key={e.examId} aria-label={`Alerts for ${e.examTitle}`} className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">

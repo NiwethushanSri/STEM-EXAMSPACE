@@ -3,7 +3,7 @@ import { AppShell, Card } from "@/components/AppShell";
 import { AlertsList } from "@/components/marking/AlertsList";
 import { MarkingProgress } from "@/components/marking/MarkingProgress";
 import { UnitsTable, type Choice } from "@/components/marking/UnitsTable";
-import { parseAlerts, parseProgress, parseUnits, type ProgressExam } from "@/lib/marking-lists";
+import { listHasMore, parseAlerts, parseProgress, parseUnits, type ProgressExam } from "@/lib/marking-lists";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
@@ -87,7 +87,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
   return (
     <div className="space-y-6">
       <Card title="Progress">
-        <MarkingProgress exams={progress} now={now} scriptsLink />
+        <MarkingProgress exams={progress} now={now} scriptsLink releaseAll />
       </Card>
       {exam && (
         <div id="scripts">
@@ -98,7 +98,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
           </Card>
         </div>
       )}
-      <Card title="Needs attention">{alerts ? <AlertsList alerts={alerts} scriptLinks /> : failed("The alerts")}</Card>
+      <Card title="Needs attention">{alerts ? <AlertsList alerts={alerts} more={listHasMore(alertsRes.data)} scriptLinks /> : failed("The alerts")}</Card>
     </div>
   );
 }

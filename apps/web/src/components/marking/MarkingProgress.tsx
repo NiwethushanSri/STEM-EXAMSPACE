@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Badge, Table } from "@/components/AppShell";
+import { ReleaseAllButton } from "@/components/marking/ReleaseAllButton";
 import { deadlineText, ukDayTime, type ProgressExam } from "@/lib/marking-lists";
 
 /** "Mark by 12 December, 17:00" and, once the deadline has passed with work left, "Overdue" in red words. `overdue` is
@@ -22,8 +23,20 @@ function status(e: ProgressExam): { text: string; tone: "slate" | "green" | "blu
 
 /** What is left per exam and per marker: the scripts waiting, ready to mark, being marked and marked; each marker's
  * scripts taken and submitted; the alerts open. No candidate name. `scriptsLink` links each exam to its list of
- * scripts on the admin marking page. `now` is the server's clock when the page was made. */
-export function MarkingProgress({ exams, now, scriptsLink = false }: { exams: ProgressExam[]; now: string; scriptsLink?: boolean }) {
+ * scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
+ * changed pictures can be released even when the alerts list cannot be loaded. `now` is the server's clock when the
+ * page was made. */
+export function MarkingProgress({
+  exams,
+  now,
+  scriptsLink = false,
+  releaseAll = false,
+}: {
+  exams: ProgressExam[];
+  now: string;
+  scriptsLink?: boolean;
+  releaseAll?: boolean;
+}) {
   const at = new Date(now);
   if (exams.length === 0) return <p className="text-sm text-slate-600">No exam has marking set up yet.</p>;
   return (
@@ -67,6 +80,7 @@ export function MarkingProgress({ exams, now, scriptsLink = false }: { exams: Pr
                   .join(" · ")}
               </p>
             )}
+            {releaseAll && e.alertsOpen > 0 && <ReleaseAllButton examId={e.examId} examTitle={e.title} />}
             {e.markers.length === 0 ? (
               <p className="text-sm text-slate-600">No marker has taken a script yet.</p>
             ) : (

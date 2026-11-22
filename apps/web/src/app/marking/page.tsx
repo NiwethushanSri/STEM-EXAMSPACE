@@ -3,7 +3,7 @@ import { AppShell, Card } from "@/components/AppShell";
 import { AlertsList } from "@/components/marking/AlertsList";
 import { MarkingProgress } from "@/components/marking/MarkingProgress";
 import { MyWork } from "@/components/marking/MyWork";
-import { MARKING_ROLES, parseAlerts, parseMyWork, parseProgress } from "@/lib/marking-lists";
+import { listHasMore, MARKING_ROLES, parseAlerts, parseMyWork, parseProgress } from "@/lib/marking-lists";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 
@@ -42,7 +42,7 @@ async function Body() {
         <>
           <Card title="Needs your attention">
             {alerts ? (
-              <AlertsList alerts={alerts} />
+              <AlertsList alerts={alerts} more={listHasMore(alertsRes?.data)} />
             ) : (
               <p role="alert" className="text-sm text-red-700">
                 The alerts could not be loaded. Refresh the page to try again.

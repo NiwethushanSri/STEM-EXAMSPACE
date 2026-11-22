@@ -172,6 +172,18 @@ test("a_hidden_area_change_puts_the_marked_piece_on_hold", async ({ page }) => {
   await page.goto("/admin");
   await expect(page.getByTestId("marking-exam").filter({ hasText: seed.title }).getByRole("cell")).toHaveText(["2", "0", "1", /^Mark by /]);
   await expect(page.getByTestId("marking-alerts")).toContainText(/\d+ scripts? (is|are) on hold in marking\./);
+
+  // The exam's progress card offers "Release all": it needs only the exam, so it is there when the alerts list is not.
+  // (The lead releases the piece in the next test, so the box is only opened and closed here.)
+  await page.goto(`/admin/marking?exam=${seed.examId}`);
+  const progress = page.getByRole("region", { name: "Progress", exact: true });
+  await progress.getByTestId("progress-exam").filter({ hasText: seed.title }).getByRole("button", { name: `Release all for ${seed.title}` }).click();
+  const all = page.getByRole("dialog", { name: `Release all for ${seed.title}` });
+  await expect(all).toContainText("Every changed picture of this exam that can be released now is released. The others stay open.");
+  await expect(all.getByLabel("Reason")).toBeVisible();
+  await all.getByRole("button", { name: "Cancel" }).click();
+  await expect(all).toHaveCount(0);
+  expect((await pieces()).map((p) => `${p.onHold} ${p.holdReason}`)).toEqual(["true picture_changed", "false null"]);
 });
 
 test("the_lead_marker_releases_the_piece_from_marking", async ({ page }) => {
