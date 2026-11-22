@@ -1,18 +1,25 @@
-// Test-only helpers for the marking screen's browser tests (marking.spec.ts). They run in the Playwright (Node) process
-// with the service key from the env file, against the local stack only (e2e-local.mjs points E2E_ENV_FILE at it), and
-// write the rows Phase 2 leaves behind for a verified home script directly, as supabase/tests/helpers.sql does, with
-// real JPEG marking pictures in script-pages. Marking is opened by the admin through marking_open. Everything they make
+// Test-only helpers for the marking browser tests (marking.spec.ts, marking-admin.spec.ts). They run in the Playwright
+// (Node) process with the service key from the env file, against the local stack only (e2e-local.mjs points
+// E2E_ENV_FILE at it), and write the rows Phase 2 leaves behind for a verified home script directly, as
+// supabase/tests/helpers.sql does, with real JPEG pictures in script-pages. For the marking screen, marking is opened by
+// the admin through marking_open; for the staff test, the admin does everything in the browser. Everything they make
 // is removed by removeMarkingExam (with the accounts, by cleanup in admin.ts).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { ANON_KEY, SUPABASE_URL, createAccount, svc, type TestAccount } from "./admin";
-import { removeExam, seedExam, type SeededExam } from "./scripts";
+import { CODE_A, CODE_B, removeExam, seedExam, type SeededExam } from "./scripts";
 
 export type Login = TestAccount;
 export type SeededStudent = { firstName: string; lastName: string; indexNumber: string };
+/** A seeded candidate with their verified script. */
+export type SeededScript = SeededStudent & { scriptId: string; scriptNumber: string };
+/** A page's pictures as stored in script-pages: the marking picture, and the full picture when a test needs one. */
+type PagePictures = { full?: Buffer; marking: Buffer };
 
 const host = new URL(SUPABASE_URL).hostname;
 if (host !== "127.0.0.1" && host !== "localhost") throw new Error(`the marking helpers run against the local stack only, not ${host}`);
@@ -67,6 +74,78 @@ async function markingPictures(): Promise<Buffer[]> {
     await browser.close();
   }
   return files.map((f) => readFileSync(f));
+}
+
+/**
+ * Candidate i + 1 of a seeded exam (a new active student named FIRST[i] LAST[i], index number E2EM-{tag}-{i + 1}) with
+ * a verified home script S-{exam code}-{i + 1}: a paid booking, a copy with this code, a received hand-in whose PDF was
+ * processed, the 3 matched pages with their pictures in script-pages (page n gets pictures[n - 1]), and version 1
+ * linking them. Handed in 15 minutes after the finish.
+ */
+async function seedScript(exam: SeededExam, i: number, tag: string, code: string, pictures: PagePictures[]): Promise<SeededScript> {
+  const examRow = must(await svc().from("exams").select("starts_at, duration_minutes, spare_pages, price_pence").eq("id", exam.examId).single(), "exam read");
+  const handedIn = new Date(Date.parse(examRow.starts_at) + (examRow.duration_minutes + 15) * 60_000).toISOString();
+  const indexNumber = `E2EM-${tag.toUpperCase()}-${i + 1}`;
+  const scriptNumber = `S-${exam.examCode}-${String(i + 1).padStart(4, "0")}`;
+  const student = await createAccount({ status: "active", firstName: FIRST[i], indexNumber });
+  must(await svc().from("profiles").update({ first_name: FIRST[i], last_name: LAST[i] }).eq("id", student.id).select("id").single(), "name update");
+  const booking = must(
+    await svc().from("bookings").insert({ exam_id: exam.examId, student_id: student.id, booked_by: student.id, status: "paid", amount_pence: examRow.price_pence, sitting: "home" }).select("id").single(),
+    "booking insert",
+  );
+  const copy = must(
+    await svc().from("paper_copies").insert({ code, booking_id: booking.id, paper_id: exam.paperId, page_count: 3 + examRow.spare_pages, created_at: examRow.starts_at }).select("id").single(),
+    "copy insert",
+  );
+  const submission = must(
+    await svc().from("home_submissions").insert({ booking_id: booking.id, seq: 1, state: "received", submitted_by: student.id, submitted_at: handedIn, checked_at: handedIn }).select("id").single(),
+    "submission insert",
+  );
+  const uploadId = crypto.randomUUID();
+  must(
+    await svc()
+      .from("script_uploads")
+      .insert({
+        id: uploadId, exam_id: exam.examId, booking_id: booking.id, submission_id: submission.id, kind: "home_pdf", position: 1,
+        storage_path: `home/${booking.id}/${uploadId}.pdf`, mime: "application/pdf", byte_size: 100000, sha256: uploadId.replace(/-/g, "").padEnd(64, "0"),
+        state: "processed", uploaded_by: student.id, created_at: handedIn, stored_at: handedIn,
+      })
+      .select("id")
+      .single(),
+    "upload insert",
+  );
+  const dir = `${exam.examId}/${uploadId}/1-1`;
+  const pages = must(
+    await svc()
+      .from("script_pages")
+      .insert(QUESTIONS.map((q, n) => ({
+        upload_id: uploadId, source_index: n, exam_id: exam.examId, copy_id: copy.id, copy_page: q.page, booking_id: booking.id, state: "matched",
+        quality: { sharpness: 200, brightness: 180, cut_off: false, flags: [] }, rotation: 0,
+        full_path: `${dir}/${n}-full.jpg`, marking_path: `${dir}/${n}-marking.jpg`, created_at: handedIn,
+      })))
+      .select("id, copy_page, full_path, marking_path"),
+    "pages insert",
+  );
+  for (const p of pages) {
+    const picture = pictures[(p.copy_page as number) - 1];
+    const files: [string, Buffer | undefined][] = [[p.full_path as string, picture.full], [p.marking_path as string, picture.marking]];
+    for (const [path, bytes] of files) {
+      if (!bytes) continue;
+      const up = await svc().storage.from("script-pages").upload(path, bytes, { contentType: "image/jpeg", upsert: false });
+      if (up.error) throw new Error(`picture upload failed: ${up.error.message}`);
+    }
+  }
+  const script = must(
+    await svc()
+      .from("scripts")
+      .insert({ booking_id: booking.id, exam_id: exam.examId, source: "home", number: scriptNumber, state: "verified", version: 1, complete: true, received_at: handedIn, created_at: handedIn })
+      .select("id")
+      .single(),
+    "script insert",
+  );
+  must(await svc().from("script_versions").insert({ script_id: script.id, version: 1, created_at: handedIn, reason: "home_submission", submission_id: submission.id }).select("script_id").single(), "version insert");
+  must(await svc().from("script_page_links").insert(pages.map((p) => ({ script_id: script.id, version: 1, copy_page: p.copy_page, page_id: p.id }))).select("page_id"), "links insert");
+  return { firstName: FIRST[i], lastName: LAST[i], indexNumber, scriptId: script.id, scriptNumber };
 }
 
 /**
@@ -125,66 +204,11 @@ export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | 
     );
   }
 
-  const examRow = must(await svc().from("exams").select("starts_at, duration_minutes, spare_pages, price_pence").eq("id", exam.examId).single(), "exam read");
-  const handedIn = new Date(Date.parse(examRow.starts_at) + (examRow.duration_minutes + 15) * 60_000).toISOString();
   const students: SeededStudent[] = [];
   for (let i = 0; i < opts.scripts; i++) {
-    const indexNumber = `E2EM-${tag.toUpperCase()}-${i + 1}`;
-    const student = await createAccount({ status: "active", firstName: FIRST[i], indexNumber });
-    must(await svc().from("profiles").update({ first_name: FIRST[i], last_name: LAST[i] }).eq("id", student.id).select("id").single(), "name update");
-    students.push({ firstName: FIRST[i], lastName: LAST[i], indexNumber });
-    const booking = must(
-      await svc().from("bookings").insert({ exam_id: exam.examId, student_id: student.id, booked_by: student.id, status: "paid", amount_pence: examRow.price_pence, sitting: "home" }).select("id").single(),
-      "booking insert",
-    );
     const code = must(await svc().rpc("copy_code_new"), "copy code");
-    const copy = must(
-      await svc().from("paper_copies").insert({ code, booking_id: booking.id, paper_id: exam.paperId, page_count: 3 + examRow.spare_pages, created_at: examRow.starts_at }).select("id").single(),
-      "copy insert",
-    );
-    const submission = must(
-      await svc().from("home_submissions").insert({ booking_id: booking.id, seq: 1, state: "received", submitted_by: student.id, submitted_at: handedIn, checked_at: handedIn }).select("id").single(),
-      "submission insert",
-    );
-    const uploadId = crypto.randomUUID();
-    must(
-      await svc()
-        .from("script_uploads")
-        .insert({
-          id: uploadId, exam_id: exam.examId, booking_id: booking.id, submission_id: submission.id, kind: "home_pdf", position: 1,
-          storage_path: `home/${booking.id}/${uploadId}.pdf`, mime: "application/pdf", byte_size: 100000, sha256: uploadId.replace(/-/g, "").padEnd(64, "0"),
-          state: "processed", uploaded_by: student.id, created_at: handedIn, stored_at: handedIn,
-        })
-        .select("id")
-        .single(),
-      "upload insert",
-    );
-    const dir = `${exam.examId}/${uploadId}/1-1`;
-    const pages = must(
-      await svc()
-        .from("script_pages")
-        .insert(QUESTIONS.map((q, n) => ({
-          upload_id: uploadId, source_index: n, exam_id: exam.examId, copy_id: copy.id, copy_page: q.page, booking_id: booking.id, state: "matched",
-          quality: { sharpness: 200, brightness: 180, cut_off: false, flags: [] }, rotation: 0,
-          full_path: `${dir}/${n}-full.jpg`, marking_path: `${dir}/${n}-marking.jpg`, created_at: handedIn,
-        })))
-        .select("id, copy_page, marking_path"),
-      "pages insert",
-    );
-    for (const p of pages) {
-      const up = await svc().storage.from("script-pages").upload(p.marking_path as string, pictures[(p.copy_page as number) - 1], { contentType: "image/jpeg", upsert: false });
-      if (up.error) throw new Error(`picture upload failed: ${up.error.message}`);
-    }
-    const script = must(
-      await svc()
-        .from("scripts")
-        .insert({ booking_id: booking.id, exam_id: exam.examId, source: "home", number: `S-${exam.examCode}-${String(i + 1).padStart(4, "0")}`, state: "verified", version: 1, complete: true, received_at: handedIn, created_at: handedIn })
-        .select("id")
-        .single(),
-      "script insert",
-    );
-    must(await svc().from("script_versions").insert({ script_id: script.id, version: 1, created_at: handedIn, reason: "home_submission", submission_id: submission.id }).select("script_id").single(), "version insert");
-    must(await svc().from("script_page_links").insert(pages.map((p) => ({ script_id: script.id, version: 1, copy_page: p.copy_page, page_id: p.id }))).select("page_id"), "links insert");
+    const { firstName, lastName, indexNumber } = await seedScript(exam, i, tag, code, pictures.map((marking) => ({ marking })));
+    students.push({ firstName, lastName, indexNumber });
   }
 
   // The admin opens marking, as on the exam's marking panel.
@@ -199,6 +223,113 @@ export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | 
   }
   await client.auth.signOut();
   return { examId: exam.examId, title: exam.title, marker, admin, students };
+}
+
+const PROCESSOR = resolve(__dirname, "../../../services/processor");
+
+/**
+ * The full and marking pictures the processing server makes of pages 1 to 3 of the fixture copies A and B
+ * (services/processor/tests/e2e_pages.py), so a remask proves them again as it proves a real scan. Made once inside
+ * its container (it must be running: npm run e2e:local starts it) and kept in the temp folder under a hash of
+ * everything that makes them.
+ */
+function fixturePictures(): Record<"a" | "b", Required<PagePictures>[]> {
+  const hash = createHash("sha256");
+  const inputs = [
+    "tests/e2e_pages.py",
+    "tests/e2e_files.py",
+    "tests/synth.py",
+    "tests/fixtures/copy-a.pdf",
+    "tests/fixtures/copy-b.pdf",
+    "tests/fixtures/codes.json",
+    ...readdirSync(join(PROCESSOR, "processor")).filter((f) => f.endsWith(".py")).sort().map((f) => `processor/${f}`),
+  ];
+  for (const f of inputs) hash.update(f).update(readFileSync(join(PROCESSOR, f)));
+  const dir = join(tmpdir(), "stem-e2e-marking", `pages-${hash.digest("hex").slice(0, 16)}`);
+  const file = (key: string, n: number, kind: string) => join(dir, `${key}-${n}-${kind}.jpg`);
+  const keys = ["a", "b"] as const;
+  const all = keys.flatMap((k) => [1, 2, 3].flatMap((n) => [file(k, n, "full"), file(k, n, "marking")]));
+  if (!all.every((f) => existsSync(f))) {
+    const out = execFileSync("docker", ["compose", "-f", join(PROCESSOR, "docker-compose.yml"), "exec", "-T", "processor", "python", "tests/e2e_pages.py"], {
+      encoding: "utf8",
+      maxBuffer: 64 << 20,
+    });
+    const made = JSON.parse(out) as Record<string, { full: string; marking: string }[]>;
+    mkdirSync(dir, { recursive: true });
+    for (const k of keys) {
+      made[k].forEach((p, i) => {
+        writeFileSync(file(k, i + 1, "full"), Buffer.from(p.full, "base64"));
+        writeFileSync(file(k, i + 1, "marking"), Buffer.from(p.marking, "base64"));
+      });
+    }
+  }
+  const read = (k: "a" | "b") => [1, 2, 3].map((n) => ({ full: readFileSync(file(k, n, "full")), marking: readFileSync(file(k, n, "marking")) }));
+  return { a: read("a"), b: read("b") };
+}
+
+/**
+ * For the staff browser test: an exam with no questions and no marking settings, an admin, an approved corrector (the
+ * marker), a corrector not approved yet (`Lead{tag}`, who the admin makes lead marker), and two verified home scripts of
+ * candidates with names and index numbers, on the fixture copies A and B, whose pages carry the processing server's
+ * own full and marking pictures. The exam finished 3 days ago, so the hand-in time is over.
+ */
+export async function seedStaffMarkingExam(): Promise<{
+  examId: string;
+  title: string;
+  paperId: string;
+  subject: string;
+  admin: Login;
+  marker: Login & { name: string };
+  lead: Login & { name: string };
+  scripts: SeededScript[];
+}> {
+  const tag = crypto.randomUUID().slice(0, 8);
+  const pictures = fixturePictures();
+  for (const code of [CODE_A, CODE_B]) {
+    const { count } = await svc().from("paper_copies").select("*", { count: "exact", head: true }).eq("code", code);
+    if ((count ?? 0) > 0) throw new Error(`the fixture code ${code} is in use by other local data`);
+  }
+  const admin = await createAccount({ role: "admin" });
+  const marker = { ...(await createAccount({ role: "corrector", firstName: `Marker${tag}` })), name: `Marker${tag} Tester` };
+  const lead = { ...(await createAccount({ role: "corrector", firstName: `Lead${tag}` })), name: `Lead${tag} Tester` };
+  const exam = await seedExam({ tag, title: "Staff marking", sitting: "home", startedMinutesAgo: 3 * 24 * 60, adminId: admin.id });
+  seeded.set(exam.examId, exam);
+  must(await svc().from("marker_approvals").insert({ marker_id: marker.id, subject_id: exam.subjectId, approved_by: admin.id, approved_at: new Date().toISOString() }).select("marker_id").single(), "approval insert");
+  const subject = must(await svc().from("subjects").select("name").eq("id", exam.subjectId).single(), "subject read").name as string;
+  const scripts = [await seedScript(exam, 0, tag, CODE_A, pictures.a), await seedScript(exam, 1, tag, CODE_B, pictures.b)];
+  return { examId: exam.examId, title: exam.title, paperId: exam.paperId, subject, admin, marker, lead, scripts };
+}
+
+/**
+ * The hidden areas of a paper version, set by the admin (set_paper_hidden_areas, as the page-roles panel saves them),
+ * which queues a remask of every file with a page on a changed page. Returns how many remasks were queued.
+ */
+export async function setPaperHiddenAreas(admin: Login, paperId: string, areas: { page: number; x: number; y: number; w: number; h: number }[]): Promise<number> {
+  const client = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  const signIn = await client.auth.signInWithPassword({ email: admin.email, password: admin.password });
+  if (signIn.error) throw new Error(`admin sign-in failed: ${signIn.error.message}`);
+  try {
+    const r = await client.rpc("set_paper_hidden_areas", { p_paper: paperId, p_areas: areas });
+    if (r.error || r.data?.ok !== true) throw new Error(`hidden areas failed: ${r.error?.message ?? JSON.stringify(r.data)}`);
+    return Number(r.data.remask_queued);
+  } finally {
+    await client.auth.signOut();
+  }
+}
+
+/** The states of an exam's remask jobs, in job order. */
+export async function remaskStates(examId: string): Promise<string[]> {
+  const uploads = ((await svc().from("script_uploads").select("id").eq("exam_id", examId)).data ?? []).map((u) => u.id as string);
+  if (uploads.length === 0) return [];
+  const { data } = await svc().from("processing_jobs").select("state").in("upload_id", uploads).eq("kind", "remask").order("id");
+  return (data ?? []).map((j) => j.state as string);
+}
+
+/** A script's piece (an exam marked as whole scripts has one per script): its state and hold, and who holds it how. */
+export async function pieceState(scriptId: string): Promise<{ unitId: string; state: string; onHold: boolean; holdReason: string | null; holder: string | null; how: string | null }> {
+  const u = must(await svc().from("marking_units").select("id, state, on_hold, hold_reason").eq("script_id", scriptId).single(), "unit read");
+  const { data: a } = await svc().from("marking_assignments").select("marker_id, how").eq("unit_id", u.id).eq("kind", "live").is("ended_at", null).maybeSingle();
+  return { unitId: u.id, state: u.state, onHold: u.on_hold, holdReason: u.hold_reason, holder: a?.marker_id ?? null, how: a?.how ?? null };
 }
 
 /** A piece's live marking as the database holds it (the service key reads it). */

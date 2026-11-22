@@ -1786,6 +1786,9 @@ isOneToOne: false
 "marking_close":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
+"marking_dashboard":
+{ Args: { "p_now"?: string }; Returns: Json
+                           },
 "marking_exam_get":
 { Args: { "p_exam": string,"p_now"?: string }; Returns: Json
                            },
@@ -2223,6 +2226,11 @@ isOneToOne: false
 "script_links_write":
 { Args: { "p_actor": string,"p_links": Json,"p_now": string,"p_reason": string,"p_script": string }; Returns: boolean
                            },
+"script_marking_checks_due":
+{ Args: { "p_exam"?: string }; Returns: {
+              "copy_page": number,"page_id": string,"script_id": string
+            }[]
+                           },
 "script_marking_checks_list":
 { Args: { "p_exam"?: string }; Returns: Json
                            },
@@ -2359,6 +2367,9 @@ isOneToOne: false
                            },
 "script_pages_valid":
 { Args: { "p_pages": Json,"p_prefix": string }; Returns: boolean
+                           },
+"script_pictures_unused_take":
+{ Args: { "p_limit"?: number,"p_now"?: string }; Returns: Json
                            },
 "script_raise_mixed":
 { Args: { "p_script": string,"p_upload": string }; Returns: undefined

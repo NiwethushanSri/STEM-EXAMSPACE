@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { QUEUE_STUCK_MINUTES, parseScriptsDashboard, scriptsDashboardAlerts, type ScriptsDashboard } from "@/lib/alerts";
+import {
+  QUEUE_STUCK_MINUTES,
+  markingAlerts,
+  parseMarkingDashboard,
+  parseScriptsDashboard,
+  scriptsDashboardAlerts,
+  type MarkingDashboard,
+  type ScriptsDashboard,
+} from "@/lib/alerts";
 
 const EXAM = "11111111-1111-4111-8111-111111111111";
 const CENTRE = "22222222-2222-4222-8222-222222222222";
@@ -146,6 +154,70 @@ describe("scriptsDashboardAlerts", () => {
       "1 file could not be processed. It is in the exception queue.",
       "Physics, Hall, R1: sheets were collected for 1 candidate but no scan is recorded. It was due by Thu 2 Jul 2026, 09:00.",
       "3 problems are waiting in the exception queue.",
+    ]);
+  });
+});
+
+describe("parseMarkingDashboard", () => {
+  const marking = {
+    ok: true,
+    exams: [
+      { exam_id: EXAM, title: "Maths mock", paper: "Paper 1", deadline: "2026-12-12T17:00:00Z", overdue: true, left: 12, marked: 30, on_hold: 2 },
+      { exam_id: CENTRE, title: "Physics", paper: null, deadline: null, overdue: false, left: 0, marked: 8, on_hold: 0 },
+    ],
+    totals: { left: 12, on_hold: 2, overdue_exams: 1, alerts_open: 3, pictures_to_check: 4, stale_assigned: 5 },
+  };
+
+  it("reads the marking figures", () => {
+    expect(parseMarkingDashboard(marking)).toEqual({
+      exams: [
+        { examId: EXAM, title: "Maths mock", paper: "Paper 1", deadline: "2026-12-12T17:00:00Z", overdue: true, left: 12, marked: 30, onHold: 2 },
+        { examId: CENTRE, title: "Physics", paper: null, deadline: null, overdue: false, left: 0, marked: 8, onHold: 0 },
+      ],
+      left: 12,
+      onHold: 2,
+      overdueExams: 1,
+      alertsOpen: 3,
+      picturesToCheck: 4,
+      staleAssigned: 5,
+    });
+  });
+
+  it("is null for a refusal or a broken answer, and leaves out malformed rows", () => {
+    expect(parseMarkingDashboard({ ok: false, code: "forbidden" })).toBeNull();
+    expect(parseMarkingDashboard(null)).toBeNull();
+    expect(parseMarkingDashboard({ ok: true, exams: [{ exam_id: 5 }, { exam_id: EXAM, title: "T", left: -1, overdue: "yes" }] })).toEqual({
+      exams: [{ examId: EXAM, title: "T", paper: null, deadline: null, overdue: false, left: 0, marked: 0, onHold: 0 }],
+      left: 0,
+      onHold: 0,
+      overdueExams: 0,
+      alertsOpen: 0,
+      picturesToCheck: 0,
+      staleAssigned: 0,
+    });
+  });
+});
+
+describe("markingAlerts", () => {
+  const none: MarkingDashboard = { exams: [], left: 0, onHold: 0, overdueExams: 0, alertsOpen: 0, picturesToCheck: 0, staleAssigned: 0 };
+
+  it("marking_alerts_texts: overdue exams, scripts on hold, pictures to check and untouched assigned scripts, the most urgent first", () => {
+    expect(markingAlerts(none)).toEqual([]);
+    expect(markingAlerts({ ...none, left: 40, alertsOpen: 2 })).toEqual([]);
+    expect(markingAlerts({ ...none, overdueExams: 2, onHold: 3, picturesToCheck: 4, staleAssigned: 5 })).toEqual([
+      { id: "marking-overdue", tone: "red", text: "Marking is overdue for 2 exams.", href: "/admin/marking" },
+      { id: "marking-on-hold", tone: "amber", text: "3 scripts are on hold in marking.", href: "/admin/marking" },
+      { id: "marking-pictures", tone: "amber", text: "4 marking pictures wait to be checked.", href: "/admin/scripts/exceptions?tab=checks" },
+      { id: "marking-stale", tone: "amber", text: "5 assigned scripts have not been touched for a week.", href: "/admin/marking" },
+    ]);
+  });
+
+  it("uses the singular for one", () => {
+    expect(markingAlerts({ ...none, overdueExams: 1, onHold: 1, picturesToCheck: 1, staleAssigned: 1 }).map((a) => a.text)).toEqual([
+      "Marking is overdue for 1 exam.",
+      "1 script is on hold in marking.",
+      "1 marking picture waits to be checked.",
+      "1 assigned script has not been touched for a week.",
     ]);
   });
 });
