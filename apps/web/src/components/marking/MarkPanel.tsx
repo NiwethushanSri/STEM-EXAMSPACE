@@ -10,6 +10,15 @@ export const LEAD_NOTE_MAX = 1000;
 /** The id of the mark box, which a number key focuses for a question out of more than 9 (the box is then shown). */
 export const MARK_INPUT_ID = "marking-mark-input";
 
+/** A number key for a question out of more than 9: the mark box takes focus with its text selected, so the digit
+ * being typed replaces the mark already there (1 out of 15, then 5, is 5, not 15). */
+export function focusMarkBox(): void {
+  const box = document.getElementById(MARK_INPUT_ID);
+  if (!(box instanceof HTMLInputElement)) return;
+  box.focus();
+  box.select();
+}
+
 const BTN = `inline-flex min-h-11 min-w-11 items-center justify-center rounded border px-2 text-sm font-semibold tabular-nums disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS}`;
 const OFF = "border-slate-300 bg-white text-slate-900 hover:bg-slate-50";
 const ON = "border-blue-700 bg-blue-600 text-white";

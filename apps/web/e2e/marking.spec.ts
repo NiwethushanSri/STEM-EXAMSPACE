@@ -59,6 +59,7 @@ async function nextScript(page: Page): Promise<string> {
 
 const saved = (page: Page) => expect(page.getByTestId("save-status")).toHaveText("Saved");
 const SUBMIT_RPC = "**/rest/v1/rpc/marking_submit";
+const MY_WORK_RPC = "**/rest/v1/rpc/marking_my_work";
 
 test.describe("on a computer", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -85,11 +86,17 @@ test.describe("on a computer", () => {
     await expect(page.getByTestId("question-1-mark")).toHaveText("3");
     await page.keyboard.press("Enter");
     await page.getByRole("button", { name: "2 marks", exact: true }).click();
+    // Question 3 is out of 15: a digit goes to the mark box and replaces the mark there (1, then 4, is 4, not 14).
     await page.getByTestId("question-3").click();
-    await page.getByRole("button", { name: "4 marks", exact: true }).click();
+    await page.getByRole("button", { name: "1 mark", exact: true }).click();
+    await page.keyboard.press("4");
+    await expect(page.getByLabel("Mark (0 to 15)")).toBeFocused();
+    await expect(page.getByLabel("Mark (0 to 15)")).toHaveValue("4");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("question-3-mark")).toHaveText("4");
     await saved(page);
     await expect.poll(() => marksOf(unitId)).toEqual({ "1": 3, "2": 2, "3": 4 });
-    await expect(page.getByTestId("running-total")).toHaveText("9 / 15");
+    await expect(page.getByTestId("running-total")).toHaveText("9 / 24");
 
     // Everything is still there after a reload.
     await page.reload();
@@ -110,7 +117,7 @@ test.describe("on a computer", () => {
     await dialog.getByLabel("Reason").fill("Second look at the method");
     await dialog.getByRole("button", { name: "Save the change" }).click();
     await saved(page);
-    await expect(page.getByTestId("running-total")).toHaveText("10 / 15");
+    await expect(page.getByTestId("running-total")).toHaveText("10 / 24");
     await expect.poll(async () => (await markingOf(unitId))?.total).toBe(10);
     await noSidewaysScroll(page, "the marking screen");
   });
@@ -157,8 +164,16 @@ test.describe("on a computer", () => {
     expect(await marksOf(unitId)).toEqual({ "1": 2, "2": 1, "3": 3 });
     expect(await annotationKinds(unitId)).toEqual([]);
 
-    // Next script on the screen opens the next script.
-    await page.getByRole("button", { name: "Next script", exact: true }).click();
+    // Next script on the screen recovers from a failure: a plain message, and it can be pressed again.
+    const next = page.getByRole("button", { name: "Next script", exact: true });
+    await page.route(MY_WORK_RPC, (route) => (route.request().method() === "POST" ? route.abort() : route.continue()));
+    await next.click();
+    await expect(page.getByText("Could not find a script. Check your connection and try again.")).toBeVisible();
+    await expect(next).toBeEnabled();
+    await page.unroute(MY_WORK_RPC);
+
+    // Then it opens the next script.
+    await next.click();
     await page.waitForURL((u) => /^\/marking\/[0-9a-f-]{36}$/.test(u.pathname) && !u.pathname.endsWith(unitId));
     // The screen left behind (kept hidden by Next.js) holds no copy of the submitted script: only one page is there.
     await expect(page.getByTestId("page-surface")).toHaveCount(1);
@@ -214,6 +229,15 @@ test.describe("on an iPad", () => {
     await expect(questions).toBeFocused();
     await expect(page.getByTestId("question-1-mark")).toHaveText("–");
     await saved(page);
+
+    // Open, then the window made 1200 px or wider: the drawer closes, and the shortcuts work again.
+    await questions.click();
+    await expect(drawer).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 1180 });
+    await expect(drawer).toHaveCount(0);
+    const zoomed = await page.getByTestId("zoom-figure").textContent();
+    await page.keyboard.press("[");
+    await expect(page.getByTestId("zoom-figure")).not.toHaveText(zoomed ?? "");
     await noSidewaysScroll(page, "the marking screen on an iPad");
   });
 });
@@ -286,8 +310,20 @@ test.describe("reporting a name", () => {
   test("second_screen_is_told_to_reload", async ({ page }) => {
     const unitId = await nextScript(page);
     expect(unitId).not.toBe(secondUnit);
+
+    // A mark given just before leaving through the Marking link is saved first.
     await page.keyboard.press("1");
+    await page.getByRole("link", { name: "Back to Marking" }).click();
+    await page.waitForURL(/\/marking$/);
+    await expect.poll(() => marksOf(unitId)).toEqual({ "1": 1 });
+
+    // Back to the script: the screen Next.js kept is opened afresh, with what was saved.
+    await page.goBack();
+    await page.waitForURL(/\/marking\/[0-9a-f-]{36}$/);
+    await expect(page.getByTestId("page-surface")).toHaveCount(1);
+    await expect(page.getByTestId("question-1-mark")).toHaveText("1");
     await saved(page);
+    await page.getByTestId("question-1").click();
     await bumpRev(unitId);
 
     let saves = 0;

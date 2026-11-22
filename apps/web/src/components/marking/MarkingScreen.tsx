@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useEffectEvent, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type ReactNode, type RefObject, type SetStateAction } from "react";
+import { useEffect, useEffectEvent, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { markingScreenMessageFor, type Json } from "@stem/shared";
 import { giveBack, nextScript } from "@/app/marking/actions";
-import { MarkPanel, MARK_INPUT_ID } from "@/components/marking/MarkPanel";
+import { MarkPanel, focusMarkBox } from "@/components/marking/MarkPanel";
 import { PageCanvas } from "@/components/marking/PageCanvas";
 import { QuestionList } from "@/components/marking/QuestionList";
 import { FOCUS, type ScreenTool } from "@/components/marking/ToolBar";
@@ -39,6 +39,11 @@ const COVER_CODES: Partial<Record<SaveStatus, string>> = {
   closed: "marking_closed",
 };
 
+/** The longest a save is waited for before the piece leaves the screen; what is not sent by then stays stored. */
+const SAVE_FIRST_MS = 3000;
+/** Where the questions drawer gives way to the questions column (Tailwind's min-[1200px]). */
+const WIDE = "(min-width: 1200px)";
+const NEXT_FAILED = "Could not find a script. Check your connection and try again.";
 /** A picture's link older than this is asked for again before the picture is shown (links last MARKING_URL_SECONDS). */
 const LINK_FRESH_MS = (MARKING_URL_SECONDS - 30) * 1000;
 const NO_ANNOTATIONS: SavedAnnotation[] = [];
@@ -366,6 +371,16 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     listOpener.current?.focus();
     listOpener.current = null;
   };
+  // At 1200 px and wider the drawer is hidden (the questions have their own column), so it is closed: an open drawer
+  // that cannot be seen would keep every shortcut off.
+  useEffect(() => {
+    const wide = window.matchMedia(WIDE);
+    const onChange = () => {
+      if (wide.matches) setListOpen(false);
+    };
+    wide.addEventListener("change", onChange);
+    return () => wide.removeEventListener("change", onChange);
+  }, []);
   /** A question chosen in the list (or with the keys): its first part to mark is current, and its first page shows. */
   const chooseQuestion = (q: ScreenQuestion) => {
     const leaf = firstLeaf(q, questions);
@@ -384,7 +399,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
         if (leaf && validMark(a.value, max, step)) setMark(leaf.id, a.value, false);
         return;
       case "focus_mark":
-        document.getElementById(MARK_INPUT_ID)?.focus();
+        focusMarkBox();
         return;
       case "half": {
         if (!leaf) return;
@@ -553,9 +568,22 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     setNotice(markingScreenMessageFor(code, reason));
   };
 
-  /** Before the piece leaves the screen (Name visible, Give back, Next script): what is waiting is sent if it can be. */
+  /** Before the piece leaves the screen (Name visible, Give back, Next script, the link to Marking): what is waiting is
+   * sent if it can be, waiting at most SAVE_FIRST_MS; anything not sent stays stored and goes when the piece is next
+   * opened. */
   const saveFirst = async () => {
-    await queue.current?.flush();
+    const q = queue.current;
+    if (!q || q.pending() === 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([q.flush(), new Promise<void>((done) => (timer = setTimeout(done, SAVE_FIRST_MS)))]);
+    clearTimeout(timer);
+  };
+  /** The links back to Marking save first, as Give back does (a plain click; a new tab or window is left to the browser). */
+  const toMarking = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if ((queue.current?.pending() ?? 0) === 0) return;
+    e.preventDefault();
+    void saveFirst().then(() => router.push("/marking"));
   };
   /** Leaves for the marker home once the piece is no longer theirs; what was not saved goes with it. */
   const leave = () => {
@@ -581,7 +609,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
         {(coverCode === "hold_expired" || (coverCode === "conflict" && stop?.reason === "set_aside")) && (
           <NextScriptButton unitId={piece.unit.id} saveFirst={saveFirst} onSame={onReload} />
         )}
-        <Link href="/marking" className={QUIET}>
+        <Link href="/marking" onClick={toMarking} className={QUIET}>
           Back to Marking
         </Link>
       </div>
@@ -611,7 +639,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   return (
     <div className={`flex h-dvh flex-col bg-slate-100 text-slate-900 ${active ? "" : "hidden"}`}>
       <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-slate-200 bg-white px-3 py-2">
-        <Link href="/marking" aria-label="Back to Marking" className={`${BUTTON} -ml-1 px-2 text-blue-800 hover:bg-slate-50`}>
+        <Link href="/marking" aria-label="Back to Marking" onClick={toMarking} className={`${BUTTON} -ml-1 px-2 text-blue-800 hover:bg-slate-50`}>
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 18l-6-6 6-6" />
           </svg>
@@ -640,7 +668,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
         {holdLine && <p className="text-sm text-slate-600">{holdLine}</p>}
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {!readOnly && page && (
-            <button type="button" className={QUIET} disabled={busy} onClick={() => setDialog("name")}>
+            <button type="button" className={QUIET} disabled={busy || covered} onClick={() => setDialog("name")}>
               Name visible
             </button>
           )}
@@ -828,28 +856,35 @@ function NextScriptButton({ unitId, saveFirst, onSame }: { unitId: string; saveF
   const go = async () => {
     setBusy(true);
     setMessage(null);
-    await saveFirst();
-    const { data, error } = await createClient().rpc("marking_my_work", {});
-    const work = error ? null : parseMyWork(data);
-    if (!work) {
-      setBusy(false);
-      return setMessage(markingScreenMessageFor("internal"));
+    // The button stays busy only while the screen moves to the next script; any failure lets it be pressed again.
+    let moving = false;
+    try {
+      await saveFirst();
+      const { data, error } = await createClient().rpc("marking_my_work", {});
+      const work = error ? null : parseMyWork(data);
+      if (!work) return setMessage(NEXT_FAILED);
+      const target = nextScriptTarget(work, unitId);
+      // Not in the list any more: the marker home has the exams and their Next script buttons.
+      if (!target) {
+        moving = true;
+        return router.push("/marking");
+      }
+      const r = await nextScript(target.examId, target.groupId);
+      if (!r.ok) return setMessage(r.message);
+      moving = true;
+      if (r.unitId === unitId) return onSame();
+      router.push(`/marking/${r.unitId}`);
+    } catch {
+      moving = false;
+      setMessage(NEXT_FAILED);
+    } finally {
+      if (!moving) setBusy(false);
     }
-    const target = nextScriptTarget(work, unitId);
-    // Not in the list any more: the marker home has the exams and their Next script buttons.
-    if (!target) return router.push("/marking");
-    const r = await nextScript(target.examId, target.groupId);
-    if (!r.ok) {
-      setBusy(false);
-      return setMessage(r.message);
-    }
-    if (r.unitId === unitId) return onSame();
-    router.push(`/marking/${r.unitId}`);
   };
   return (
     <span className="inline-flex flex-wrap items-center gap-2">
       <button type="button" className={PRIMARY} disabled={busy} onClick={() => void go()}>
-        {busy ? "Finding a script..." : "Next script"}
+        {busy ? "Finding a script…" : "Next script"}
       </button>
       {message && (
         <span role="alert" className="text-sm text-amber-900">

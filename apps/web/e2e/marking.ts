@@ -25,11 +25,12 @@ const must = <T>(r: { data: T; error: { message: string } | null }, what: string
 // Names no screen of the marker may show: page.content() is searched for each.
 const FIRST = ["Wilhelmina", "Bartholomew", "Octavia", "Peregrine", "Cordelia"];
 const LAST = ["Quarterfield", "Ashbourne", "Fenwicke", "Holloway", "Marchbank"];
-/** The structure: three questions, each on its own answer page of the 3-page paper. */
+/** The structure: three questions, each on its own answer page of the 3-page paper. Question 3 is out of 15, so its
+ * mark has buttons and the number box a digit key goes to. */
 export const QUESTIONS = [
   { label: "1", max: 5, page: 1 },
   { label: "2", max: 4, page: 2 },
-  { label: "3", max: 6, page: 3 },
+  { label: "3", max: 15, page: 3 },
 ] as const;
 
 const seeded = new Map<string, SeededExam>();
@@ -39,7 +40,7 @@ const seeded = new Map<string, SeededExam>();
  * browser and kept in the temp folder. They carry no name: a marking picture never does.
  */
 async function markingPictures(): Promise<Buffer[]> {
-  const dir = join(tmpdir(), "stem-e2e-marking", "pictures-v1");
+  const dir = join(tmpdir(), "stem-e2e-marking", "pictures-v2");
   const files = QUESTIONS.map((q) => join(dir, `page-${q.page}.jpg`));
   if (files.every((f) => existsSync(f))) return files.map((f) => readFileSync(f));
   mkdirSync(dir, { recursive: true });
