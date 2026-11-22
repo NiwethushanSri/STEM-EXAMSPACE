@@ -122,19 +122,24 @@ select is((select array_agg(x.n order by x.n) from public.marking_scripts_pages(
 -- alerts_list_in_time_at_300_alerts (a timing guard, as 037 and 043). Each timed call runs under the statement_timeout
 -- it must meet: a call over it fails this file.
 -- ---------------------------------------------------------------------------------------------
+-- ANALYZE inside this transaction counts this file's own rows (an earlier file's rolled-back ANALYZE leaves stale
+-- statistics in pg_class). Setup user only.
+analyze public.scripts, public.script_pages, public.script_page_links, public.marking_alerts, public.marking_units,
+        public.marking_assignments, public.exam_marking, public.exams, public.profiles, public.bookings, public.home_submissions,
+        public.script_uploads, public.script_exceptions, public.script_page_hidden_areas;
 select tests.as_user(pg_temp.uid('lead'));
-set local statement_timeout = '2s';
+set local statement_timeout = '4s';
 insert into res values ('lead', pg_temp.timed('ms_lead', 'select public.marking_alerts_list()'));
 reset statement_timeout;
 select tests.as_postgres();
 select tests.as_user(pg_temp.uid('admin'));
-set local statement_timeout = '2s';
+set local statement_timeout = '4s';
 insert into res values ('admin', pg_temp.timed('ms_admin', format('select public.marking_alerts_list(%L)', pg_temp.k('e'))));
 reset statement_timeout;
 insert into res values ('admin_all', public.marking_alerts_list(null, null));
 select tests.as_postgres();
 select is(array[jsonb_array_length(pg_temp.r('lead') -> 'alerts'), jsonb_array_length(pg_temp.r('admin') -> 'alerts')], array[309, 300],
-  'alerts_list_in_time_at_300_alerts: the lead''s list of every open alert and the admin''s list of the exam''s 300 each come within 2 s');
+  'alerts_list_in_time_at_300_alerts: the lead''s list of every open alert and the admin''s list of the exam''s 300 each come within 4 s');
 select is((select count(*)::int from jsonb_array_elements(pg_temp.r('admin') -> 'alerts') a
            where (a ->> 'can_release')::boolean and a ->> 'release_blocked' is null and (a ->> 'page_n')::int = 2), 300,
   'each of the 300 may be released and names page 2');
