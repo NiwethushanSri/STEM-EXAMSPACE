@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { keyAction } from "./marking-keys";
-import { firstLeaf, labelList, markControls, markText, parseOpened, questionMarkText, questionPageIndexes, zoomStepIn, zoomStepOut } from "./marking-screen";
+import {
+  ACCESS_CHECK_MS,
+  accessCheckDue,
+  accessCheckOutcome,
+  firstLeaf,
+  labelList,
+  markControls,
+  markText,
+  parseOpened,
+  questionMarkText,
+  questionPageIndexes,
+  zoomStepIn,
+  zoomStepOut,
+} from "./marking-screen";
 
 const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -140,6 +153,33 @@ describe("zoom steps and lists", () => {
   it("names at most six questions", () => {
     expect(labelList(["1", "2"])).toBe("1, 2");
     expect(labelList(["1", "2", "3", "4", "5", "6", "7", "8"])).toBe("1, 2, 3, 4, 5, 6 and 2 more");
+  });
+});
+
+describe("the minute check of a shown page", () => {
+  const base = { visible: true, covered: false, path: "e/u/1-1/0-marking.jpg", lastAt: 0, now: ACCESS_CHECK_MS };
+  it("withdrawn_page_check_runs_each_minute_while_in_view", () => {
+    expect(ACCESS_CHECK_MS).toBe(60_000);
+    expect(accessCheckDue(base)).toBe(true);
+    expect(accessCheckDue({ ...base, now: ACCESS_CHECK_MS - 1 })).toBe(false);
+    expect(accessCheckDue({ ...base, lastAt: 30_000, now: 90_000 })).toBe(true);
+  });
+  it("does not run while the tab is hidden, under a cover, or with no picture on the page", () => {
+    expect(accessCheckDue({ ...base, visible: false })).toBe(false);
+    expect(accessCheckDue({ ...base, covered: true })).toBe(false);
+    expect(accessCheckDue({ ...base, path: null })).toBe(false);
+  });
+  it("a tab back in view checks at once when a minute has gone by", () => {
+    expect(accessCheckDue({ ...base, lastAt: 10_000, now: 10 * 60_000 })).toBe(true);
+    expect(accessCheckDue({ ...base, lastAt: 10 * 60_000 - 5_000, now: 10 * 60_000 })).toBe(false);
+  });
+  it("a refused link means the page is withdrawn; a failure to ask says nothing", () => {
+    expect(accessCheckOutcome({ signed: true, status: null })).toBe("ok");
+    expect(accessCheckOutcome({ signed: false, status: 400 })).toBe("gone");
+    expect(accessCheckOutcome({ signed: false, status: 403 })).toBe("gone");
+    expect(accessCheckOutcome({ signed: false, status: 404 })).toBe("gone");
+    expect(accessCheckOutcome({ signed: false, status: 500 })).toBe("unknown");
+    expect(accessCheckOutcome({ signed: false, status: null })).toBe("unknown");
   });
 });
 

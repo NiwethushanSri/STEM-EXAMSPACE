@@ -186,7 +186,7 @@ function GiveBackDialog({ piece, onClose }: { piece: MyPiece; onClose: () => voi
       }
     >
       <div className="space-y-3 text-sm">
-        <p className="text-slate-700">Another marker can then mark it.</p>
+        <p className="text-slate-700">Another marker can then mark it. What you have marked is set aside.</p>
         <label htmlFor={id} className="block font-medium text-slate-800">
           Reason (optional)
         </label>

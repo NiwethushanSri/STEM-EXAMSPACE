@@ -1878,6 +1878,11 @@ isOneToOne: false
 "marking_script_waiting":
 { Args: { "p_now": string,"p_script": string }; Returns: string
                            },
+"marking_scripts_pages":
+{ Args: { "p_scripts": (string)[] }; Returns: {
+              "copy_page": number,"extra": boolean,"marking_path": string,"n": number,"page_id": string,"rotation": number,"script_id": string
+            }[]
+                           },
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
                            },

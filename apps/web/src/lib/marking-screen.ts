@@ -233,6 +233,24 @@ export function zoomStepOut(z: number): number {
   return [...ZOOM_STEPS].reverse().find((v) => v < z - 1e-6) ?? ZOOM_MIN;
 }
 
+/** How often the marking screen asks whether the page it shows may still be seen (ms). */
+export const ACCESS_CHECK_MS = 60_000;
+
+/** Whether the check runs now: only while the screen is in view, with a page's picture on it, and at most once a
+ * minute (a tab coming back into view checks at once if a minute has gone by). */
+export function accessCheckDue(s: { visible: boolean; covered: boolean; path: string | null; lastAt: number; now: number }): boolean {
+  return s.visible && !s.covered && s.path !== null && s.now - s.lastAt >= ACCESS_CHECK_MS;
+}
+
+/** What asking for the shown picture's link again says. The storage rule answers for the piece as it is now: a link
+ * given means the marker may still see the page ("ok"); a refusal (4xx) means they may not, or the picture is no
+ * longer this one ("gone"); anything else (no connection, a server error) says nothing, and the next check asks
+ * again ("unknown"). */
+export function accessCheckOutcome(r: { signed: boolean; status: number | null }): "ok" | "gone" | "unknown" {
+  if (r.signed) return "ok";
+  return r.status !== null && r.status >= 400 && r.status < 500 ? "gone" : "unknown";
+}
+
 /** At most `max` labels, then "and N more". */
 export function labelList(labels: string[], max = 6): string {
   if (labels.length <= max) return labels.join(", ");

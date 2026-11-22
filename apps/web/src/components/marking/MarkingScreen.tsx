@@ -16,7 +16,19 @@ import { nextQuestionId, unitTotal, validMark } from "@/lib/marking-marks";
 import { act, applyOps, fromServer, redo, undo, type MarkingState, type Op, type SavedAnnotation } from "@/lib/marking-model";
 import { ZOOM_MAX, ZOOM_MIN, isPhone } from "@/lib/marking-pointer";
 import { createSaveQueue, restorePending, type SaveQueue, type SaveResult, type SaveStatus } from "@/lib/marking-save";
-import { firstLeaf, labelList, parseOpened, questionPageIndexes, zoomStepIn, zoomStepOut, type OpenedPiece, type ScreenQuestion } from "@/lib/marking-screen";
+import {
+  ACCESS_CHECK_MS,
+  accessCheckDue,
+  accessCheckOutcome,
+  firstLeaf,
+  labelList,
+  parseOpened,
+  questionPageIndexes,
+  zoomStepIn,
+  zoomStepOut,
+  type OpenedPiece,
+  type ScreenQuestion,
+} from "@/lib/marking-screen";
 import { createClient } from "@/lib/supabase/client";
 
 /** Marking pictures and the mark scheme PDF are shown through signed links that last this long (seconds). */
@@ -321,6 +333,50 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   useEffect(() => {
     showShownPicture();
   }, [page?.markingPath, covered]);
+
+  // A page withdrawn while the marker only reads (another marker reported a name, staff pressed "A name still shows",
+  // the hold ended) must not stay on screen until their next save. Every minute while the screen is in view, the link
+  // of the shown picture is asked for again: the storage rule answers for the piece as it is now. Given, nothing
+  // changes on screen. Refused, the picture is taken off at once and the piece is asked for again (marking_unit_open):
+  // its refusal becomes the cover, in its own words; if the piece is still the marker's (the picture itself changed),
+  // it is opened afresh.
+  /** When the last check ran (the screen's opening counts as one: the piece was just read). */
+  const lastAccessCheck = useRef<number | null>(null);
+  const checkingAccess = useRef(false);
+  const checkAccess = useEffectEvent(async () => {
+    const path = page?.markingPath ?? null;
+    const now = Date.now();
+    if (checkingAccess.current || !active) return;
+    if (!path || !accessCheckDue({ visible: document.visibilityState === "visible", covered, path, lastAt: lastAccessCheck.current ?? now, now })) return;
+    checkingAccess.current = true;
+    lastAccessCheck.current = now;
+    try {
+      const signed = await createClient().storage.from("script-pages").createSignedUrl(path, MARKING_URL_SECONDS);
+      const status = typeof signed.error?.status === "number" ? signed.error.status : null;
+      if (accessCheckOutcome({ signed: !signed.error && !!signed.data?.signedUrl, status }) !== "gone") return;
+      delete signedAt.current[path];
+      setUrls((m) => withoutKey(m, path));
+      setFailed((m) => ({ ...m, [path]: true }));
+      const again = await createClient().rpc("marking_unit_open", { p_unit: piece.unit.id });
+      const answer = again.error ? null : parseOpened(again.data);
+      if (answer && !answer.ok) setStop({ code: answer.code });
+      else onReload();
+    } catch {
+      // No connection: nothing is known, and the next check asks again.
+    } finally {
+      checkingAccess.current = false;
+    }
+  });
+  useEffect(() => {
+    lastAccessCheck.current = Date.now();
+    const every = setInterval(() => void checkAccess(), ACCESS_CHECK_MS);
+    const onVisible = () => void checkAccess();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(every);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
 
   // ---------------------------------------------------------------------------------------------
   // Changes: each goes through the model (with its undo) and the save queue.

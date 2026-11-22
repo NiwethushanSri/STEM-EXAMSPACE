@@ -154,6 +154,7 @@ function MarkerCard({ marker, subjects, markers }: { marker: MarkerRow; subjects
     if (step.kind === "approve")
       return (
         <ActionPanel
+          key={`approve:${step.subject}`}
           label={`Approve for ${nameOf(step.subject)}`}
           confirmLabel="Confirm"
           onCancel={cancel}
@@ -163,6 +164,7 @@ function MarkerCard({ marker, subjects, markers }: { marker: MarkerRow; subjects
     if (step.kind === "unapprove")
       return (
         <ActionPanel
+          key={`unapprove:${step.subject}`}
           label={`Remove approval for ${nameOf(step.subject)}`}
           consequence="Scripts they are marking in this subject go back for others to mark."
           confirmLabel="Confirm"
@@ -174,6 +176,7 @@ function MarkerCard({ marker, subjects, markers }: { marker: MarkerRow; subjects
       const earlier = leadName(step.subject);
       return (
         <ActionPanel
+          key={`lead:${step.subject}`}
           label={`Make lead marker for ${nameOf(step.subject)}`}
           consequence={earlier ? `${earlier} stops being lead marker.` : undefined}
           confirmLabel="Confirm"
@@ -185,6 +188,7 @@ function MarkerCard({ marker, subjects, markers }: { marker: MarkerRow; subjects
     if (step.kind === "unlead")
       return (
         <ActionPanel
+          key={`unlead:${step.subject}`}
           label={`Remove lead marker for ${nameOf(step.subject)}`}
           consequence={`${marker.name} stops being lead marker.`}
           confirmLabel="Confirm"
@@ -194,6 +198,7 @@ function MarkerCard({ marker, subjects, markers }: { marker: MarkerRow; subjects
       );
     return (
       <ActionPanel
+        key={`unconflict:${step.student}`}
         label={`Remove the conflict with ${step.who}`}
         confirmLabel="Confirm"
         onCancel={cancel}
@@ -370,6 +375,7 @@ function Conflicts({
           )}
           {chosen ? (
             <ActionPanel
+              key={`conflict:${chosen.id}`}
               label={`Add a conflict with ${who({ index_number: chosen.indexNumber, name: chosen.name })}`}
               consequence="Scripts of this candidate they are marking go back for others to mark."
               confirmLabel="Add conflict"

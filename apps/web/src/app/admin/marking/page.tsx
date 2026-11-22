@@ -68,6 +68,7 @@ async function ScriptsCard({ exam, exams, sp }: { exam: ProgressExam; exams: Pro
       filterMarkers={[...filterMarkers].map(([id, label]) => ({ id, label }))}
       groups={(groupsRes.data ?? []).map((g) => ({ id: g.id, label: g.label }))}
       filters={{ state, marker }}
+      more={listHasMore(unitsRes.data)}
     />
   );
 }

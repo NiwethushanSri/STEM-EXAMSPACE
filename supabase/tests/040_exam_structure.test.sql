@@ -556,7 +556,9 @@ select is((select count(*)::int from public.audit_log where target_id = pg_temp.
   (pg_temp.r('v_locked') #>> '{}')::int, 'the saves before marking opened are exam_structure_saved, by the teacher');
 select is((select string_agg(reason, ' / ' order by id) from public.audit_log where target_id = pg_temp.k('e') and action = 'exam_structure_changed_after_lock'
              and actor_id = pg_temp.uid('admin')),
-  'Clearer guidance for question 1 / Out of 4 / Part (c) was left out / Question 5 was left out', 'the changes after it are recorded with their reasons');
+  'Clearer guidance for question 1 (no maximum changed and no question added) / Out of 4 (maximum 2(b) 5 -> 4) / '
+    || 'Part (c) was left out (1 question added; 3 pieces reopened) / Question 5 was left out (1 question added; 1 piece reopened)',
+  'the changes after it are recorded with their reasons, and what changed (20261122000015)');
 select is((select string_agg(action || ':' || coalesce(reason, '-'), ' ' order by id) from public.audit_log
            where target_type = 'mark_scheme_file' and target_id in (pg_temp.k('f1'), pg_temp.k('f2'))),
   'mark_scheme_file_added:- mark_scheme_file_added:- mark_scheme_file_removed:Wrong file', 'the PDFs added and removed are recorded');

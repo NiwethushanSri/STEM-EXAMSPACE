@@ -4,15 +4,13 @@ import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { ReasonDialog } from "@/components/papers/ReasonDialog";
 import { assignSome, assignUnits, reassignUnits, takeBackUnits, type AllocationActionResult } from "@/app/admin/marking/actions";
-import { unitStateLabel, ukDayTime, waitingLabel, type MarkingMode, type UnitRow } from "@/lib/marking-lists";
+import { firstShownText, unitStateLabel, ukDayTime, waitingLabel, type MarkingMode, type UnitRow } from "@/lib/marking-lists";
 import { utcToLondonParts } from "@/lib/london-time";
 
 const BUTTON = "min-h-11 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
 const QUIET = "min-h-11 rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
 const FIELD = "min-h-11 rounded border border-slate-300 bg-white px-2 py-1.5 text-sm";
 const MAX = 200;
-/** marking_units_list answers at most this many. */
-const LIST_LIMIT = 2000;
 
 export type Choice = { id: string; label: string };
 export type UnitFilters = { state: string | null; marker: string | null };
@@ -28,7 +26,8 @@ type Step = { kind: "assign" } | { kind: "reassign" } | { kind: "take_back" } | 
 
 /** One exam's scripts (its pieces: whole scripts, or one per question group), filtered by state and marker, with tick
  * boxes for "Assign to…", "Take back" and "Reassign to…", and "Assign the next {n} to…". Each asks for a reason. The
- * script number and index number only; no candidate name. `markers`: the active markers approved for the subject. */
+ * script number and index number only; no candidate name. `markers`: the active markers approved for the subject.
+ * `more`: the list was cut short (marking_units_list sends at most 2,000), and says so. */
 export function UnitsTable({
   exam,
   exams,
@@ -37,6 +36,7 @@ export function UnitsTable({
   filterMarkers,
   groups,
   filters,
+  more = false,
 }: {
   exam: { id: string; title: string; mode: MarkingMode };
   exams: Choice[];
@@ -45,6 +45,7 @@ export function UnitsTable({
   filterMarkers: Choice[];
   groups: Choice[];
   filters: UnitFilters;
+  more?: boolean;
 }) {
   const router = useRouter();
   const [ticked, setTicked] = useState<Set<string>>(new Set());
@@ -238,7 +239,7 @@ export function UnitsTable({
               ))}
             </tbody>
           </table>
-          {units.length >= LIST_LIMIT && <p className="mt-2 text-sm text-slate-600">Showing the first 2,000 scripts. Filter to see the others.</p>}
+          {more && <p className="mt-2 text-sm text-slate-600">{firstShownText(units.length)} Filter to see the others.</p>}
         </div>
       )}
 
