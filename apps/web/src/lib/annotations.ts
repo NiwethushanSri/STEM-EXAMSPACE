@@ -9,6 +9,10 @@ export type BoxKind = (typeof BOX_KINDS)[number];
 export const STAMP_KINDS = ["tick", "cross", "error", "caret", ...BOX_KINDS] as const;
 export type StampKind = (typeof STAMP_KINDS)[number];
 
+// Every kind the database accepts for a saved mark (`box` and `protractor` are drawn only on the remaining mock pages).
+export const ANNOTATION_KINDS = [...STAMP_KINDS, "pen", "highlight", "text", "ruler"] as const;
+export type AnnotationKind = (typeof ANNOTATION_KINDS)[number];
+
 // Measuring tools: a ruler line, a box with its size, and a protractor angle.
 export type Tool = "select" | "pen" | "highlight" | "text" | "ruler" | "box" | "protractor" | StampKind;
 
