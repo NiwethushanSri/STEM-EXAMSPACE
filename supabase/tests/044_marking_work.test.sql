@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(149);
+select plan(172);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -194,18 +194,21 @@ select is(array[pg_temp.r('open_a1') -> 'marks', pg_temp.r('open_a1') -> 'annota
 select is(pg_temp.r('open_a1') -> 'structure' -> 'version', '0'::jsonb, 'the structure version is the exam''s');
 
 -- ---------------------------------------------------------------------------------------------
--- open_shows_answer_pages_only_in_order: exam er's paper has a cover (page 1) and an information page (3); r1 has 5
--- pages (4 and 5 are spare pages), page 5 refused by staff and page 4 turned a quarter.
+-- open_shows_answer_pages_only_in_order: exam er's paper has 4 pages: a cover (page 1), an information page (3) and a
+-- blank page (4); r1 has 6 pages (5 and 6 are spare pages), page 6 refused by staff and page 5 turned a quarter.
 -- ---------------------------------------------------------------------------------------------
 insert into kv values ('er', tests.marking_exam(pg_temp.subj()));
 select pg_temp.structure('er');
 update public.paper_page_roles r
 set role = case r.page when 1 then 'cover'::public.page_role when 3 then 'information'::public.page_role else 'answer'::public.page_role end
 from public.exam_papers p where p.id = r.paper_id and p.exam_id = pg_temp.k('er');
-select pg_temp.script('r1', 'er', 5);
+update public.exam_papers set page_count = 4 where exam_id = pg_temp.k('er') and kind = 'paper';
+insert into public.paper_page_roles (paper_id, page, role)
+select p.id, 4, 'blank' from public.exam_papers p where p.exam_id = pg_temp.k('er') and p.kind = 'paper';
+select pg_temp.script('r1', 'er', 6);
 insert into public.script_exceptions (exam_id, kind, script_id, page_id, state, resolved_by, resolved_at, resolution)
-values (pg_temp.k('er'), 'poor_quality', pg_temp.k('r1'), pg_temp.k('p:r1:5'), 'resolved', pg_temp.uid('admin'), now(), 'rejected');
-update public.script_pages set rotation = 90 where id = pg_temp.k('p:r1:4');
+values (pg_temp.k('er'), 'poor_quality', pg_temp.k('r1'), pg_temp.k('p:r1:6'), 'resolved', pg_temp.uid('admin'), now(), 'rejected');
+update public.script_pages set rotation = 90 where id = pg_temp.k('p:r1:5');
 select pg_temp.open('er');
 select pg_temp.take('r1', 'm1');
 select tests.as_user(pg_temp.uid('m1'));
@@ -214,16 +217,16 @@ select tests.as_postgres();
 select pg_temp.keep('r1', 'm1');
 select is((select jsonb_agg(jsonb_build_array(p -> 'n', p -> 'copy_page', p -> 'extra') order by (p ->> 'n')::int)
            from jsonb_array_elements(pg_temp.r('open_r1') -> 'pages') p),
-  '[[1, 2, false], [2, 4, false]]'::jsonb,
-  'open_shows_answer_pages_only_in_order: the answer page and the spare page, numbered in page order; not the cover, the information page or the refused page');
+  '[[1, 2, false], [2, 5, false]]'::jsonb,
+  'open_shows_answer_pages_only_in_order: the answer page and the spare page, numbered in page order; not the cover, the information page, the blank page or the refused page');
 select is((select array_agg((p ->> 'page_id')::uuid order by (p ->> 'n')::int) from jsonb_array_elements(pg_temp.r('open_r1') -> 'pages') p),
-  array[pg_temp.k('p:r1:2'), pg_temp.k('p:r1:4')], 'they are the pages the script shows there');
+  array[pg_temp.k('p:r1:2'), pg_temp.k('p:r1:5')], 'they are the pages the script shows there');
 select is((select array_agg(jsonb_build_array(p -> 'marking_path', p -> 'rotation') order by (p ->> 'n')::int)
            from jsonb_array_elements(pg_temp.r('open_r1') -> 'pages') p),
   (select array_agg(jsonb_build_array(sp.marking_path, sp.rotation) order by sp.source_index)
-   from public.script_pages sp where sp.id in (pg_temp.k('p:r1:2'), pg_temp.k('p:r1:4'))),
+   from public.script_pages sp where sp.id in (pg_temp.k('p:r1:2'), pg_temp.k('p:r1:5'))),
   'each with its marking picture and its rotation');
-select is(public.marking_pages_key(pg_temp.k('r1')), md5(pg_temp.k('p:r1:2') || ':0,' || pg_temp.k('p:r1:4') || ':90'),
+select is(public.marking_pages_key(pg_temp.k('r1')), md5(pg_temp.k('p:r1:2') || ':0,' || pg_temp.k('p:r1:5') || ':90'),
   'the pages key is the md5 of the ordered page:rotation list');
 
 -- ---------------------------------------------------------------------------------------------
@@ -509,41 +512,43 @@ insert into public.marker_approvals (marker_id, subject_id, approved_at) values 
 select is(pg_temp.marks('mk:a5'), '', 'nothing was saved');
 
 -- ---------------------------------------------------------------------------------------------
--- annotation_on_a_page_outside_the_unit_refused: m1 holds a1 and r1 (whose cover and refused pages are not shown).
+-- annotation_on_a_page_outside_the_unit_refused: m1 holds a1 and r1 (whose cover, information, blank and refused pages
+-- are not shown).
 -- ---------------------------------------------------------------------------------------------
-insert into kv values ('ann_r2', gen_random_uuid()), ('ann_r4', gen_random_uuid()), ('ann_stale', gen_random_uuid());
+insert into kv values ('ann_r2', gen_random_uuid()), ('ann_r5', gen_random_uuid()), ('ann_stale', gen_random_uuid());
 select tests.as_user(pg_temp.uid('m1'));
 select is(array[pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 6, jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:a2:1'))))),
                 pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), 0, jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:1'))))),
                 pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), 0, jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:3'))))),
-                pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), 0, jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:5'))))),
+                pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), 0, jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:4'))))),
+                pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), 0, jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:6'))))),
                 pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), 0, jsonb_build_array(pg_temp.tick(gen_random_uuid(), gen_random_uuid()))))],
-  array['invalid_input', 'invalid_input', 'invalid_input', 'invalid_input', 'invalid_input'],
-  'annotation_on_a_page_outside_the_unit_refused: another script''s page, a cover, an information page, a refused page and an unknown page are refused');
+  array['invalid_input', 'invalid_input', 'invalid_input', 'invalid_input', 'invalid_input', 'invalid_input'],
+  'annotation_on_a_page_outside_the_unit_refused: another script''s page, a cover, an information page, a blank page, a refused page and an unknown page are refused');
 select is(pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), 0, jsonb_build_array(pg_temp.tick(pg_temp.k('ann_r2'), pg_temp.k('p:r1:2')),
-                                                                                     pg_temp.tick(pg_temp.k('ann_r4'), pg_temp.k('p:r1:4'))))),
+                                                                                     pg_temp.tick(pg_temp.k('ann_r5'), pg_temp.k('p:r1:5'))))),
   'ok', 'an answer page and a spare page of the piece take annotations');
 select is(pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 6, jsonb_build_array(pg_temp.tick(pg_temp.k('ann_r2'), pg_temp.k('p:a1:1'))))),
   'invalid_input', 'an annotation id of another marking is refused');
 select tests.as_postgres();
 select is((select count(*)::int from public.page_annotations a
            where a.marking_id in (pg_temp.k('mk:a1'), pg_temp.k('mk:r1'))
-             and a.page_id not in (pg_temp.k('p:a1:1'), pg_temp.k('p:a1:2'), pg_temp.k('p:a1:3'), pg_temp.k('p:r1:2'), pg_temp.k('p:r1:4'))),
+             and a.page_id not in (pg_temp.k('p:a1:1'), pg_temp.k('p:a1:2'), pg_temp.k('p:a1:3'), pg_temp.k('p:r1:2'), pg_temp.k('p:r1:5'))),
   0, 'nothing is stored on a page outside the pieces');
 select is((select array_agg(a.page_rotation order by a.page_rotation) from public.page_annotations a
-           where a.id in (pg_temp.k('ann_r2'), pg_temp.k('ann_r4'))),
+           where a.id in (pg_temp.k('ann_r2'), pg_temp.k('ann_r5'))),
   array[0, 90], 'an annotation keeps the rotation its page had');
 select is((select a.page_id from public.page_annotations a where a.id = pg_temp.k('ann_r2')), pg_temp.k('p:r1:2'),
   'the annotation of the other marking was not moved');
--- An annotation drawn when page 4 was turned another way is kept but not shown.
+-- An annotation drawn when page 5 was turned another way is kept but not shown.
 insert into public.page_annotations (id, marking_id, page_id, page_rotation, kind, x, y)
-values (pg_temp.k('ann_stale'), pg_temp.k('mk:r1'), pg_temp.k('p:r1:4'), 0, 'cross', 0.5, 0.5);
+values (pg_temp.k('ann_stale'), pg_temp.k('mk:r1'), pg_temp.k('p:r1:5'), 0, 'cross', 0.5, 0.5);
 select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('open_r1b', public.marking_unit_open(pg_temp.u('r1')));
 select tests.as_postgres();
-select is((select array_agg((a ->> 'id')::uuid order by a ->> 'page_id' = pg_temp.k('p:r1:4')::text)
+select is((select array_agg((a ->> 'id')::uuid order by a ->> 'page_id' = pg_temp.k('p:r1:5')::text)
            from jsonb_array_elements(pg_temp.r('open_r1b') -> 'annotations') a),
-  array[pg_temp.k('ann_r2'), pg_temp.k('ann_r4')], 'opening shows the annotations drawn at each page''s current rotation only');
+  array[pg_temp.k('ann_r2'), pg_temp.k('ann_r5')], 'opening shows the annotations drawn at each page''s current rotation only');
 
 -- ---------------------------------------------------------------------------------------------
 -- ann_del_is_a_soft_delete_and_restore_brings_it_back
@@ -572,6 +577,22 @@ select is(array[pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 8, jsonb_bu
   array['invalid_input', 'invalid_input', 'invalid_input'], 'another marking''s annotation, an unknown one and an unknown operation are refused');
 select tests.as_postgres();
 select is((select a.deleted_at from public.page_annotations a where a.id = pg_temp.k('ann2')), null::timestamptz, 'm1''s other piece is untouched');
+-- r1's page 2 is turned after its annotation was deleted: it cannot be brought back until the page is turned back.
+select tests.as_user(pg_temp.uid('m1'));
+select is(pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(jsonb_build_object('op', 'ann_del', 'id', pg_temp.k('ann_r2'))))),
+  'ok', 'm1 deletes an annotation on r1''s page 2');
+select tests.as_postgres();
+update public.script_pages set rotation = 180 where id = pg_temp.k('p:r1:2');
+select tests.as_user(pg_temp.uid('m1'));
+select is(pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(jsonb_build_object('op', 'ann_restore', 'id', pg_temp.k('ann_r2'))))),
+  'invalid_input', 'an annotation is not brought back onto a page turned since it was drawn');
+select tests.as_postgres();
+select is((select a.deleted_at is not null from public.page_annotations a where a.id = pg_temp.k('ann_r2')), true, 'it stays deleted');
+update public.script_pages set rotation = 0 where id = pg_temp.k('p:r1:2');
+select tests.as_user(pg_temp.uid('m1'));
+select is(pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(jsonb_build_object('op', 'ann_restore', 'id', pg_temp.k('ann_r2'))))),
+  'ok', 'once the page is turned back, it is');
+select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
 -- more_than_200_ops_refused (and the other limits: 1,500 points a stroke; 500 live annotations a page)
@@ -602,6 +623,46 @@ select is(pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 13, jsonb_build_a
 select tests.as_postgres();
 select is((select count(*)::int from public.page_annotations a where a.marking_id = pg_temp.k('mk:a1') and a.page_id = pg_temp.k('p:a1:3')
              and a.deleted_at is null), 500, 'the page has 500 live annotations');
+-- The other limits, on r1's marking: a note of at most 1,000 characters, a text of at most 500, x and y from 0 to 1,
+-- and points as pairs of numbers.
+insert into kv values ('ann_text', gen_random_uuid());
+select tests.as_user(pg_temp.uid('m1'));
+select is(array[
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(jsonb_build_object('op', 'note', 'text', repeat('n', 1001))))),
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(
+      pg_temp.tick(pg_temp.k('ann_text'), pg_temp.k('p:r1:2')) || jsonb_build_object('kind', 'text', 'text', repeat('t', 501))))),
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:2'), 1.5)))),
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(
+      pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:2')) || jsonb_build_object('y', -0.1)))),
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(
+      pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:2')) || jsonb_build_object('kind', 'pen', 'points', '[[0.1, 0.1], [0.2]]'::jsonb)))),
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(
+      pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:2')) || jsonb_build_object('kind', 'pen', 'points', '[["a", 0.1]]'::jsonb)))),
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(
+      pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:2')) || jsonb_build_object('kind', 'pen', 'points', '[0.1, 0.2]'::jsonb)))),
+    pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(
+      pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:2')) || jsonb_build_object('kind', 'pen', 'points', '{"x": 0.1}'::jsonb))))],
+  array['invalid_input', 'invalid_input', 'invalid_input', 'invalid_input', 'invalid_input', 'invalid_input', 'invalid_input', 'invalid_input'],
+  'a note of 1,001 characters, a text of 501, a mark off the page, and points that are not pairs of numbers are refused');
+select is(pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(jsonb_build_object('op', 'note', 'text', repeat('n', 1000))))),
+  'ok', 'a note of 1,000 characters is taken');
+select is(pg_temp.code(public.marking_save(pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'), jsonb_build_array(
+    pg_temp.tick(pg_temp.k('ann_text'), pg_temp.k('p:r1:2')) || jsonb_build_object('kind', 'text', 'text', repeat('t', 500))))),
+  'ok', 'and a text of 500');
+select tests.as_postgres();
+select is((select array[char_length(m.lead_note), (select char_length(a.text) from public.page_annotations a where a.id = pg_temp.k('ann_text'))]
+           from public.markings m where m.id = pg_temp.k('mk:r1')),
+  array[1000, 500], 'both are stored whole');
+-- Any other error during the operations is raised again, not answered as a code (a trigger here, dropped after).
+create function public.zz_test_boom() returns trigger language plpgsql as $$ begin raise exception 'boom'; end $$;
+create trigger zz_test_boom before insert on public.page_annotations for each row execute function public.zz_test_boom();
+select tests.as_user(pg_temp.uid('m1'));
+select throws_ok(format('select public.marking_save(%L, %s, %L)', pg_temp.k('mk:r1'), pg_temp.rev('mk:r1'),
+                        jsonb_build_array(pg_temp.tick(gen_random_uuid(), pg_temp.k('p:r1:2')))),
+  'P0001', 'boom', 'an error that is not a refusal of an operation is raised, not answered as a code');
+select tests.as_postgres();
+drop trigger zz_test_boom on public.page_annotations;
+drop function public.zz_test_boom();
 
 -- ---------------------------------------------------------------------------------------------
 -- submit_needs_every_question
@@ -623,11 +684,18 @@ select is(pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 14, jsonb_build_a
   'submit_sets_script_marked_when_all_units_done: m1 gives 2(b) NR');
 insert into res values ('sub_stale', public.marking_submit(pg_temp.k('mk:a1'), 14));
 insert into res values ('sub_a1', public.marking_submit(pg_temp.k('mk:a1'), 15));
-insert into res values ('sub_again', public.marking_submit(pg_temp.k('mk:a1'), 15));
+-- Screen B, still at rev 15, saves after screen A submitted.
+insert into res values ('b_after_submit', public.marking_save(pg_temp.k('mk:a1'), 15, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 1))));
+insert into res values ('b_after_submit_reason', public.marking_save(pg_temp.k('mk:a1'), 15, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 1)), 0,
+  'Screen B change'));
+insert into res values ('sub_again', public.marking_submit(pg_temp.k('mk:a1'), 16));
 select tests.as_postgres();
 select is(pg_temp.r('sub_stale'), '{"ok": false, "code": "conflict", "reason": "rev", "rev": 15}'::jsonb, 'a submit from a stale screen is refused');
-select is(pg_temp.r('sub_a1'), '{"ok": true, "total": 4, "max_total": 10, "script_state": "marked"}'::jsonb,
-  'the piece is submitted: 4 out of 10, and its script (one piece) is marked');
+select is(pg_temp.r('sub_a1'), '{"ok": true, "rev": 16, "total": 4, "max_total": 10, "script_state": "marked"}'::jsonb,
+  'the piece is submitted: 4 out of 10, and its script (one piece) is marked; the rev moves on');
+select is(array[pg_temp.r('b_after_submit'), pg_temp.r('b_after_submit_reason')],
+  array['{"ok": false, "code": "conflict", "reason": "rev", "rev": 16}', '{"ok": false, "code": "conflict", "reason": "rev", "rev": 16}']::jsonb[],
+  'a second screen still at the old rev is told to reload, with or without a reason, and changes nothing');
 select is((select array[m.status, (m.submitted_at = now())::text, m.structure_version::text, coalesce(m.pages_changed_at::text, 'null'), m.total::text]
            from public.markings m where m.id = pg_temp.k('mk:a1')),
   array['submitted', 'true', '0', 'null', '4.0'], 'the marking is submitted, with the structure version and the total');
@@ -646,9 +714,9 @@ select is(pg_temp.code(public.marking_save(pg_temp.k('mk:g1/G2'), 0, jsonb_build
                                                                                          pg_temp.mk(pg_temp.k('q:eq:2(b)'), 4)))), 'ok', 'm1 marks G2');
 insert into res values ('sub_g2', public.marking_submit(pg_temp.k('mk:g1/G2'), 1));
 select tests.as_postgres();
-select is(pg_temp.r('sub_g1'), '{"ok": true, "total": 2, "max_total": 3, "script_state": "marking"}'::jsonb,
+select is(pg_temp.r('sub_g1'), '{"ok": true, "rev": 2, "total": 2, "max_total": 3, "script_state": "marking"}'::jsonb,
   'by question, the script is still being marked after the first group is submitted');
-select is(pg_temp.r('sub_g2'), '{"ok": true, "total": 5, "max_total": 7, "script_state": "marked"}'::jsonb, 'and marked after the last');
+select is(pg_temp.r('sub_g2'), '{"ok": true, "rev": 2, "total": 5, "max_total": 7, "script_state": "marked"}'::jsonb, 'and marked after the last');
 select is(pg_temp.st('g1'), 'marked', 'the script is marked');
 
 -- ---------------------------------------------------------------------------------------------
@@ -656,16 +724,16 @@ select is(pg_temp.st('g1'), 'marked', 'the script is marked');
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('open_sub', public.marking_unit_open(pg_temp.u('a1')));
-select is(array[pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 15, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2)))),
-                pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 15, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2)), 0, '  ok '))],
+select is(array[pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 16, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2)))),
+                pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 16, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2)), 0, '  ok '))],
   array['reason_required', 'reason_required'], 'change_after_submit_needs_reason_and_keeps_history: a change after submit needs a reason of 3 to 300 characters');
-insert into res values ('changed', public.marking_save(pg_temp.k('mk:a1'), 15, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2)), 0,
+insert into res values ('changed', public.marking_save(pg_temp.k('mk:a1'), 16, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2)), 0,
   '  Misread the working  '));
 select tests.as_postgres();
 select is(array[pg_temp.code(pg_temp.r('open_sub')), pg_temp.r('open_sub') -> 'marking' ->> 'status', pg_temp.r('open_sub') -> 'unit' ->> 'hold_until',
                 pg_temp.r('open_sub') -> 'unit' ->> 'closed'],
   array['ok', 'submitted', null, 'false'], 'the marker opens their submitted piece, with no hold');
-select is(pg_temp.r('changed'), jsonb_build_object('ok', true, 'rev', 16, 'total', 3, 'hold_until', null), 'with a reason the change is saved');
+select is(pg_temp.r('changed'), jsonb_build_object('ok', true, 'rev', 17, 'total', 3, 'hold_until', null), 'with a reason the change is saved');
 select is(array[(select status from public.markings where id = pg_temp.k('mk:a1')), pg_temp.marks('mk:a1'), pg_temp.us('a1'), pg_temp.st('a1')],
   array['submitted', '1=2,2(a)=1,2(b)=NR', 'submitted', 'marked'], 'the marking stays submitted and the script marked');
 select is((select array[trim_scale(h.mark)::text, h.after_submit::text, h.reason, (h.changed_by = pg_temp.uid('m1'))::text]
@@ -679,7 +747,7 @@ select is((select count(*)::int from public.audit_log a where a.action = 'markin
 insert into public.marker_conflicts (marker_id, student_id, recorded_at) values (pg_temp.uid('m2'), pg_temp.student('g1'), now());
 select tests.as_user(pg_temp.uid('m2'));
 select is(array[pg_temp.code(public.marking_unit_open(pg_temp.u('g1/G1'))),
-                pg_temp.code(public.marking_save(pg_temp.k('mk:g1/G1'), 1, jsonb_build_array(pg_temp.mk(pg_temp.k('q:eq:1'), 1)), 0, 'Second look'))],
+                pg_temp.code(public.marking_save(pg_temp.k('mk:g1/G1'), 2, jsonb_build_array(pg_temp.mk(pg_temp.k('q:eq:1'), 1)), 0, 'Second look'))],
   array['forbidden', 'forbidden'], 'a marker since blocked for the candidate can neither open nor change a piece they submitted');
 select tests.as_postgres();
 delete from public.marker_conflicts where marker_id = pg_temp.uid('m2');
@@ -688,9 +756,9 @@ delete from public.marker_conflicts where marker_id = pg_temp.uid('m2');
 -- change_after_submit_cannot_leave_a_question_empty
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('m1'));
-insert into res values ('empty', public.marking_save(pg_temp.k('mk:a1'), 16, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:2(b)'), null, false)), 0,
+insert into res values ('empty', public.marking_save(pg_temp.k('mk:a1'), 17, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:2(b)'), null, false)), 0,
   'Not sure about 2(b)'));
-insert into res values ('refill', public.marking_save(pg_temp.k('mk:a1'), 16, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:2(b)'), null, false),
+insert into res values ('refill', public.marking_save(pg_temp.k('mk:a1'), 17, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:2(b)'), null, false),
   pg_temp.mk(pg_temp.k('q:e:2(b)'), 1.5)), 0, 'Read 2(b) again'));
 select tests.as_postgres();
 select is(pg_temp.r('empty'), '{"ok": false, "code": "incomplete", "missing": ["2(b)"]}'::jsonb,
@@ -726,7 +794,7 @@ select tests.as_postgres(); select tests.as_user(pg_temp.uid('m1'));
 select is(array[pg_temp.code(public.marking_unit_open(pg_temp.u('c1'))),
                 pg_temp.code(public.marking_save(pg_temp.k('mk:c1'), 1, jsonb_build_array(pg_temp.mk(pg_temp.k('q:ec:1'), 2)))),
                 pg_temp.code(public.marking_submit(pg_temp.k('mk:c1'), 1)),
-                pg_temp.code(public.marking_save(pg_temp.k('mk:c2'), 1, jsonb_build_array(pg_temp.mk(pg_temp.k('q:ec:1'), 2)), 0, 'One more look'))],
+                pg_temp.code(public.marking_save(pg_temp.k('mk:c2'), 2, jsonb_build_array(pg_temp.mk(pg_temp.k('q:ec:1'), 2)), 0, 'One more look'))],
   array['marking_closed', 'marking_closed', 'marking_closed', 'marking_closed'],
   'a piece in progress can no longer be opened, saved or submitted, and a submitted one can no longer change');
 insert into res values ('open_closed', public.marking_unit_open(pg_temp.u('c2')));
@@ -736,7 +804,7 @@ select is(array[pg_temp.code(pg_temp.r('open_closed')), pg_temp.r('open_closed')
   array['ok', 'true', 'submitted', '3'], 'a submitted piece still opens, read only, saying marking has closed');
 select is(array[pg_temp.marks('mk:c1'), pg_temp.rev('mk:c1')::text, pg_temp.marks('mk:c2'), pg_temp.rev('mk:c2')::text,
                 (select status from public.markings where id = pg_temp.k('mk:c1'))],
-  array['1=1', '1', '1=3,2(a)=2,2(b)=5', '1', 'in_progress'], 'nothing changed');
+  array['1=1', '1', '1=3,2(a)=2,2(b)=5', '2', 'in_progress'], 'nothing changed');
 
 -- ---------------------------------------------------------------------------------------------
 -- total_counts_best_of_optional_questions: exam eo has question 1 (4 marks) and "Answer 1 of" questions 2 and 3 (6
@@ -765,6 +833,31 @@ select is((select jsonb_agg(o - 'id') from jsonb_array_elements(pg_temp.r('open_
   '[{"label": "Section B", "choose": 1}]'::jsonb, 'the optional questions are shown with how many to answer');
 select is(pg_temp.r('s_o1') -> 'total', '8'::jsonb, 'marks 3, 2 and 5 total 8: the better of the optional questions counts');
 select is(public.marking_total(pg_temp.k('mk:o1')), 8.0, 'marking_total says the same');
+-- Exam eg is marked by question: G1 is question 1 (4 marks); G2 holds "Answer 1 of" questions 2 and 3 (6 marks each).
+insert into kv values ('eg', tests.marking_exam(pg_temp.subj()));
+insert into public.question_groups (exam_id, label, position) values (pg_temp.k('eg'), 'G1', 1), (pg_temp.k('eg'), 'G2', 2);
+insert into public.exam_option_groups (exam_id, label, choose) values (pg_temp.k('eg'), 'Section B', 1);
+insert into public.exam_questions (exam_id, label, position, max_mark, group_id, option_group_id)
+select pg_temp.k('eg'), q.label, q.position, q.max_mark, g.id, case when q.position > 1 then o.id end
+from (values ('1', 1, 4, 'G1'), ('2', 2, 6, 'G2'), ('3', 3, 6, 'G2')) q(label, position, max_mark, grp)
+join public.question_groups g on g.exam_id = pg_temp.k('eg') and g.label = q.grp
+cross join public.exam_option_groups o where o.exam_id = pg_temp.k('eg');
+insert into kv select 'q:eg:' || q.label, q.id from public.exam_questions q where q.exam_id = pg_temp.k('eg');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eg'), 'by_question');
+select pg_temp.script('gb1', 'eg');
+select pg_temp.open('eg');
+select pg_temp.take('gb1/G2', 'm1');
+select tests.as_user(pg_temp.uid('m1'));
+insert into res values ('open_gb2', public.marking_unit_open(pg_temp.u('gb1/G2')));
+select tests.as_postgres();
+select pg_temp.keep('gb1/G2', 'm1');
+select tests.as_user(pg_temp.uid('m1'));
+insert into res values ('s_gb2', public.marking_save(pg_temp.k('mk:gb1/G2'), 0, jsonb_build_array(pg_temp.mk(pg_temp.k('q:eg:2'), 2),
+  pg_temp.mk(pg_temp.k('q:eg:3'), 5))));
+select tests.as_postgres();
+select is(pg_temp.r('open_gb2') -> 'marking' -> 'max_total', '6'::jsonb, 'a question group holding "Answer 1 of" two questions is out of one of them');
+select is(array[pg_temp.r('s_gb2') -> 'total', to_jsonb(public.marking_total(pg_temp.k('mk:gb1/G2')))], array['5', '5']::jsonb[],
+  'and marks 2 and 5 total 5: the better one counts');
 
 -- ---------------------------------------------------------------------------------------------
 -- open_and_save_refused_while_remask_queued_or_running: m1 holds a4.
@@ -819,7 +912,7 @@ select is(array[public.marking_picture_allowed((pg_temp.paths('p1', 'marking'))[
                 public.marking_picture_allowed(null)],
   array[true, false, false], 'marking_picture_allowed says the same');
 select is(pg_temp.seen(pg_temp.paths('a1', 'marking')), 3, 'the marker of a submitted piece still reads its marking pictures');
-select is(pg_temp.seen(pg_temp.paths('r1', 'marking')), 2, 'only those of the pages shown: not a cover, an information page or a refused page');
+select is(pg_temp.seen(pg_temp.paths('r1', 'marking')), 2, 'only those of the pages shown: not a cover, an information page, a blank page or a refused page');
 select is(array[pg_temp.seen(array[pg_temp.path('x1_extra')]), pg_temp.seen(array[pg_temp.path('x1_unconfirmed')])], array[1, 0],
   'a confirmed extra page, not an unconfirmed one');
 select is(pg_temp.seen(pg_temp.paths('c2', 'marking')), 0, 'none once marking has closed');
@@ -830,17 +923,72 @@ select tests.as_postgres(); select tests.as_user(pg_temp.uid('corr'));
 select is(pg_temp.seen(pg_temp.paths('p1', 'marking') || pg_temp.paths('a1', 'marking') || pg_temp.paths('a3', 'marking')), 0,
   'a corrector with no hold reads none');
 select tests.as_postgres();
-update public.marking_units set on_hold = true, hold_reason = 'picture_changed' where id = pg_temp.u('a1');
+update public.marking_units set on_hold = true, hold_reason = 'picture_changed' where id in (pg_temp.u('a1'), pg_temp.u('a4'));
 select tests.as_user(pg_temp.uid('m1'));
 select is(array[pg_temp.seen(pg_temp.paths('a1', 'marking'))::text, pg_temp.code(public.marking_unit_open(pg_temp.u('a1')))], array['0', 'on_hold'],
   'none of a piece on hold, which does not open either');
+select is(array[pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), pg_temp.rev('mk:a1'), jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 3)), 0, 'Another look')),
+                pg_temp.code(public.marking_save(pg_temp.k('mk:a4'), pg_temp.rev('mk:a4'), jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2)))),
+                pg_temp.code(public.marking_submit(pg_temp.k('mk:a4'), pg_temp.rev('mk:a4')))],
+  array['on_hold', 'on_hold', 'on_hold'], 'nor can a piece on hold be saved or submitted, submitted or in progress');
 select tests.as_postgres();
-update public.marking_units set on_hold = false, hold_reason = null where id = pg_temp.u('a1');
+update public.marking_units set on_hold = false, hold_reason = null where id in (pg_temp.u('a1'), pg_temp.u('a4'));
+select is(array[pg_temp.marks('mk:a1'), pg_temp.marks('mk:a4')], array['1=2,2(a)=1,2(b)=1.5', '1=1'], 'their marks are as they were');
+-- An admin takes back m1's piece a4.
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.marking_take_back(array[pg_temp.u('a4')], 'Needs a fresh marker')), 'ok', 'an admin takes back a4');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('m1'));
+select is(pg_temp.seen(pg_temp.paths('a4', 'marking')), 0, 'm1 reads none of a piece taken back from them');
+select tests.as_postgres();
+-- m2 submitted g1's G1; then a conflict with its candidate is declared.
+select pg_temp.put(pg_temp.paths('g1', 'marking'));
+select tests.as_user(pg_temp.uid('m2'));
+select is(pg_temp.seen(pg_temp.paths('g1', 'marking')), 3, 'm2 reads the pictures of the piece they submitted');
+select tests.as_postgres();
+insert into public.marker_conflicts (marker_id, student_id, recorded_at) values (pg_temp.uid('m2'), pg_temp.student('g1'), now());
+select tests.as_user(pg_temp.uid('m2'));
+select is(pg_temp.seen(pg_temp.paths('g1', 'marking')), 0, 'none once a conflict with its candidate is declared');
+select tests.as_postgres();
+delete from public.marker_conflicts where marker_id = pg_temp.uid('m2');
 update public.marking_assignments set hold_until = now() - interval '1 minute' where unit_id = pg_temp.u('p1') and ended_at is null;
 select tests.as_user(pg_temp.uid('m1'));
 select is(pg_temp.seen(pg_temp.paths('p1', 'marking')), 0, 'none once the hold has run out');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.seen(pg_temp.paths('p1', 'marking') || pg_temp.paths('p1', 'full')), 6, 'staff still read every picture (their policy is unchanged)');
+select tests.as_postgres();
+-- m1 holds s1 and has saved a mark; their hold ends, as the minute job ends it (this piece only); then m2 takes the free
+-- piece, which sets m1's marking aside.
+select pg_temp.script('s1', 'e');
+select pg_temp.open('e');
+select pg_temp.take('s1', 'm1');
+select tests.as_user(pg_temp.uid('m1'));
+select public.marking_unit_open(pg_temp.u('s1'));
+select tests.as_postgres();
+select pg_temp.keep('s1', 'm1');
+select pg_temp.put(pg_temp.paths('s1', 'marking'));
+select tests.as_user(pg_temp.uid('m1'));
+select is(array[pg_temp.code(public.marking_save(pg_temp.k('mk:s1'), 0, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 1)))),
+                pg_temp.seen(pg_temp.paths('s1', 'marking'))::text],
+  array['ok', '3'], 'm1 saves on s1 and reads its pictures');
+select tests.as_postgres();
+update public.marking_assignments set ended_at = now(), end_reason = 'expired' where unit_id = pg_temp.u('s1') and ended_at is null;
+update public.marking_units set state = 'open' where id = pg_temp.u('s1');
+select tests.as_user(pg_temp.uid('m1'));
+select is(pg_temp.seen(pg_temp.paths('s1', 'marking')), 0, 'once the hold has ended, with the marking still in progress, m1 reads none');
+select tests.as_postgres();
+select pg_temp.take('s1', 'm2');
+select tests.as_user(pg_temp.uid('m1'));
+insert into res values ('aside_save', public.marking_save(pg_temp.k('mk:s1'), 1, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 2))));
+insert into res values ('aside_submit', public.marking_submit(pg_temp.k('mk:s1'), 1));
+select tests.as_postgres();
+select is(array[pg_temp.r('aside_save'), pg_temp.r('aside_submit')],
+  array['{"ok": false, "code": "conflict", "reason": "set_aside"}', '{"ok": false, "code": "conflict", "reason": "set_aside"}']::jsonb[],
+  'once m2 has taken the free piece, m1''s set-aside marking can be neither saved nor submitted');
+select is(array[(select m.status || ' ' || m.set_aside_reason from public.markings m where m.id = pg_temp.k('mk:s1')), pg_temp.marks('mk:s1'),
+                pg_temp.rev('mk:s1')::text],
+  array['set_aside expired', '1=1', '1'], 'it is kept as it was');
+select tests.as_user(pg_temp.uid('m2'));
+select is(pg_temp.seen(pg_temp.paths('s1', 'marking')), 3, 'm2, who holds it now, reads its pictures');
 select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
@@ -875,8 +1023,8 @@ select tests.as_user(pg_temp.uid('stu'));
 select is(array[pg_temp.rows(), pg_temp.seen(pg_temp.paths('a1', 'marking') || pg_temp.paths('a1', 'full'))], array[0, 0],
   'student_and_parent_read_no_marking_table_or_picture: the candidate reads no marking row and no picture of their script');
 select is(array[pg_temp.code(public.marking_unit_open(pg_temp.u('a1'))),
-                pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), 17, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 3)), 0, 'Give me the marks')),
-                pg_temp.code(public.marking_submit(pg_temp.k('mk:a1'), 17)),
+                pg_temp.code(public.marking_save(pg_temp.k('mk:a1'), pg_temp.rev('mk:a1'), jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 3)), 0, 'Give me the marks')),
+                pg_temp.code(public.marking_submit(pg_temp.k('mk:a1'), pg_temp.rev('mk:a1'))),
                 public.marking_picture_allowed((pg_temp.paths('a1', 'marking'))[1])::text],
   array['forbidden', 'forbidden', 'forbidden', 'false'], 'nor opens, saves or submits it');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('par'));

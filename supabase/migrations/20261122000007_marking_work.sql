@@ -114,8 +114,9 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- Internal: what a piece is out of: the paper total for a whole script (exam_structure_max_total: each group of
--- optional questions counts only its best `choose`), the sum of the group's maxima for a question group.
+-- Internal: what a piece is out of: the maxima of its questions, where the optional questions of a group ("Answer
+-- {choose} of these") that the piece holds count only their best `choose`. For a whole script this is the paper total
+-- (exam_structure_max_total); a question group counts its own optional questions the same way.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_unit_max_total(p_unit uuid)
 returns numeric
@@ -124,30 +125,10 @@ stable
 security definer
 set search_path = ''
 as $$
-  select case when u.group_id is null then public.exam_structure_max_total(u.exam_id)
-              else (select coalesce(sum(q.max_mark), 0) from public.marking_unit_questions(u.id) q where q.leaf) end
-  from public.marking_units u where u.id = p_unit
-$$;
-
--- ---------------------------------------------------------------------------------------------
--- Internal: the sum of a marking's marks (NR adds nothing); in a whole-script piece each group of optional questions
--- counts only its best `choose` questions.
--- ---------------------------------------------------------------------------------------------
-create function public.marking_total(p_marking uuid)
-returns numeric
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  with unit as (
-    select u.id, u.group_id from public.markings m join public.marking_units u on u.id = m.unit_id where m.id = p_marking
-  ),
-  tops as (
-    select q.top_id, sum(coalesce(qm.mark, 0)) as total
-    from unit
-    cross join lateral public.marking_unit_questions(unit.id) q
-    join public.question_marks qm on qm.marking_id = p_marking and qm.question_id = q.question_id
+  with tops as (
+    select q.top_id, sum(q.max_mark) as total
+    from public.marking_unit_questions(p_unit) q
+    where q.leaf
     group by q.top_id
   ),
   ranked as (
@@ -157,8 +138,37 @@ as $$
     join public.exam_questions top on top.id = tp.top_id
     left join public.exam_option_groups og on og.id = top.option_group_id
   )
-  select coalesce(sum(r.total) filter (where r.option_group_id is null or r.n <= r.choose
-                                         or (select unit.group_id from unit) is not null), 0)
+  select coalesce(sum(r.total) filter (where r.option_group_id is null or r.n <= r.choose), 0)
+  from ranked r
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- Internal: the sum of a marking's marks (NR adds nothing), where the optional questions of a group that the piece
+-- holds count only their best `choose` questions (whole script or question group alike, as marking_unit_max_total).
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_total(p_marking uuid)
+returns numeric
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with tops as (
+    select q.top_id, sum(coalesce(qm.mark, 0)) as total
+    from public.markings m
+    cross join lateral public.marking_unit_questions(m.unit_id) q
+    join public.question_marks qm on qm.marking_id = m.id and qm.question_id = q.question_id
+    where m.id = p_marking
+    group by q.top_id
+  ),
+  ranked as (
+    select tp.total, top.option_group_id, og.choose,
+      row_number() over (partition by top.option_group_id order by tp.total desc) as n
+    from tops tp
+    join public.exam_questions top on top.id = tp.top_id
+    left join public.exam_option_groups og on og.id = top.option_group_id
+  )
+  select coalesce(sum(r.total) filter (where r.option_group_id is null or r.n <= r.choose), 0)
   from ranked r
 $$;
 
@@ -254,7 +264,8 @@ $$;
 --   {op:'ann_put', id, page_id, kind, x, y, points?, text?, question_id?}: on a page of the piece, at its rotation;
 --     an id of this marking is updated (and undeleted), an id of another marking is refused; at most 1,500 points;
 --     a text of at most 500 characters; question_id a leaf of the piece.
---   {op:'ann_del', id} and {op:'ann_restore', id}: an annotation of this marking, deleted (deleted_at) or brought back.
+--   {op:'ann_del', id} and {op:'ann_restore', id}: an annotation of this marking, deleted (deleted_at) or brought back;
+--     it is brought back only while the piece shows its page at the rotation it was drawn at.
 --   {op:'note', text}: the note to the lead marker, at most 1,000 characters (trimmed; empty clears it).
 -- Then a page may hold at most 500 live annotations of the marking.
 -- ---------------------------------------------------------------------------------------------
@@ -381,6 +392,10 @@ begin
       if v_op ->> 'op' = 'ann_del' then
         update public.page_annotations set deleted_at = coalesce(deleted_at, now()) where id = v_a.id;
       else
+        -- Only onto a page the piece still shows, turned as it was when the annotation was drawn.
+        if not v_pages ? v_a.page_id::text or (v_pages ->> v_a.page_id::text)::int <> v_a.page_rotation then
+          raise exception using errcode = 'P0001', message = 'invalid_input';
+        end if;
         update public.page_annotations set deleted_at = null where id = v_a.id;
         v_touched := v_touched || v_a.page_id;
       end if;
@@ -588,15 +603,18 @@ begin
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
 
-  -- All or nothing: a refused operation undoes the others.
+  -- All or nothing: a refused operation undoes the others. Only the operations' own refusals are answered; any other
+  -- error is raised again.
   begin
     perform public.marking_ops_apply(v_mk.id, v_u.id, v_u.script_id, p_ops, v_actor, v_after, case when v_after then v_reason end);
   exception when raise_exception then
     get stacked diagnostics v_detail = pg_exception_detail;
     if sqlerrm = 'incomplete' then
       return jsonb_build_object('ok', false, 'code', 'incomplete', 'missing', v_detail::jsonb);
+    elsif sqlerrm in ('invalid_input', 'mark_out_of_range') then
+      return jsonb_build_object('ok', false, 'code', sqlerrm);
     end if;
-    return jsonb_build_object('ok', false, 'code', sqlerrm);
+    raise;
   end;
 
   update public.markings
@@ -619,8 +637,9 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- marking_submit: the holder submits their marking in progress at rev p_rev. The checks of a save; every question of
 -- the piece has a mark or NR (incomplete, with missing: their labels). The marking is submitted (with the structure
--- version and the total; pages_changed_at cleared), the hold ends (submitted), the piece is submitted and the script
--- follows (marking_script_state). Refused also: conflict with reason submitted (already submitted). Returns {ok, total,
+-- version and the total; pages_changed_at cleared) and its rev moves on, so a screen still at the old rev is told to
+-- reload rather than asked for a reason; the hold ends (submitted), the piece is submitted and the script follows
+-- (marking_script_state). Refused also: conflict with reason submitted (already submitted). Returns {ok, rev, total,
 -- max_total, script_state}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_submit(p_marking uuid, p_rev int, p_now timestamptz default null)
@@ -669,8 +688,8 @@ begin
   end if;
 
   update public.markings
-  set status = 'submitted', submitted_at = now(), structure_version = coalesce(v_version, 0), total = public.marking_total(id),
-    pages_changed_at = null
+  set status = 'submitted', rev = rev + 1, submitted_at = now(), structure_version = coalesce(v_version, 0),
+    total = public.marking_total(id), pages_changed_at = null
   where id = v_mk.id
   returning * into v_mk;
   update public.marking_assignments a set ended_at = now(), end_reason = 'submitted'
@@ -680,7 +699,8 @@ begin
   select s.state into v_state from public.scripts s where s.id = v_u.script_id;
   insert into public.audit_log (actor_id, action, target_type, target_id)
   values (v_actor, 'marking_submitted', 'marking', v_mk.id);
-  return jsonb_build_object('ok', true, 'total', v_mk.total, 'max_total', public.marking_unit_max_total(v_u.id), 'script_state', v_state);
+  return jsonb_build_object('ok', true, 'rev', v_mk.rev, 'total', v_mk.total, 'max_total', public.marking_unit_max_total(v_u.id),
+    'script_state', v_state);
 end;
 $$;
 
