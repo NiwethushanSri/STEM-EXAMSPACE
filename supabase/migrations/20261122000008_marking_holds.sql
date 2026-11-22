@@ -358,9 +358,10 @@ $$;
 -- Internal: the script's live markings (not set aside) whose pages_key is not that of its pages now
 -- (marking_pages_key) are marked as changed (pages_key, pages_changed_at = now; their rev moves on, so a screen still
 -- showing the old pages reloads). A submitted one goes back to its marker when they may still mark it (is_marker_for,
--- and not blocked for the candidate: the rule of a question added after opening, Task 2): in progress again, its piece
--- taken, with an assigned hold (no time limit) unless the piece has an open one. Otherwise it is set aside (unapproved,
--- or conflict) and its piece is open. A pages_changed alert when any changed. Returns how many went back to their
+-- and not blocked for the candidate: the rule of a question added after opening, Task 2; and they did not see a name
+-- on it: no name_seen exclusion, Name visible): in progress again, its piece taken, with an assigned hold (no time
+-- limit) unless the piece has an open one. Otherwise it is set aside (name_seen, conflict or unapproved), its piece is
+-- open and nobody is given it. A pages_changed alert when any changed. Returns how many went back to their
 -- markers. The caller holds the keys of those markers (shared, in uuid order: a piece going back to its marker is a
 -- hand-out, Ruling R10), then the script's locks.
 -- ---------------------------------------------------------------------------------------------
@@ -384,7 +385,8 @@ begin
   for r in
     select m.id, m.unit_id, m.marker_id, m.status,
       public.is_marker_for(m.marker_id, v_subject) as approved,
-      public.marking_marker_blocked(m.marker_id, v_student) as blocked
+      public.marking_marker_blocked(m.marker_id, v_student) as blocked,
+      exists (select 1 from public.marking_unit_exclusions x where x.unit_id = m.unit_id and x.marker_id = m.marker_id) as name_seen
     from public.markings m join public.marking_units u on u.id = m.unit_id
     where u.script_id = p_script and m.kind = 'live' and m.status <> 'set_aside' and m.pages_key is distinct from v_key
     order by u.id, m.id
@@ -392,7 +394,7 @@ begin
     v_changed := v_changed + 1;
     update public.markings set pages_key = v_key, pages_changed_at = now(), rev = rev + 1 where id = r.id;
     if r.status = 'submitted' then
-      if r.approved and not r.blocked then
+      if r.approved and not r.blocked and not r.name_seen then
         update public.markings set status = 'in_progress', submitted_at = null where id = r.id;
         update public.marking_units set state = 'taken' where id = r.unit_id;
         insert into public.marking_assignments (unit_id, kind, marker_id, how, assigned_by)
@@ -401,7 +403,8 @@ begin
         v_n := v_n + 1;
       else
         update public.markings
-        set status = 'set_aside', set_aside_at = now(), set_aside_reason = case when r.blocked then 'conflict' else 'unapproved' end
+        set status = 'set_aside', set_aside_at = now(),
+          set_aside_reason = case when r.name_seen then 'name_seen' when r.blocked then 'conflict' else 'unapproved' end
         where id = r.id;
         update public.marking_units set state = 'open' where id = r.unit_id and state = 'submitted';
       end if;
@@ -700,8 +703,9 @@ $$;
 -- a missing picture is never released, an admin takes the script back), with a reason, when
 -- marking_alert_can_release allows it (conflict with that reason: taken_back, pictures_updating, picture_missing). The
 -- script's picture_changed holds are lifted and its Next script holds restart at now + 2 hours; the alert closes
--- (released). Audited (marking_alert_released). Refused also: forbidden, invalid_input, reason_required, not_found,
--- conflict with reason closed. Returns {ok, released} (how many pieces were released).
+-- (released). Audited (marking_alert_released). Refused also: forbidden (also a lead blocked for the script's candidate,
+-- marking_marker_blocked; an admin may still), invalid_input, reason_required, not_found, conflict with reason closed.
+-- Returns {ok, released} (how many pieces were released).
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_alert_release(p_alert uuid, p_reason text)
 returns jsonb
@@ -714,6 +718,7 @@ declare
   v_reason text := public.script_resolution_reason(p_reason);
   v_a public.marking_alerts%rowtype;
   v_subject bigint;
+  v_student uuid;
   v_why text;
   v_units uuid[];
 begin
@@ -725,7 +730,9 @@ begin
     return jsonb_build_object('ok', false, 'code', case when public.is_staff_admin() then 'not_found' else 'forbidden' end);
   end if;
   select e.subject_id into v_subject from public.exams e where e.id = v_a.exam_id;
-  if not public.is_staff_admin() and not public.is_lead_for(v_actor, v_subject) then
+  select b.student_id into v_student from public.scripts s join public.bookings b on b.id = s.booking_id where s.id = v_a.script_id;
+  if not public.is_staff_admin()
+     and (not public.is_lead_for(v_actor, v_subject) or public.marking_marker_blocked(v_actor, v_student)) then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
   end if;
   if v_reason is null then
@@ -767,9 +774,12 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- marking_alerts_release_all: an admin or the subject's lead releases, with one reason, every open picture_changed
 -- alert of the exam that marking_alert_can_release allows (the others stay open), as marking_alert_release does each
--- one: the scripts' rows are taken in id order, then their pieces. One audit row for the exam
--- (marking_alerts_released_all) says how many were released. Refused: forbidden, invalid_input, reason_required,
--- not_found. Returns {ok, released} (how many alerts).
+-- one. The open alerts are read first; their scripts' rows are taken in id order, then those scripts' pieces (Ruling
+-- R9); then the alerts of exactly those scripts are read again under the locks, and only those still open and
+-- releasable are released. A lead blocked for a script's candidate (marking_marker_blocked) leaves its alert alone
+-- (blocked counts them; an admin is never blocked). One audit row for the exam (marking_alerts_released_all) says how
+-- many were released and skipped. Refused: forbidden, invalid_input, reason_required, not_found. Returns {ok,
+-- released, blocked} (how many alerts).
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_alerts_release_all(p_exam uuid, p_reason text)
 returns jsonb
@@ -779,10 +789,13 @@ set search_path = ''
 as $$
 declare
   v_actor uuid := auth.uid();
+  v_admin boolean := public.is_staff_admin();
   v_reason text := public.script_resolution_reason(p_reason);
   v_subject bigint;
+  v_scripts uuid[];
   v_units uuid[];
   v_n int := 0;
+  v_blocked int := 0;
   r record;
 begin
   if p_exam is null then
@@ -790,31 +803,35 @@ begin
   end if;
   select e.subject_id into v_subject from public.exams e where e.id = p_exam;
   if not found then
-    return jsonb_build_object('ok', false, 'code', case when public.is_staff_admin() then 'not_found' else 'forbidden' end);
+    return jsonb_build_object('ok', false, 'code', case when v_admin then 'not_found' else 'forbidden' end);
   end if;
-  if not public.is_staff_admin() and not public.is_lead_for(v_actor, v_subject) then
+  if not v_admin and not public.is_lead_for(v_actor, v_subject) then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
   end if;
   if v_reason is null then
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
 
-  -- Ruling R9: the exam's marking row, the scripts' rows in id order, their pieces; then the alerts.
+  -- The scripts of the open alerts, then Ruling R9: the exam's marking row, those scripts' rows in id order, their
+  -- pieces; then their alerts again, under the locks.
+  select coalesce(array_agg(distinct a.script_id order by a.script_id), '{}') into v_scripts
+  from public.marking_alerts a where a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open';
   perform 1 from public.exam_marking m where m.exam_id = p_exam for share;
-  perform 1 from public.scripts s
-  where s.id in (select a.script_id from public.marking_alerts a where a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open')
-  order by s.id
-  for no key update;
-  perform 1 from public.marking_units u
-  where u.script_id in (select a.script_id from public.marking_alerts a where a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open')
-  order by u.id
-  for update;
+  perform 1 from public.scripts s where s.id = any (v_scripts) order by s.id for no key update;
+  perform 1 from public.marking_units u where u.script_id = any (v_scripts) order by u.id for update;
   for r in
-    select a.id, a.script_id from public.marking_alerts a
-    where a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open'
+    select a.id, a.script_id, b.student_id
+    from public.marking_alerts a
+    join public.scripts s on s.id = a.script_id
+    join public.bookings b on b.id = s.booking_id
+    where a.script_id = any (v_scripts) and a.exam_id = p_exam and a.kind = 'picture_changed' and a.state = 'open'
     order by a.script_id
-    for update
+    for update of a
   loop
+    if not v_admin and public.marking_marker_blocked(v_actor, r.student_id) then
+      v_blocked := v_blocked + 1;
+      continue;
+    end if;
     continue when public.marking_alert_can_release(r.script_id) is not null;
     with released as (
       update public.marking_units u set on_hold = false, hold_reason = null
@@ -829,8 +846,10 @@ begin
     v_n := v_n + 1;
   end loop;
   insert into public.audit_log (actor_id, action, target_type, target_id, reason)
-  values (v_actor, 'marking_alerts_released_all', 'exam', p_exam, v_reason || ' (alerts released: ' || v_n || ')');
-  return jsonb_build_object('ok', true, 'released', v_n);
+  values (v_actor, 'marking_alerts_released_all', 'exam', p_exam,
+    v_reason || ' (alerts released: ' || v_n
+    || case when v_blocked > 0 then '; skipped, a conflict with the candidate: ' || v_blocked else '' end || ')');
+  return jsonb_build_object('ok', true, 'released', v_n, 'blocked', v_blocked);
 end;
 $$;
 

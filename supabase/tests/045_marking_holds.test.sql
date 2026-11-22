@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(151);
+select plan(156);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -770,7 +770,8 @@ select tests.as_postgres(); select tests.as_user(pg_temp.uid('lead'));
 select is(pg_temp.code(public.marking_alerts_release_all(pg_temp.k('e5'), 'ab')), 'reason_required', 'a reason is needed');
 insert into res values ('rel_all', public.marking_alerts_release_all(pg_temp.k('e5'), 'Checked the new pictures'));
 select tests.as_postgres();
-select is(pg_temp.r('rel_all'), '{"ok": true, "released": 3}'::jsonb, 'the lead releases them all at once: 3, not h4, whose pictures are still being made');
+select is(pg_temp.r('rel_all'), '{"ok": true, "released": 3, "blocked": 0}'::jsonb,
+  'the lead releases them all at once: 3, not h4, whose pictures are still being made');
 select is((select array_agg(pg_temp.hold(x) || ' ' || pg_temp.alerts(x) order by x) from unnest(array['h1', 'h2', 'h3', 'h4']) x),
   array['- picture_changed closed released', '- picture_changed closed released', '- picture_changed closed released',
         'picture_changed picture_changed open'],
@@ -779,6 +780,33 @@ select is((select a.hold_until from public.marking_assignments a where a.unit_id
   'the holds restart at now + 2 hours');
 select is((select array_agg(a.reason) from public.audit_log a where a.action = 'marking_alerts_released_all' and a.target_id = pg_temp.k('e5')),
   array['Checked the new pictures (alerts released: 3)'], 'one audit row for them all, with the count');
+
+-- ---------------------------------------------------------------------------------------------
+-- A lead blocked for the candidate cannot release: a8's picture changed; a conflict between the lead and its candidate
+-- is declared. (a2's open picture_changed alert cannot be released: a page has no picture.)
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script('a8', 'e');
+select pg_temp.open('e');
+select pg_temp.take('a8', 'm3');
+select pg_temp.area('p:a8:1');
+update public.script_pages set marking_path = replace(marking_path, '-marking.jpg', '-remask-marking.jpg') where id = pg_temp.k('p:a8:1');
+insert into public.marker_conflicts (marker_id, student_id, recorded_at) values (pg_temp.uid('lead'), pg_temp.student('a8'), now());
+select tests.as_user(pg_temp.uid('lead'));
+select is(pg_temp.code(public.marking_alert_release(pg_temp.alert('a8', 'picture_changed'), 'Looks fine to me')), 'forbidden',
+  'a lead blocked for the candidate cannot release its alert');
+insert into res values ('rel_all_e_lead', public.marking_alerts_release_all(pg_temp.k('e'), 'Checked the new pictures'));
+select tests.as_postgres();
+select is(array[pg_temp.r('rel_all_e_lead')::text, pg_temp.hold('a8'), pg_temp.alerts('a8')],
+  array['{"ok": true, "blocked": 1, "released": 0}', 'picture_changed', 'picture_changed open'],
+  'nor with release_all: it skips that script and says so in the count');
+select is((select a.reason from public.audit_log a where a.action = 'marking_alerts_released_all' and a.target_id = pg_temp.k('e')),
+  'Checked the new pictures (alerts released: 0; skipped, a conflict with the candidate: 1)', 'the audit row says so too');
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('rel_all_e_admin', public.marking_alerts_release_all(pg_temp.k('e'), 'Checked the new pictures'));
+select tests.as_postgres();
+select is(array[pg_temp.r('rel_all_e_admin')::text, pg_temp.hold('a8'), pg_temp.alerts('a8')],
+  array['{"ok": true, "blocked": 0, "released": 1}', '-', 'picture_changed closed released'], 'an admin may release it');
+delete from public.marker_conflicts where marker_id = pg_temp.uid('lead');
 
 -- ---------------------------------------------------------------------------------------------
 -- Release with an assigned holder that has no time limit: a7, assigned to m2.
@@ -854,6 +882,24 @@ select is(array[pg_temp.code(pg_temp.r('hb_g2')), pg_temp.holder('g2/G1'), pg_te
 select tests.as_user(pg_temp.uid('m1'));
 select is(pg_temp.code(public.marking_next(pg_temp.k('eq'))), 'nothing_left', 'Next script never offers m1 a piece of the scripts whose name they saw');
 select tests.as_postgres();
+-- The g3 pattern: m1 submitted G1, then reported a name on G2. While g3 is with staff its name is hidden and page 1 is
+-- turned, so G1's pages change; handed back, G1 must not go back to m1, who saw the name.
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_set_hidden_areas(pg_temp.k('p:g3:3'), '[{"x":0.1,"y":0.05,"w":0.4,"h":0.08}]', 'Hide the name');
+select public.script_exception_confirm((select e.id from public.script_exceptions e where e.page_id = pg_temp.k('p:g3:3') and e.kind = 'name_visible'),
+                                       'The name is hidden now');
+select tests.as_postgres();
+update public.processing_jobs set state = 'done', finished_at = now() where upload_id = pg_temp.upload('g3') and kind = 'remask' and state in ('queued', 'running');
+select pg_temp.remask(pg_temp.upload('g3'), 'hidden');
+update public.script_pages set rotation = 180 where id = pg_temp.k('p:g3:1');
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('hb_g3', public.marking_script_hand_back(pg_temp.k('g3')));
+select tests.as_postgres();
+select is(array[pg_temp.r('hb_g3') ->> 'ok', pg_temp.r('hb_g3') ->> 'reopened', pg_temp.ms('g3/G1', 'm1'), pg_temp.us('g3/G1'), pg_temp.holder('g3/G1'),
+                pg_temp.alerts('g3')],
+  array['true', '0', 'set_aside name_seen', 'open', '-', 'name_visible closed handed_back,pages_changed open'],
+  'handed back with changed pages, m1''s submitted G1 is set aside (name_seen), not given back to them; the piece is open');
+
 
 -- ---------------------------------------------------------------------------------------------
 -- A name seen is always reportable: m3's hold on a5 ran out, their marking still in progress.
