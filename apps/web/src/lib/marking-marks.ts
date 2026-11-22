@@ -20,8 +20,8 @@ export type MarkOptionGroup = { id: string; label?: string; choose: number };
 /**
  * What a piece is out of and what it has so far. Only the lowest questions carry marks. Where a set of optional
  * questions says "answer N of these", only the best N count towards both numbers, as the database counts them.
- * `missing` lists the questions still to mark (a blank, not "not attempted"), in paper order; optional questions the
- * candidate did not choose are not missing once N are marked. `whole` is accepted for the caller's two cases (a whole
+ * `missing` lists every lowest question with no mark and no NR, in paper order, exactly as the server's
+ * marking_missing does (an unchosen optional question needs its NR too). `whole` is accepted for the caller's two cases (a whole
  * script and a question group): the database counts both the same way, so it changes nothing here.
  */
 export function unitTotal(
@@ -68,10 +68,8 @@ export function unitTotal(
     const choose = Math.max(0, optionGroups.find((o) => o.id === g)?.choose ?? list.length);
     total += list.map((t) => t.total).sort((a, b) => b - a).slice(0, choose).reduce((a, b) => a + b, 0);
     max += list.map((t) => t.max).sort((a, b) => b - a).slice(0, choose).reduce((a, b) => a + b, 0);
-    const started = list.filter((t) => t.touched).length;
-    for (const t of list) {
-      if (t.touched || started < choose) t.blanks.forEach((id) => missing.add(id));
-    }
+    // An unchosen optional question still needs its NR, as the server counts it.
+    for (const t of list) t.blanks.forEach((id) => missing.add(id));
   }
   const order = questions.map((q) => q.id);
   return { total, max, missing: order.filter((id) => missing.has(id)) };

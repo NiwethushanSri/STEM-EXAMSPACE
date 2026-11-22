@@ -47,14 +47,14 @@ describe("marking marks", () => {
     expect(m.total).toBe(6);
     expect(m.missing).toEqual(["q1b", "q3", "q4"]);
 
-    // Two optional questions answered: the third may stay blank.
+    // An unchosen optional question still lists until it has a mark or NR, as the server counts it.
     const na = unitTotal(
       questions,
       { q1a: { mark: null, na: true }, q1b: { mark: 3, na: false }, q2: { mark: 1, na: false }, q3: { mark: 2, na: false } },
       groups,
       true,
     );
-    expect(na.missing).toEqual([]);
+    expect(na.missing).toEqual(["q4"]);
     expect(na.total).toBe(3 + 1 + 2);
   });
 

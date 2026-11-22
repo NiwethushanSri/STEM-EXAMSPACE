@@ -38,9 +38,10 @@ const NAMED: Record<string, Action> = {
 
 /** What a key press means on the marking screen, or null when it means nothing (or the marker is typing). */
 export function keyAction(
-  e: { key: string; ctrl: boolean; meta: boolean; shift: boolean; typing: boolean },
+  e: { key: string; ctrl: boolean; meta: boolean; shift: boolean; alt: boolean; typing: boolean },
   ctx: { max: number; step: 0.5 | 1 },
 ): Action | null {
+  if (e.alt) return null;
   const lower = e.key.toLowerCase();
   if (e.ctrl || e.meta) {
     if (lower !== "z") return null;

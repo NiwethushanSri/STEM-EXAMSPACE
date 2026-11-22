@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { keyAction } from "./marking-keys";
 
-const k = (key: string, over: Partial<{ ctrl: boolean; meta: boolean; shift: boolean; typing: boolean }> = {}) => ({
-  key, ctrl: false, meta: false, shift: false, typing: false, ...over,
+const k = (key: string, over: Partial<{ ctrl: boolean; meta: boolean; shift: boolean; alt: boolean; typing: boolean }> = {}) => ({
+  key, ctrl: false, meta: false, shift: false, alt: false, typing: false, ...over,
 });
 const c = { max: 4, step: 1 as const };
 
@@ -42,6 +42,12 @@ describe("marking keys", () => {
     expect(keyAction(k("z", { meta: true }), c)).toEqual({ type: "undo" });
     expect(keyAction(k("Z", { ctrl: true, shift: true }), c)).toEqual({ type: "redo" });
     expect(keyAction(k("c", { ctrl: true }), c)).toBeNull();
+  });
+
+  it("alt combinations do nothing", () => {
+    expect(keyAction(k("t", { alt: true }), c)).toBeNull();
+    expect(keyAction(k("z", { ctrl: true, alt: true }), c)).toBeNull();
+    expect(keyAction(k("3", { alt: true }), c)).toBeNull();
   });
 
   it("shortcuts_are_off_while_typing", () => {

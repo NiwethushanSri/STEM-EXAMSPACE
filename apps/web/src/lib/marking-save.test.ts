@@ -16,7 +16,7 @@ const makeStorage = () => {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-function setup(send: (rev: number, ops: Op[], seconds: number) => Promise<SaveResult>, rev = 5) {
+function setup(send: (rev: number, ops: Op[], seconds: number, reason?: string) => Promise<SaveResult>, rev = 5) {
   const storage = makeStorage();
   const statuses: SaveStatus[] = [];
   const q = createSaveQueue({ markingId: "m1", rev, send, storage, onStatus: (s) => statuses.push(s) });
@@ -158,6 +158,111 @@ describe("save queue", () => {
       expect(statuses.at(-1)).toBe(status);
       expect(q.pending()).toBe(1);
     }
+  });
+
+  it("every refusal the server will never accept stops the queue with the right status", async () => {
+    const cases: { code: string; reason?: string; status: SaveStatus }[] = [
+      { code: "invalid_input", status: "refused" },
+      { code: "mark_out_of_range", status: "refused" },
+      { code: "incomplete", status: "refused" },
+      { code: "reason_required", status: "reason_required" },
+      { code: "forbidden", status: "refused" },
+      { code: "conflict", reason: "set_aside", status: "refused" },
+      { code: "conflict", reason: "rev", status: "stale" },
+    ];
+    for (const c of cases) {
+      let calls = 0;
+      const { q, statuses } = setup(async () => {
+        calls++;
+        return { ok: false, code: c.code, reason: c.reason };
+      });
+      q.push([note(1)]);
+      await vi.advanceTimersByTimeAsync(800);
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(calls, c.code).toBe(1);
+      expect(statuses.at(-1), c.code).toBe(c.status);
+      expect(q.lastRefusal()).toBe(c.code);
+      expect(q.pending()).toBe(1);
+    }
+  });
+
+  it("a server or session error still retries", async () => {
+    let calls = 0;
+    const { q } = setup(async (rev) => (++calls < 2 ? { ok: false, code: "server_error" } : { ok: true, rev: rev + 1 }));
+    q.push([note(1)]);
+    await vi.advanceTimersByTimeAsync(800 + 2000);
+    expect(calls).toBe(2);
+    expect(q.pending()).toBe(0);
+  });
+
+  it("setReason then resume sends with the reason", async () => {
+    const reasons: (string | undefined)[] = [];
+    const { q, statuses } = setup(async (rev, _ops, _s, reason) => {
+      reasons.push(reason);
+      return reason ? { ok: true, rev: rev + 1 } : { ok: false, code: "reason_required" };
+    });
+    q.push([note(1)]);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(statuses.at(-1)).toBe("reason_required");
+    q.setReason("Mistake in 2(b)");
+    q.resume();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reasons).toEqual([undefined, "Mistake in 2(b)"]);
+    expect(q.pending()).toBe(0);
+    expect(statuses.at(-1)).toBe("saved");
+  });
+
+  it("discard clears the queue and its storage", async () => {
+    const { q, storage, statuses } = setup(async () => ({ ok: false, code: "invalid_input" }));
+    q.push([note(1), note(2)]);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(storage.m.has("stem-marking-pending-m1")).toBe(true);
+    q.discard();
+    expect(q.pending()).toBe(0);
+    expect(storage.m.has("stem-marking-pending-m1")).toBe(false);
+    expect(q.lastRefusal()).toBeNull();
+    expect(statuses.at(-1)).toBe("saved");
+  });
+
+  it("flush resolves to whether everything saved", async () => {
+    const ok = setup(async (rev) => ({ ok: true, rev: rev + 1 }));
+    ok.q.push([note(1)]);
+    expect(await ok.q.flush()).toBe(true);
+    const bad = setup(async () => ({ ok: false, code: "invalid_input" }));
+    bad.q.push([note(1)]);
+    expect(await bad.q.flush()).toBe(false);
+  });
+
+  it("continuous pushes still save within 5 seconds", async () => {
+    let sent = 0;
+    const { q } = setup(async (rev, ops) => {
+      sent += ops.length;
+      return { ok: true, rev: rev + 1 };
+    });
+    for (let i = 0; i < 12; i++) {
+      q.push([note(i)]);
+      await vi.advanceTimersByTimeAsync(500);
+    }
+    expect(sent).toBeGreaterThanOrEqual(10);
+  });
+
+  it("dispose stops the timers", async () => {
+    let calls = 0;
+    const { q } = setup(async (rev) => (calls++, { ok: true, rev }));
+    q.push([note(1)]);
+    q.dispose();
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(calls).toBe(0);
+    expect(q.pending()).toBe(1);
+  });
+
+  it("restorePending drops malformed ops", () => {
+    const { storage } = setup(async (rev) => ({ ok: true, rev }));
+    storage.m.set(
+      "stem-marking-pending-m1",
+      JSON.stringify({ rev: 5, ops: [note(1), { op: "mark" }, null, { op: "nope" }, { op: "ann_del", id: "a" }, { op: "ann_put", id: "a" }] }),
+    );
+    expect(restorePending("m1", 5, storage)).toEqual([note(1), { op: "ann_del", id: "a" }]);
   });
 
   it("pending_ops_survive_reload_only_for_the_same_rev", async () => {
