@@ -22,6 +22,8 @@ Phase 3A is the heart of the system: staff enter each exam's questions and mark 
   - **Submit** is offered once every question has a mark or NR; otherwise the screen lists the questions still to mark. After Submit the screen says "Submitted. You can still change it until marking closes." A change after Submit asks for a short reason, and every mark ever given is kept with who, when and why.
   - **"Name visible"** asks "Does this page show the candidate's name? The script will go back to staff and leave your list." with the page number and no text box (a marker might type the name). The script goes straight back to staff and that marker is not given any piece of that script again.
 - **Hold ended.** If a hold runs out (a long break), the next save is refused in plain words, nothing saved is lost, and the marker carries on with Next script if nobody else has taken the script.
+- **A page taken away leaves the screen within a minute,** even when the marker is only reading and saves nothing (another marker reported a name, staff took the script back, the hold ended).
+- **The mark scheme PDF** opens for a marker only while the exam's marking is open and they hold or have marked one of its scripts (the lead marker: whenever it is open). Before marking opens and after it closes, only admins and the subject's teachers can open it.
 
 ### For lead markers
 
@@ -32,11 +34,11 @@ Phase 3A is the heart of the system: staff enter each exam's questions and mark 
 
 ### For admins (and teachers, for their own subjects' questions)
 
-- **Questions and mark scheme** (a link on the exam page, for admins, and for a teacher on their subjects' exams): one row per question and part (up to 3 levels and 200 questions), with its maximum (0.5 to 100), "Half marks", "Marked by levels", the pages it is answered on, its question group and "Optional with…". Each question has its marking points (M1, A1, L2 and so on, with marks and text), acceptable alternatives and guidance. "Optional questions" ("Answer 2 of these") and "Question groups" (for marking by question) are set here too. The top of the page shows the total ("Paper total: 60 marks"). "Attach the mark scheme PDF" takes one PDF of up to 20 MB, kept in its own private store that families can never reach. Once marking has opened the page says "Marking has started. Changes need a reason and are recorded.": an admin can still change wording, points, guidance and pages, raise or lower a maximum (not below a mark already given), and add a question (submitted scripts that include it are reopened for their marker). Removing a question or changing groups is refused. Teachers can then only read it.
+- **Questions and mark scheme** (a link on the exam page, for admins, and for a teacher on their subjects' exams): one row per question and part (up to 3 levels and 200 questions), with its maximum (0.5 to 100), "Half marks", "Marked by levels", the pages it is answered on, its question group and "Optional with…". Each question has its marking points (M1, A1, L2 and so on, with marks and text), acceptable alternatives and guidance. "Optional questions" ("Answer 2 of these") and "Question groups" (for marking by question) are set here too. The top of the page shows the total ("Paper total: 60 marks"). "Attach the mark scheme PDF" takes one PDF of up to 20 MB, kept in its own private store that families can never reach. Once marking has opened the page says "Marking has started. Changes need a reason and are recorded.": an admin can still change wording, points, guidance and pages, raise or lower a maximum (not below a mark already given), and add a question (submitted scripts that include it are reopened for their marker, unless that marker saw a name on the script). Each such change records what changed beside its reason ("maximum 2(b) 5 -> 6; 1 question added; 3 pieces reopened"). Removing a question or changing groups is refused. Teachers can then only read it.
 - **Markers** (/admin/marking/markers): every exam corrector and teacher, with "Approve" per subject (a teacher only for subjects they teach), "Remove approval", "Make lead marker" (one per subject, shown as a badge) and "Declared conflicts" (find a candidate by index number, add a note). Each action asks for a reason that is kept in the audit log. Removing an approval, or adding a conflict, takes back the scripts that marker holds in that subject or of that candidate. If they have already marked that candidate, the page says "This marker has already marked {n} of this candidate's scripts. Take them back on the Marking page if they should be marked again."
 - **Marking on the exam page:** "How it is marked" (Whole script or By question), "Marking deadline" (UK time), what is ready in plain words ("3 questions, 60 marks", "2 markers approved", "4 home scripts wait until 3 December, 12:30"), and "Open marking". Once open: "Close marking" and "Reopen marking", each with a reason. Closing stops hand-out, saving and changes; it ends and deletes nothing. The deadline never locks anyone out by itself: it turns the figures red.
 - **When scripts are handed out.** A verified home script waits until 24 hours after the finish (families may still replace pages until then). A centre script waits until its centre's pages with no code or an unknown code are settled. No script is handed out while its pictures are being made again, while it is taken back, or while a late script waits for your decision.
-- **Marking** (/admin/marking): progress per exam and per marker ("Overdue" in red once the deadline has passed with work left), every script of an exam with filters (state, marker), tick boxes, "Assign to…" (no time limit), "Take back", "Reassign to…" and "Assign the next {n} to…", each with a reason, and the alerts ("Needs attention"). The page shows script and index numbers, never a candidate's name.
+- **Marking** (/admin/marking): progress per exam and per marker ("Overdue" in red once the deadline has passed with work left), every script of an exam with filters (state, marker), tick boxes, "Assign to…" (no time limit), "Take back", "Reassign to…" and "Assign the next {n} to…", each with a reason, and the alerts ("Needs attention"). An exam with an open alert also has "Release all" on its progress card, which works even if the alerts list cannot be loaded. A list cut short says "Showing the first 2,000." (scripts) or "Showing the first 500." (alerts). The page shows script and index numbers, never a candidate's name.
 - **The script page** (/admin/scripts/…): a script being marked says "This script is being marked. To change its pages, take it back from the markers." with **"Take back from markers"** (reason). Its pages can then be changed with the Phase 2 tools. **"Hand back to markers"** returns it once it is verified again: each piece goes back to its marker, and a marker whose pages changed is asked to check their marks.
 - **Admin home page.** New marking figures: scripts left to mark, on hold in marking, marking alerts open and marking pictures to check; a row per exam whose marking is open or closed in the last 14 days (left, marked, on hold, deadline); and alerts: "Marking is overdue for {n} exams.", "{n} scripts are on hold in marking.", "{n} marking pictures wait to be checked." and "{n} assigned scripts have not been touched for a week."
 - **Menus.** Admins and the owner have "Marking" and "Markers"; correctors and teachers have "Marking". The old demonstration pages (/examiner/marking and /examiner/papers) are gone.
@@ -52,7 +54,7 @@ Until step 2 is done the script is not verified. For a script already being mark
 
 ### When a picture changes during marking
 
-- When what a marking picture hides changes (a page turned, a hidden area changed), the script's pieces being marked or submitted are put on hold. The marks stay, the old picture can no longer be fetched, and the lead marker is told. The lead marker releases with one click once the new pictures are ready. A picture made again with exactly the same hidden areas holds nothing.
+- When what a marking picture hides changes (a page turned, a hidden area changed), the script's pieces being marked or submitted are put on hold. A script nobody has taken yet has nothing to hold, so it raises no alert and no email. The marks stay, the old picture can no longer be fetched, and the lead marker is told. The lead marker releases with one click once the new pictures are ready. A picture made again with exactly the same hidden areas holds nothing.
 - When a page loses its marking picture, every piece of the script is held until staff take it back and hand it back.
 - Scanned pages that arrive for a script being marked are set aside, as before. The lead marker and admins are told, and staff take the script back to place them.
 
@@ -89,11 +91,13 @@ Do not deploy until you give the go-ahead.
 - **Take a backup, or confirm point-in-time recovery is on,** for the live database.
 - **Pick a time with no exam running and no marking open.**
 - **Never run `supabase config push` from this repository.** Its settings point sign-in links at the local test copy.
+- **Gate: the full browser test run must pass on the final version.** Run `npm run e2e:local -w @stem/web` once, on a machine with port 3005 free and at least 3 GB of memory free. It builds the site, starts its own copy on port 3005 and the processing server, and runs every browser test, Phase 2's included. It has not been run in this part (too little memory was free here); only the two marking browser tests were run, against a stand-in copy (see "How it was tested"). Do not deploy until it passes.
+- **Gate: two people try two-session marking by hand** on the test copy before the deploy: two markers press Next script at the same moment with one script left (one gets it, the other is told "Nothing left to mark for now."), and one marker opens the same script on two screens and saves on both (the second is told to reload). The browser tests now do both, but only people can try it at human speed.
 - **The Next.js upgrade is still open.** Every build of the website still stops once on Next.js's security notice (it happened again in this part's builds; a second run then builds). Upgrading Next.js is its own, tested step, done only with your go-ahead, before deploying.
 
 **Steps**
 
-1. **Migrations 20261122000001 to 20261122000012**, after Phase 2's 20261120000050 to 20261120000076 (`npm run db:push`, by your go-ahead only). 001 is Phase 2's small fixes; 002 to 012 add the marking tables, questions and mark scheme, markers, opening marking, hand-out and holds, saving and submitting, held pieces and taking scripts back, the check of accepted pages' marking pictures, the picture clean-up, the reasons a release waits, and the admin dashboard's marking figures. 005 adds the scheduled job `marking-tick` (every minute).
+1. **Migrations 20261122000001 to 20261122000015**, after Phase 2's 20261120000050 to 20261120000076 (`npm run db:push`, by your go-ahead only). 001 is Phase 2's small fixes; 002 to 012 add the marking tables, questions and mark scheme, markers, opening marking, hand-out and holds, saving and submitting, held pieces and taking scripts back, the check of accepted pages' marking pictures, the picture clean-up, the reasons a release waits, and the admin dashboard's marking figures. 013 to 015 are the final review's fixes: the mark scheme PDF rule for markers, the faster alerts list, and the small fixes (a question added after opening, no alert when nothing was held, what a change after opening records, the lists' "more" flag, the minute job). 005 adds the scheduled job `marking-tick` (every minute).
 2. **Edge Functions: redeploy `script-notify`** (its code changed for the marking alert emails; the "Do not send them" rule is in the database functions it calls, migration 001). The shared email code changed too (the marking alert email was added; nothing else in it changed), and five other functions are built with it (approve-student, paper-release-notify, parent-child, register-student, reject-student), so deploy every function with `npm run fn:deploy`. No new secret is needed.
 3. **The processing server: this build** (with the picture clean-up). Deploy it after the migrations: it calls a function that migration 010 adds. Files queued meanwhile simply wait.
 4. **The website.**
@@ -110,7 +114,7 @@ Do not deploy until you give the go-ahead.
 1. **Approve the first markers, and a lead marker for each subject** (/admin/marking/markers).
 2. **Enter the first exam's questions and mark scheme** (the exam page, "Questions and mark scheme"), and attach its mark scheme PDF.
 3. **Decide the calls above**, above all 2, 5, 16 and 17 of the plan's table.
-4. **Run the full browser test run once** on a machine with port 3005 free and at least 3 GB of memory free: `npm run e2e:local -w @stem/web`. It builds the site, starts its own copy on port 3005 and the processing server, and runs every browser test, Phase 2's included. Here it could not be run (about 1.4 to 2.4 GB was free); the two marking browser tests were run against a stand-in copy instead (see "How it was tested").
+4. **Before any deploy: the full browser test run and the two-session hand test** (the two gates under "Before you start"). These are not follow-ups: the deploy waits for them.
 5. **Mark a script on a real iPad with an Apple Pencil**, in Safari: write, scroll with one finger, zoom with two, rest a palm on the screen while writing, and use "Draw with finger". The tests used made-up Pencil and finger events only.
 6. **The Next.js upgrade**, as its own step (see "Before you start").
 
@@ -118,13 +122,14 @@ Do not deploy until you give the go-ahead.
 
 On the local test copy only:
 
-- Database tests: 49 files, all passing (12 new in this part, 038 to 049).
-- Edge Function tests: 189 passed (with the local functions server running).
-- Processing server tests: 168 passed.
-- Website tests: 431 passed; shared code tests: 201 passed; type checks and the linter clean (3 old warnings).
+- Database tests: 52 files, all passing (15 new in this part, 038 to 052).
+- Edge Function tests: 189 passed (with the local functions server running; not run again after the final fixes, which changed no function).
+- Processing server tests: 168 passed (not run again after the final fixes, which did not change it).
+- Website tests: 436 passed; shared code tests: 201 passed; type checks and the linter clean (3 old warnings).
 - The website build passes (after the Next.js notice, on the second run).
-- Browser tests, against a stand-in copy of the site on port 3006 built with the local test copy's settings: the marking screen (6 tests: marking and submitting with mouse and keyboard, the iPad's Pencil and fingers, the phone message, "Name visible", a second screen) and the staff side (8 tests: entering questions, approving a lead marker, opening marking, assigning and taking back, a hidden-area change made by the real processing server putting a piece on hold and the lead releasing it, taking a script back and handing it back). In the staff test every page has no sideways scroll at 1,440, 820 and 390 px wide; in both, no marking page shows a candidate's name.
-- Hand-out was timed with 1,500 scripts waiting: Next script took about 10 milliseconds, and assigning 200 at once about a quarter of a second.
+- Browser tests, against a stand-in copy of the site on port 3006 built with the local test copy's settings: the marking screen (9 tests: marking and submitting with mouse and keyboard, the iPad's Pencil and fingers, the phone message, "Name visible", a second screen, and three with real second sessions: two markers pressing Next script at once with one script left, one marker saving on two screens, and a script taken back leaving the screen of a marker who is only reading) and the staff side (8 tests: entering questions, approving a lead marker, opening marking, assigning and taking back, a hidden-area change made by the real processing server putting a piece on hold and the lead releasing it, taking a script back and handing it back). In the staff test every page has no sideways scroll at 1,440, 820 and 390 px wide; in both, no marking page shows a candidate's name.
+- Hand-out was timed with 1,500 pieces (300 scripts in 5 groups) waiting: Next script took about 10 milliseconds, and assigning 200 at once about a quarter of a second.
+- The alerts list was timed with 300 open alerts on 16-page scripts: about 0.6 seconds (it was about 4 seconds before the final fixes). The exam page's waiting counts for 300 scripts: about 0.35 seconds (it was about 2).
 
 ## Known limits
 
@@ -133,7 +138,7 @@ On the local test copy only:
 - **Every change to what a picture hides holds the pieces being marked,** even when the new picture looks the same (for example a hidden area that covers only blank paper). The lead marker releases them with one click (or "Release all" for an exam).
 - **Home scripts wait a day** after the finish before they are handed out (see the calls above).
 - **Question areas are not drawn on the page yet.** The questions say which pages they are on; drawing their areas comes with AI suggestions in a later phase.
-- **The full browser test run and the real iPad check are still to do** (owner actions 4 and 5).
+- **The full browser test run and the two-session hand test are still to do, and gate the deploy** ("Before you start"). The real iPad check is still to do as well (owner action 5).
 - **Taking back a home script sends Phase 2's "needs attention" staff email,** even when the script is verified again at once.
 - **A scanned page set aside for a script being marked sends two emails:** Phase 2's "not expected" alert and the marking alert.
 - **A marker who reports a name after marking has closed** reopens that piece although marking is closed. Changing the questions while marking is closed can also reopen submitted pieces.
@@ -156,7 +161,15 @@ On the local test copy only:
 - The exam's marking settings take 3B's sample size, tolerances and the switches for small subjects (with their reason); the per-exam clearance after practice sits beside the approvals per subject.
 - The private notes to the lead marker, the active time per marking, the history of every mark and the marking alerts are written now, for 3B's review, statistics and tolerance alerts. Payments count the submitted live markings.
 - Marks are recorded as given by the marker; "suggestion accepted" is added with AI suggestions, which also use the question areas and marking points.
-- Sign marking picture links on the server and drop the markers' storage rule (see "Known limits").
+
+## Carry into Phase 3B
+
+These come from the final review of this part. They belong in Phase 3B's plan from its first step.
+
+- **The one-holder rule needs a kind filter before seed and practice passes.** Today the database allows one holder per script piece and pass; seed and practice passes have several markers per piece, so the rule must be narrowed in 3B's first migration.
+- **A page viewer for the lead marker before release.** The lead may already read a held script's marking pictures, but the page offers only "Release"; they should see the new picture first.
+- **Results come from question marks, never from adding piece totals.** A piece's total applies the "answer 2 of these" rule within the piece only, so adding piece totals can overstate a script marked by question.
+- **Sign marking picture links on the server** and drop the markers' storage rule (Ruling R12; see "Known limits").
 
 ## Not in this part
 
