@@ -28,10 +28,11 @@
 -- Answers {ok, page_id, script_state} (the state of the script that shows the page).
 -- script_page_marking_name_shows (admins, with a reason): "A name still shows": a name_visible exception for the page
 -- ({"from": "staff_check"}), unless one is open, so it goes through "Hide the name" and is accepted again; audited
--- script_page_marking_name_shows with the reason. A script being marked that shows the page is taken back from the
--- markers (marking_script_take_back_as, with the reason), and every marker with a live marking on it that is not set
--- aside may have seen the name: on every piece of the script their holds end, their markings in progress are set aside
--- and they are excluded (name_seen), as a marker's Name visible does for the marker; their submitted markings stand.
+-- script_page_marking_name_shows with the reason. On a script with markers that shows the page (being marked, or taken
+-- back from them already), every marker with a live marking on it that is not set aside may have seen the name: on
+-- every piece of the script their holds end, their markings in progress are set aside and they are excluded
+-- (name_seen), as a marker's Name visible does for the marker; their submitted markings stand. A script being marked is
+-- then taken back from the markers (marking_script_take_back_as, with the reason).
 -- script_exception_check_due (admins): after a resolution, whether its page now waits for a check ('now', 'later' or
 -- 'none'), for the note the exception queue shows.
 --
@@ -49,6 +50,10 @@
 --     (picture_unchecked), so marking_alert_release, marking_alerts_release_all and marking_alerts_list's can_release
 --     wait for it.
 --   script_detail (20261122000008): the script also says pictures_to_check.
+--   marking_script_waiting (20261122000005): a script ready to mark, being marked or marked waits while a page of it
+--     waits for a check (picture_unchecked, after pictures_updating), so through marking_script_blocked no piece of it,
+--     open or held, is handed out (Next script, an admin's assignment, marking_exam_sync) until the check is done.
+--   marking_exam_get (20261122000005): waiting also counts picture_unchecked.
 -- Nothing else in them changed. Scripts verified before this migration that show a page waiting for a check are worked
 -- out again at the end.
 
@@ -470,14 +475,15 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
   v_owners := public.script_page_owners(p_page);
-  -- A script being marked that shows the page is taken back below, and every marker who may have seen the page (a
-  -- live marking on it, not set aside) is kept from it. Ruling R10: those markers' keys first, exclusive (exclusions
-  -- are added), in uuid order; then (Ruling R9) the scripts' locks.
+  -- The scripts with markers that show the page (being marked, or taken back from the markers): every marker who may
+  -- have seen the page (a live marking on it, not set aside) is kept from it below, and one being marked is taken back.
+  -- Ruling R10: those markers' keys first, exclusive (exclusions are added), in uuid order; then (Ruling R9) the
+  -- scripts' locks.
   for v_m in
     select distinct m.marker_id from public.scripts s
     join public.marking_units u on u.script_id = s.id
     join public.markings m on m.unit_id = u.id
-    where s.booking_id = any (v_owners) and s.state in ('ready_to_mark', 'marking', 'marked') and s.taken_back_at is null
+    where s.booking_id = any (v_owners) and (s.taken_back_at is not null or s.state in ('ready_to_mark', 'marking', 'marked'))
       and m.kind = 'live' and m.status <> 'set_aside'
     order by 1
   loop
@@ -485,7 +491,7 @@ begin
   end loop;
   for v_s in
     select s.id from public.scripts s
-    where s.booking_id = any (v_owners) and s.state in ('ready_to_mark', 'marking', 'marked') and s.taken_back_at is null
+    where s.booking_id = any (v_owners) and (s.taken_back_at is not null or s.state in ('ready_to_mark', 'marking', 'marked'))
     order by s.id
   loop
     perform public.marking_script_lock(v_s);
@@ -517,14 +523,15 @@ begin
     returning id into v_e;
   end if;
 
-  -- A script being marked that shows the page to markers goes back to staff now (its locks are held; one that came to
-  -- be marked meanwhile has them taken here). Every marker with a live marking on it that is not set aside may have
-  -- seen the name, as with a marker's Name visible: on every piece of the script their holds end (name_seen), their
-  -- markings in progress are set aside (name_seen), the pieces they no longer hold are open, and Next script never
-  -- offers them a piece of it again (an exclusion). Their submitted markings stand.
+  -- A script with markers that shows the page to them (being marked, or taken back already; its locks are held, and one
+  -- that came to be marked meanwhile has them taken here). Every marker with a live marking on it that is not set aside
+  -- may have seen the name, as with a marker's Name visible: on every piece of the script their holds end (name_seen),
+  -- their markings in progress are set aside (name_seen), the pieces they no longer hold are open, and Next script never
+  -- offers them a piece of it again (an exclusion). Their submitted markings stand. A script being marked then goes back
+  -- to staff; one taken back already stays as it is.
   for v_s in
     select s.id from public.scripts s
-    where s.booking_id = any (v_bookings) and s.state in ('ready_to_mark', 'marking', 'marked') and s.taken_back_at is null
+    where s.booking_id = any (v_bookings) and (s.taken_back_at is not null or s.state in ('ready_to_mark', 'marking', 'marked'))
       and exists (select 1 from public.marking_script_pages(s.id) x where x.page_id = v_p.id)
     order by s.id
   loop
@@ -555,7 +562,10 @@ begin
     insert into public.marking_unit_exclusions (unit_id, marker_id, reason)
     select u.id, mk, 'name_seen' from public.marking_units u cross join unnest(v_markers) mk where u.script_id = v_s
     on conflict do nothing;
-    perform public.marking_script_take_back_as(v_s, v_actor, v_reason);
+    if exists (select 1 from public.scripts s
+               where s.id = v_s and s.taken_back_at is null and s.state in ('ready_to_mark', 'marking', 'marked')) then
+      perform public.marking_script_take_back_as(v_s, v_actor, v_reason);
+    end if;
   end loop;
   insert into public.audit_log (actor_id, action, target_type, target_id, reason)
   values (v_actor, 'script_page_marking_name_shows', 'script_page', v_p.id, v_reason);
@@ -753,8 +763,122 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
+-- marking_script_waiting: as 20261122000005, and a script ready to mark, being marked or marked also waits while a page
+-- of it waits for staff to check its marking picture (picture_unchecked, after pictures_updating). marking_script_blocked
+-- reads it, so Next script (marking_units_free, marking_units_pick, marking_unit_blocked), an admin's assignment and
+-- marking_exam_sync hand out no piece of it, open or held, until the check is done: Task 7 holds only the pieces taken
+-- or submitted when a picture changes.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_script_waiting(p_script uuid, p_now timestamptz)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_now timestamptz := public.paper_clock(p_now);
+  v_x public.scripts%rowtype;
+  v_e public.exams%rowtype;
+begin
+  select * into v_x from public.scripts s where s.id = p_script;
+  if not found then
+    return null;
+  end if;
+  if v_x.taken_back_at is not null then
+    return 'taken_back';
+  end if;
+  if v_x.late and v_x.late_decision is distinct from 'accept' then
+    return 'late_undecided';
+  end if;
+  if v_x.source = 'home' then
+    select * into v_e from public.exams e where e.id = v_x.exam_id;
+    if v_now < v_e.starts_at + v_e.duration_minutes * interval '1 minute' + interval '24 hours' then
+      return 'home_window_open';
+    end if;
+  end if;
+  if v_x.source = 'centre' and exists (
+       select 1 from public.bookings b
+       join public.scan_batches sb on sb.exam_id = v_x.exam_id and sb.centre_id = b.centre_id
+       join public.script_uploads u on u.batch_id = sb.id
+       join public.script_exceptions x on x.upload_id = u.id
+       where b.id = v_x.booking_id and x.kind in ('no_code', 'unknown_code') and x.state = 'open') then
+    return 'centre_pages_unsettled';
+  end if;
+  if public.marking_script_busy(p_script) then
+    return 'pictures_updating';
+  end if;
+  if v_x.state in ('ready_to_mark', 'marking', 'marked') then
+    if exists (select 1 from public.script_pages_to_check(p_script)) then
+      return 'picture_unchecked';
+    end if;
+  end if;
+  return null;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- marking_exam_get: as 20261122000005, and waiting also counts picture_unchecked.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_exam_get(p_exam uuid, p_now timestamptz default null)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_now timestamptz := public.paper_clock(p_now);
+  v_e public.exams%rowtype;
+  v_m public.exam_marking%rowtype;
+begin
+  if not public.is_staff_admin() then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  if p_exam is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  select * into v_e from public.exams e where e.id = p_exam;
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'not_found');
+  end if;
+  select * into v_m from public.exam_marking m where m.exam_id = p_exam;
+
+  return jsonb_build_object(
+    'ok', true,
+    'mode', coalesce(v_m.mode, 'whole'),
+    'deadline', v_m.deadline,
+    'opened_at', v_m.opened_at,
+    'closed_at', v_m.closed_at,
+    'structure', jsonb_build_object(
+      'version', coalesce(v_m.structure_version, 0),
+      'leaves', (select count(*)::int from public.exam_questions q
+                 where q.exam_id = p_exam and not exists (select 1 from public.exam_questions c where c.parent_id = q.id)),
+      'max_total', public.exam_structure_max_total(p_exam),
+      'ungrouped', (select count(*)::int from public.exam_questions q where q.exam_id = p_exam and q.parent_id is null and q.group_id is null)),
+    'markers', (select count(*)::int from public.marker_approvals a
+                where a.subject_id = v_e.subject_id and public.is_marker_for(a.marker_id, a.subject_id)),
+    'scripts', (select jsonb_build_object(
+                  'verified', count(*) filter (where s.state = 'verified'),
+                  'ready_to_mark', count(*) filter (where s.state = 'ready_to_mark'),
+                  'marking', count(*) filter (where s.state = 'marking'),
+                  'marked', count(*) filter (where s.state = 'marked'))
+                from public.scripts s where s.exam_id = p_exam),
+    'waiting', (select jsonb_build_object(
+                  'home_window_open', count(*) filter (where t.why = 'home_window_open'),
+                  'centre_pages_unsettled', count(*) filter (where t.why = 'centre_pages_unsettled'),
+                  'pictures_updating', count(*) filter (where t.why = 'pictures_updating'),
+                  'late_undecided', count(*) filter (where t.why = 'late_undecided'),
+                  'taken_back', count(*) filter (where t.why = 'taken_back'),
+                  'picture_unchecked', count(*) filter (where t.why = 'picture_unchecked'))
+                from (select public.marking_script_waiting(s.id, v_now) as why from public.scripts s
+                      where s.exam_id = p_exam and s.state in ('verified', 'ready_to_mark', 'marking')) t));
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
 -- Access: the four staff functions check for an admin; the helpers are internal. script_evaluate_at,
--- marking_alert_can_release and script_detail keep their privileges.
+-- marking_alert_can_release, script_detail, marking_script_waiting and marking_exam_get keep their privileges.
 -- ---------------------------------------------------------------------------------------------
 revoke execute on function public.script_page_needs_marking_check(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.script_pages_to_check(uuid) from public, anon, authenticated, service_role;

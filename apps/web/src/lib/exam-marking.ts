@@ -12,8 +12,16 @@ export type MarkingView = {
   /** Approved active markers of the exam's subject. */
   markers: number;
   scripts: { verified: number; readyToMark: number; marking: number; marked: number };
-  /** Scripts held back, by the first thing holding each back. */
-  waiting: { homeWindowOpen: number; centrePagesUnsettled: number; picturesUpdating: number; lateUndecided: number; takenBack: number };
+  /** Scripts held back, by the first thing holding each back. pictureUnchecked: a marking picture of the script waits
+   * for staff to check it (Phase 3A Task 8). */
+  waiting: {
+    homeWindowOpen: number;
+    centrePagesUnsettled: number;
+    picturesUpdating: number;
+    lateUndecided: number;
+    takenBack: number;
+    pictureUnchecked: number;
+  };
 };
 
 /** A question group with the labels of its questions, in paper order. */
@@ -45,6 +53,7 @@ export function parseMarkingView(data: unknown): MarkingView | null {
       picturesUpdating: num(w.pictures_updating),
       lateUndecided: num(w.late_undecided),
       takenBack: num(w.taken_back),
+      pictureUnchecked: num(w.picture_unchecked),
     },
   };
 }
@@ -87,6 +96,9 @@ export function markingChecks(v: MarkingView, homeUntil: string): string[] {
   if (w.centrePagesUnsettled > 0) out.push(`${count(w.centrePagesUnsettled, "centre script waits", "centre scripts wait")} for pages in the queue`);
   if (w.picturesUpdating > 0) {
     out.push(w.picturesUpdating === 1 ? "1 script waits while its pictures are updated" : `${w.picturesUpdating} scripts wait while their pictures are updated`);
+  }
+  if (w.pictureUnchecked > 0) {
+    out.push(`${w.pictureUnchecked} ${w.pictureUnchecked === 1 ? "script's" : "scripts'"} marking pictures wait for a staff check`);
   }
   if (w.lateUndecided > 0) out.push(`${count(w.lateUndecided, "late script waits", "late scripts wait")} for a decision`);
   if (w.takenBack > 0) out.push(`${count(w.takenBack, "script was", "scripts were")} taken back from marking`);

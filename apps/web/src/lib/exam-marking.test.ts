@@ -10,7 +10,7 @@ const answer = {
   structure: { version: 4, leaves: 3, max_total: 60.0, ungrouped: 0 },
   markers: 2,
   scripts: { verified: 12, ready_to_mark: 0, marking: 0, marked: 0 },
-  waiting: { home_window_open: 4, centre_pages_unsettled: 2, pictures_updating: 0, late_undecided: 0, taken_back: 0 },
+  waiting: { home_window_open: 4, centre_pages_unsettled: 2, pictures_updating: 0, late_undecided: 0, taken_back: 0, picture_unchecked: 0 },
 };
 
 describe("parseMarkingView", () => {
@@ -24,8 +24,13 @@ describe("parseMarkingView", () => {
       structure: { version: 4, leaves: 3, maxTotal: 60, ungrouped: 0 },
       markers: 2,
       scripts: { verified: 12, readyToMark: 0, marking: 0, marked: 0 },
-      waiting: { homeWindowOpen: 4, centrePagesUnsettled: 2, picturesUpdating: 0, lateUndecided: 0, takenBack: 0 },
+      waiting: { homeWindowOpen: 4, centrePagesUnsettled: 2, picturesUpdating: 0, lateUndecided: 0, takenBack: 0, pictureUnchecked: 0 },
     });
+  });
+  it("reads the scripts whose marking pictures wait for a staff check (Phase 3A Task 8)", () => {
+    expect(parseMarkingView({ ...answer, waiting: { ...answer.waiting, picture_unchecked: 3 } })?.waiting.pictureUnchecked).toBe(3);
+    const older = { home_window_open: 0, centre_pages_unsettled: 0, pictures_updating: 0, late_undecided: 0, taken_back: 0 };
+    expect(parseMarkingView({ ...answer, waiting: older })?.waiting.pictureUnchecked).toBe(0);
   });
   it("refuses a failed or odd answer", () => {
     expect(parseMarkingView({ ok: false, code: "forbidden" })).toBeNull();
@@ -62,7 +67,7 @@ describe("markingChecks", () => {
       structure: { version: 1, leaves: 1, maxTotal: 7.5, ungrouped: 1 },
       markers: 1,
       scripts: { verified: 1, readyToMark: 5, marking: 2, marked: 3 },
-      waiting: { homeWindowOpen: 0, centrePagesUnsettled: 1, picturesUpdating: 1, lateUndecided: 2, takenBack: 1 },
+      waiting: { homeWindowOpen: 0, centrePagesUnsettled: 1, picturesUpdating: 1, lateUndecided: 2, takenBack: 1, pictureUnchecked: 1 },
     };
     expect(markingChecks(open, "2026-12-03T12:30:00.000Z")).toEqual([
       "1 question, 7.5 marks",
@@ -72,9 +77,13 @@ describe("markingChecks", () => {
       "5 ready to mark, 2 being marked, 3 marked",
       "1 centre script waits for pages in the queue",
       "1 script waits while its pictures are updated",
+      "1 script's marking pictures wait for a staff check",
       "2 late scripts wait for a decision",
       "1 script was taken back from marking",
     ]);
+    expect(markingChecks({ ...open, waiting: { ...open.waiting, pictureUnchecked: 4 } }, "2026-12-03T12:30:00.000Z")).toContain(
+      "4 scripts' marking pictures wait for a staff check",
+    );
   });
   it("says when there are no questions or markers", () => {
     const empty: MarkingView = { ...v, mode: "whole", structure: { version: 0, leaves: 0, maxTotal: 0, ungrouped: 2 }, markers: 0 };

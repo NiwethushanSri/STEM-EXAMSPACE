@@ -136,7 +136,7 @@ select is(pg_temp.r('get') - 'opened_at' - 'waiting',
     "scripts": {"verified": 0, "ready_to_mark": 2, "marking": 0, "marked": 0}}'::jsonb,
   'marking_exam_get: 3 questions to mark out of 10, 1 marker (m2 is suspended), 2 scripts ready');
 select is(pg_temp.r('get') -> 'waiting',
-  '{"home_window_open": 0, "centre_pages_unsettled": 0, "pictures_updating": 0, "late_undecided": 0, "taken_back": 0}'::jsonb,
+  '{"home_window_open": 0, "centre_pages_unsettled": 0, "pictures_updating": 0, "late_undecided": 0, "taken_back": 0, "picture_unchecked": 0}'::jsonb,
   'and nothing waits');
 select ok((pg_temp.r('get') ->> 'opened_at')::timestamptz = now(), 'it says when marking opened');
 

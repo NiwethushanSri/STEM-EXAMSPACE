@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(114);
+select plan(128);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -431,8 +431,8 @@ select is((select array[e.state, e.details ->> 'from'] from public.script_except
 
 -- ---------------------------------------------------------------------------------------------
 -- A script being marked (Task 8 review): exam q is marked by question (G1: question 1; G2: question 2). s1's page 2 was
--- accepted and its picture checked; m1 submitted G1 and m2 is marking G2. Then a paper area changes on page 2, which
--- makes that page's marking picture again: the pieces are held (Task 7).
+-- accepted and its picture checked; m1 submitted G1 and nobody has G2 yet. Then a paper area changes on page 2, which
+-- makes that page's marking picture again: the submitted piece is held (Task 7); the open one is kept back too.
 -- ---------------------------------------------------------------------------------------------
 insert into c values ('m1', tests.create_user('corrector', 'active')), ('m2', tests.create_user('corrector', 'active')),
   ('lead', tests.create_user('corrector', 'active'));
@@ -458,7 +458,6 @@ select public.marking_exam_sync(pg_temp.k('q'), null);
 insert into kv select 'u:s1/' || g.label, u.id from public.marking_units u join public.question_groups g on g.id = u.group_id
 where u.script_id = pg_temp.k('s1');
 select public.marking_unit_take(pg_temp.k('u:s1/G1'), pg_temp.uid('m1'), 'next', null, now() + interval '2 hours');
-select public.marking_unit_take(pg_temp.k('u:s1/G2'), pg_temp.uid('m2'), 'next', null, now() + interval '2 hours');
 select tests.as_user(pg_temp.uid('m1'));
 select public.marking_unit_open(pg_temp.k('u:s1/G1'));
 select tests.as_postgres();
@@ -470,16 +469,13 @@ select public.marking_save(pg_temp.k('mk:s1/G1'), 0,
   jsonb_build_array(jsonb_build_object('op', 'mark', 'na', false, 'mark', 2, 'question_id', (select id from q1))));
 select public.marking_submit(pg_temp.k('mk:s1/G1'), 1);
 select tests.as_postgres();
-select tests.as_user(pg_temp.uid('m2'));
-select public.marking_unit_open(pg_temp.k('u:s1/G2'));
-select tests.as_postgres();
 create function pg_temp.piece(p text) returns text language sql stable security definer as $$
   select u.state || ':' || case when u.on_hold then coalesce(u.hold_reason, '?') else '-' end from public.marking_units u where u.id = pg_temp.k(p) $$;
 create function pg_temp.mstatus(p text, p_marker text) returns text language sql stable security definer as $$
   select coalesce((select m.status || coalesce(' ' || m.set_aside_reason, '') from public.markings m
                    where m.unit_id = pg_temp.k(p) and m.kind = 'live' and m.marker_id = pg_temp.uid(p_marker)), '-') $$;
 select is(array[pg_temp.st('s1'), pg_temp.piece('u:s1/G1'), pg_temp.piece('u:s1/G2'), pg_temp.mstatus('u:s1/G1', 'm1'), pg_temp.mstatus('u:s1/G2', 'm2')],
-  array['marking', 'submitted:-', 'taken:-', 'submitted', 'in_progress'], 'fixture: s1 is being marked; m1 submitted G1, m2 is marking G2');
+  array['marking', 'submitted:-', 'open:-', 'submitted', '-'], 'fixture: s1 is being marked; m1 submitted G1; nobody has G2 yet');
 
 -- check_pictures_of_scripts_being_marked_before_release
 select tests.as_user(pg_temp.uid('admin'));
@@ -489,9 +485,23 @@ select tests.as_postgres();
 select is(pg_temp.sim(pg_temp.upload('s1')), '3/3', 's1''s marking pictures are made again');
 select is(array[pg_temp.piece('u:s1/G1'), pg_temp.piece('u:s1/G2'), pg_temp.needs('p:s1:2')::text,
                 (select a.state from public.marking_alerts a where a.script_id = pg_temp.k('s1') and a.kind = 'picture_changed')],
-  array['submitted:picture_changed', 'taken:picture_changed', 'true', 'open'],
-  'the pieces are held, page 2''s new picture waits for a check, and the lead is alerted');
+  array['submitted:picture_changed', 'open:-', 'true', 'open'],
+  'the submitted piece is held (the open one is not: Task 7), page 2''s new picture waits for a check, and the lead is alerted');
 insert into kv select 'al:s1', a.id from public.marking_alerts a where a.script_id = pg_temp.k('s1') and a.kind = 'picture_changed';
+-- keep_every_piece_back_while_a_picture_waits_for_its_check: the open G2 is not handed out.
+select is(array[public.marking_script_waiting(pg_temp.k('s1'), null), public.marking_script_blocked(pg_temp.k('s1'), null)],
+  array['picture_unchecked', 'picture_unchecked'], 'keep_every_piece_back_while_a_picture_waits_for_its_check: s1 waits for the check');
+select is((select count(*)::int from public.marking_units_free(pg_temp.k('q'), null, pg_temp.uid('m2'), null)), 0,
+  'no piece of s1 is free for m2, nor counted as left for them');
+select tests.as_user(pg_temp.uid('admin'));
+select is(public.marking_exam_get(pg_temp.k('q')) -> 'waiting' ->> 'picture_unchecked', '1', 'the exam''s marking page counts s1 as waiting for it');
+select is((select x ->> 'waiting' from jsonb_array_elements(public.marking_units_list(pg_temp.k('q')) -> 'units') x
+           where (x ->> 'unit_id')::uuid = pg_temp.k('u:s1/G2')), 'picture_unchecked', 'and the list of pieces says why G2 waits');
+select tests.as_postgres();
+select tests.as_user(pg_temp.uid('m2'));
+select is(pg_temp.code(public.marking_next(pg_temp.k('q'))), 'nothing_left', 'Next script does not hand m2 the open G2');
+select tests.as_postgres();
+select is(array[pg_temp.piece('u:s1/G2'), pg_temp.mstatus('u:s1/G2', 'm2')], array['open:-', '-'], 'nobody has it');
 select is(public.marking_alert_can_release(pg_temp.k('s1')), 'picture_unchecked', 'the hold may not be released before the check');
 select tests.as_user(pg_temp.uid('lead'));
 select is(pg_temp.why(public.marking_alert_release(pg_temp.k('al:s1'), 'The name is still hidden')), 'conflict picture_unchecked',
@@ -508,10 +518,18 @@ select tests.as_postgres();
 select is(array[pg_temp.code(pg_temp.r('ck_s1')), pg_temp.r('ck_s1') ->> 'script_state', pg_temp.st('s1')], array['ok', 'marking', 'marking'],
   'staff check it; the script stays with the markers');
 select is(public.marking_alert_can_release(pg_temp.k('s1')), null, 'now the hold may be released');
+select is(array[coalesce(public.marking_script_waiting(pg_temp.k('s1'), null), 'none'),
+                (select count(*)::text from public.marking_units_free(pg_temp.k('q'), null, pg_temp.uid('m2'), null))],
+  array['none', '1'], 'and G2 may be handed out again');
 select tests.as_user(pg_temp.uid('lead'));
 select is(pg_temp.code(public.marking_alert_release(pg_temp.k('al:s1'), 'The name is still hidden')), 'ok', 'and the lead releases it');
 select tests.as_postgres();
-select is(array[pg_temp.piece('u:s1/G1'), pg_temp.piece('u:s1/G2')], array['submitted:-', 'taken:-'], 'the markers carry on');
+select tests.as_user(pg_temp.uid('m2'));
+select is(public.marking_next(pg_temp.k('q')) ->> 'unit_id', pg_temp.k('u:s1/G2')::text, 'Next script hands m2 G2');
+select public.marking_unit_open(pg_temp.k('u:s1/G2'));
+select tests.as_postgres();
+select is(array[pg_temp.piece('u:s1/G1'), pg_temp.piece('u:s1/G2'), pg_temp.mstatus('u:s1/G2', 'm2')], array['submitted:-', 'taken:-', 'in_progress'],
+  'the markers carry on: m1''s G1 is submitted, m2 is marking G2');
 
 -- name_shows_excludes_every_marker_who_may_have_seen_it: staff then see a name on s1's page 2.
 select tests.as_user(pg_temp.uid('admin'));
@@ -546,6 +564,44 @@ select is(array[public.marking_unit_blocked(pg_temp.k('u:s1/G2'), pg_temp.uid('m
                 coalesce(public.marking_unit_blocked(pg_temp.k('u:s1/G2'), pg_temp.uid('lead'), null, true), 'free'),
                 pg_temp.mstatus('u:s1/G1', 'm1')],
   array['name_seen', 'name_seen', 'free', 'submitted'], 'G2 goes to neither m1 nor m2, only to a marker who never had it open; m1''s G1 stands');
+
+-- name_shows_on_a_taken_back_script_excludes_its_markers: on exam q, m1 is marking s2's G1 and m2 its G2 when an admin
+-- takes s2 back (their holds and markings are kept); then staff see a name on its page 1.
+select pg_temp.script('s2', 'q');
+select public.marking_exam_sync(pg_temp.k('q'), null);
+insert into kv select 'u:s2/' || g.label, u.id from public.marking_units u join public.question_groups g on g.id = u.group_id
+where u.script_id = pg_temp.k('s2');
+select public.marking_unit_take(pg_temp.k('u:s2/G1'), pg_temp.uid('m1'), 'next', null, now() + interval '2 hours');
+select public.marking_unit_take(pg_temp.k('u:s2/G2'), pg_temp.uid('m2'), 'next', null, now() + interval '2 hours');
+select tests.as_user(pg_temp.uid('m1'));
+select public.marking_unit_open(pg_temp.k('u:s2/G1'));
+select tests.as_postgres();
+select tests.as_user(pg_temp.uid('m2'));
+select public.marking_unit_open(pg_temp.k('u:s2/G2'));
+select tests.as_postgres();
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.marking_script_take_back(pg_temp.k('s2'), 'Check the pages')), 'ok',
+  'name_shows_on_a_taken_back_script_excludes_its_markers: an admin takes s2 back');
+select tests.as_postgres();
+select is(array[pg_temp.piece('u:s2/G1'), pg_temp.mstatus('u:s2/G1', 'm1'), pg_temp.piece('u:s2/G2'), pg_temp.mstatus('u:s2/G2', 'm2')],
+  array['taken:taken_back', 'in_progress', 'taken:taken_back', 'in_progress'], 'the markers keep their pieces, on hold');
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.script_page_marking_name_shows(pg_temp.k('p:s2:1'), 'A name in the corner')), 'ok',
+  'staff say a name shows on s2''s page 1');
+select tests.as_postgres();
+select is((select array_agg(t.s order by t.s) from (
+             select g.label || ':' || (select c.name from c where c.id = x.marker_id) || ':' || x.reason as s
+           from public.marking_unit_exclusions x join public.marking_units u on u.id = x.unit_id
+           join public.question_groups g on g.id = u.group_id where u.script_id = pg_temp.k('s2')) t),
+  array['G1:m1:name_seen', 'G1:m2:name_seen', 'G2:m1:name_seen', 'G2:m2:name_seen'], 'm1 and m2 are kept from every piece of s2');
+select is(array[pg_temp.mstatus('u:s2/G1', 'm1'), pg_temp.mstatus('u:s2/G2', 'm2'), pg_temp.piece('u:s2/G1'), pg_temp.piece('u:s2/G2'),
+                (select string_agg(a.end_reason, ',' order by a.end_reason) from public.marking_assignments a
+                 where a.unit_id in (pg_temp.k('u:s2/G1'), pg_temp.k('u:s2/G2')))],
+  array['set_aside name_seen', 'set_aside name_seen', 'open:taken_back', 'open:taken_back', 'name_seen,name_seen'],
+  'their markings in progress are set aside, their holds end and both pieces are open, still on hold');
+select is((select array[s.state::text, s.taken_back_reason, pg_temp.audits('marking_script_taken_back', s.id)::text]
+           from public.scripts s where s.id = pg_temp.k('s2')),
+  array['needs_attention', 'Check the pages', '1'], 's2 stays taken back as it was: it is not taken back a second time');
 
 -- The list says when there are more than the 200 it sends: on exam m, s200's 201 pages were each accepted as they are.
 insert into kv values ('m', tests.marking_exam((select id from public.subjects where name = 'ZZ Marking checks')));
