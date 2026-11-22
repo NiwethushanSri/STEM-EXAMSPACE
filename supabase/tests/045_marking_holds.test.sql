@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(156);
+select plan(158);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -474,16 +474,24 @@ select is(pg_temp.code(public.script_exception_confirm((select e.id from public.
                                                        'The name is hidden now')),
   'ok', 'and confirm it, which they could not do while the script was being marked');
 select tests.as_postgres();
-select is(array[pg_temp.st('g1'), public.marking_script_busy(pg_temp.k('g1'))::text], array['verified', 'true'],
-  'the script is verified; its new marking pictures are being made');
-select tests.as_user(pg_temp.uid('admin'));
-select is(pg_temp.why(public.marking_script_hand_back(pg_temp.k('g1'))), 'conflict pictures_updating', 'so it is not handed back yet');
-select tests.as_postgres();
+select is(array[pg_temp.st('g1'), public.marking_script_busy(pg_temp.k('g1'))::text], array['needs_attention', 'true'],
+  'the script is not verified yet: its new marking pictures are being made, and staff check the new one (Task 8)');
 -- The remask finishes: page 2 gets its new marking picture. The script is not being marked, so nothing is held.
 update public.processing_jobs set state = 'done', finished_at = now() where upload_id = pg_temp.upload('g1') and kind = 'remask' and state in ('queued', 'running');
 update public.script_pages set marking_path = replace(marking_path, '-marking.jpg', '-remask-marking.jpg') where id = pg_temp.k('p:g1:2');
 select is(array[pg_temp.alerts('g1'), public.marking_script_busy(pg_temp.k('g1'))::text], array['name_visible open', 'false'],
   'the new picture raises nothing: the script is with staff');
+-- Staff check the new picture (Task 8): the script is verified. A remask of its file then holds it back.
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.script_page_marking_checked(pg_temp.k('p:g1:2'), pg_temp.path('p:g1:2'))), 'ok', 'staff check the new marking picture');
+select tests.as_postgres();
+select public.script_remask_queue(pg_temp.upload('g1'));
+select is(array[pg_temp.st('g1'), public.marking_script_busy(pg_temp.k('g1'))::text], array['verified', 'true'],
+  'the script is verified; its marking pictures are being made again');
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.why(public.marking_script_hand_back(pg_temp.k('g1'))), 'conflict pictures_updating', 'so it is not handed back yet');
+select tests.as_postgres();
+update public.processing_jobs set state = 'done', finished_at = now() where upload_id = pg_temp.upload('g1') and kind = 'remask' and state = 'queued';
 
 -- ---------------------------------------------------------------------------------------------
 -- hand_back_returns_pieces_to_their_markers: m2's hold had 5 minutes left.
@@ -873,6 +881,7 @@ select tests.as_postgres();
 update public.processing_jobs set state = 'done', finished_at = now() where upload_id = pg_temp.upload('g2') and kind = 'remask' and state in ('queued', 'running');
 select pg_temp.remask(pg_temp.upload('g2'), 'hidden');
 select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_marking_checked(pg_temp.k('p:g2:2'), pg_temp.path('p:g2:2'));  -- Task 8: staff check the new picture
 insert into res values ('hb_g2', public.marking_script_hand_back(pg_temp.k('g2')));
 select tests.as_postgres();
 select is(array[pg_temp.code(pg_temp.r('hb_g2')), pg_temp.holder('g2/G1'), pg_temp.us('g2/G1'), pg_temp.hold('g2/G1'),
@@ -893,6 +902,7 @@ update public.processing_jobs set state = 'done', finished_at = now() where uplo
 select pg_temp.remask(pg_temp.upload('g3'), 'hidden');
 update public.script_pages set rotation = 180 where id = pg_temp.k('p:g3:1');
 select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_marking_checked(pg_temp.k('p:g3:3'), pg_temp.path('p:g3:3'));  -- Task 8: staff check the new picture
 insert into res values ('hb_g3', public.marking_script_hand_back(pg_temp.k('g3')));
 select tests.as_postgres();
 select is(array[pg_temp.r('hb_g3') ->> 'ok', pg_temp.r('hb_g3') ->> 'reopened', pg_temp.ms('g3/G1', 'm1'), pg_temp.us('g3/G1'), pg_temp.holder('g3/G1'),

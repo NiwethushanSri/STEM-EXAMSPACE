@@ -4,6 +4,9 @@ import { revalidatePath } from "next/cache";
 import { exceptionMessageFor } from "@stem/shared";
 import {
   failureMessage,
+  markingCheckedMessage,
+  markingCheckFailure,
+  NAME_SHOWS_MESSAGE,
   parseCandidates,
   reasonProblem,
   reasonRequired,
@@ -66,6 +69,32 @@ export async function saveHiddenAreasAction(pageId: string, areas: QueueArea[], 
   const a = data as Answer;
   if (a.ok === true) return { ok: true, message: clean.length ? "Hidden areas saved." : "Hidden areas removed." };
   return { ok: false, message: failureMessage(a) };
+}
+
+/** "The name is hidden": staff checked this marking picture of the page (the one they were shown). */
+export async function markingCheckedAction(pageId: string, markingPath: string): Promise<QueueActionResult> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(pageId) || typeof markingPath !== "string" || markingPath.trim() === "" || markingPath.length > 1000) return { ok: false, message: GENERIC };
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("script_page_marking_checked", { p_page: pageId, p_marking_path: markingPath });
+  revalidatePath(PATH);
+  if (error || !data || typeof data !== "object" || Array.isArray(data)) return { ok: false, message: GENERIC };
+  const a = data as Answer;
+  return a.ok === true ? { ok: true, message: markingCheckedMessage(a.script_state) } : { ok: false, message: markingCheckFailure(a) };
+}
+
+/** "A name still shows": the page goes back to "Hide the name", with the reason. */
+export async function markingNameShowsAction(pageId: string, reason: string): Promise<QueueActionResult> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(pageId) || typeof reason !== "string") return { ok: false, message: GENERIC };
+  const problem = reasonProblem(reason, true);
+  if (problem) return { ok: false, message: problem };
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("script_page_marking_name_shows", { p_page: pageId, p_reason: reason.trim() });
+  revalidatePath(PATH);
+  if (error || !data || typeof data !== "object" || Array.isArray(data)) return { ok: false, message: GENERIC };
+  const a = data as Answer;
+  return a.ok === true ? { ok: true, message: NAME_SHOWS_MESSAGE } : { ok: false, message: markingCheckFailure(a) };
 }
 
 /** The exam's candidates whose index number contains the search (spaces, hyphens and case ignored), at most 10. The

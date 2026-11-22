@@ -142,6 +142,15 @@ create function pg_temp.finish(p_claim jsonb, p_ok boolean) returns jsonb langua
     case when not p_ok then 'RuntimeError' end) $$;
 create function pg_temp.fail_remask(p_up text) returns jsonb language sql as $$
   select pg_temp.finish(pg_temp.claim_remask(p_up), false) $$;
+-- Phase 3A (Task 8): an admin checks the marking pictures that wait on a candidate's script ("The name is hidden").
+create function pg_temp.check_pictures(p_booking text) returns void language plpgsql as $$
+begin
+  perform tests.as_user(pg_temp.uid('admin'));
+  perform public.script_page_marking_checked((x ->> 'page_id')::uuid, x ->> 'marking_path')
+  from jsonb_array_elements(public.script_marking_checks_list() -> 'items') x
+  where x ->> 'script_number' = (select s.number from public.scripts s where s.booking_id = pg_temp.k(p_booking));
+  perform tests.as_postgres();
+end $$;
 -- One page of a claim, by position.
 create function pg_temp.at(p_claim jsonb, p_idx int) returns jsonb language sql immutable as $$
   select x from jsonb_array_elements(p_claim -> 'pages') x where (x ->> 'source_index')::int = p_idx $$;
@@ -247,6 +256,7 @@ select tests.as_postgres();
 insert into res select 'r0', pg_temp.claim_remask('u3');
 select pg_temp.remasked(pg_temp.r('r0'), pg_temp.answer(pg_temp.r('r0')));
 select pg_temp.finish(pg_temp.r('r0'), true);
+select pg_temp.check_pictures('b3');
 -- Home b4: late.
 select pg_temp.hand_in('s4', 'b4', 'd4', 'u4', '2031-08-04 13:00Z', '2031-08-04 13:05Z');
 select pg_temp.run('u4', jsonb_build_array(pg_temp.page('u4', 0, 'q4', 1), pg_temp.page('u4', 1, 'q4', 2), pg_temp.page('u4', 2, 'q4', 3),
@@ -441,6 +451,7 @@ begin
   perform pg_temp.as_admin($q$select public.script_exception_confirm(pg_temp.exc('u1', 2, 'poor_quality'), 'Readable')$q$);
   v := concat_ws(' ', v, pg_temp.ask('u1'), pg_temp.forced('u1', pg_temp.u1pages()), pg_temp.sim('u1'), pg_temp.ask('u1'),
     pg_temp.forced('u1', pg_temp.u1pages()));
+  perform pg_temp.check_pictures('b1');
   perform public.scan_booking_complete(pg_temp.k('b1'));
   return concat_ws(' ', v, 'same=' || (pg_temp.pid('u1', 2) = v_page), pg_temp.seen(v_page), pg_temp.state('b1'), pg_temp.safe());
 end $$;
@@ -473,6 +484,7 @@ begin
   perform pg_temp.as_admin($q$select public.script_page_set_hidden_areas(pg_temp.pid('u3', 2), '[{"x":0.02,"y":0.4,"w":0.05,"h":0.3}]', 'Name in the margin')$q$);
   v := concat_ws(' ', pg_temp.sim('u3'), pg_temp.ask('u3'), pg_temp.forced('u3', pg_temp.u3pages()), pg_temp.ask('u3'),
     pg_temp.forced('u3', pg_temp.u3pages()));
+  perform pg_temp.check_pictures('b3');
   return concat_ws(' ', v, 'same=' || (pg_temp.pid('u3', 2) = v_page), pg_temp.seen(v_page),
     'extra=' || (pg_temp.pid('u3', 4) = pg_temp.k('p3_4')) || ':' || (public.script_page_remask_context(pg_temp.k('p3_4')) ->> 'confirmed'),
     pg_temp.state('b3'), pg_temp.safe());
@@ -1532,6 +1544,7 @@ select is(concat_ws('/', pg_temp.jobs('u3', 'remask', 'queued'), public.script_p
 insert into res select 'r5b', pg_temp.claim_remask('u3');
 select pg_temp.remasked(pg_temp.r('r5b'), pg_temp.answer(pg_temp.r('r5b')));
 select pg_temp.finish(pg_temp.r('r5b'), true);
+select pg_temp.check_pictures('b3');
 select is(pg_temp.state('b3'), 'verified', 'once the remask makes its picture (proved again), the script is verified');
 
 -- ---------------------------------------------------------------------------------------------

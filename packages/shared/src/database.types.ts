@@ -1167,14 +1167,14 @@ isOneToOne: false
                   ]
                 },"script_pages": {
                   Row: {
-                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"full_rotation": number,"id": string,"marking_inputs": string | null,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"full_rotation": number,"id": string,"marking_checked_at": string | null,"marking_checked_by": string | null,"marking_checked_path": string | null,"marking_inputs": string | null,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"full_rotation"?: number,"id"?: string,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"full_rotation"?: number,"id"?: string,"marking_checked_at"?: string | null,"marking_checked_by"?: string | null,"marking_checked_path"?: string | null,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   Update: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"full_rotation"?: number,"id"?: string,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"full_rotation"?: number,"id"?: string,"marking_checked_at"?: string | null,"marking_checked_by"?: string | null,"marking_checked_path"?: string | null,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
                   }
                   Relationships: [
                     {
@@ -1188,6 +1188,12 @@ isOneToOne: false
       columns: ["copy_id"]
 isOneToOne: false
       referencedRelation: "paper_copies"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_pages_marking_checked_by_fkey"
+      columns: ["marking_checked_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
       referencedColumns: ["id"]
     },{
       foreignKeyName: "script_pages_upload_id_fkey"
@@ -2214,6 +2220,9 @@ isOneToOne: false
 "script_links_write":
 { Args: { "p_actor": string,"p_links": Json,"p_now": string,"p_reason": string,"p_script": string }; Returns: boolean
                            },
+"script_marking_checks_list":
+{ Args: { "p_exam"?: string }; Returns: Json
+                           },
 "script_notice_content":
 { Args: { "p_notice": Omit<Database["public"]['Tables']["script_notices"]['Row'], Database["public"]['Tables']["script_notices"]['ComputedFields']> }; Returns: Json
                            },
@@ -2277,14 +2286,26 @@ isOneToOne: false
 "script_page_locked":
 { Args: { "p_page": string }; Returns: boolean
                            },
+"script_page_marking_checked":
+{ Args: { "p_marking_path": string,"p_page": string }; Returns: Json
+                           },
 "script_page_marking_lost":
 { Args: { "p_cleared"?: boolean,"p_extra"?: Json,"p_page": string }; Returns: undefined
                            },
 "script_page_marking_made":
 { Args: { "p_page": string }; Returns: undefined
                            },
+"script_page_marking_name_shows":
+{ Args: { "p_page": string,"p_reason": string }; Returns: Json
+                           },
+"script_page_needs_marking_check":
+{ Args: { "p_page": string }; Returns: boolean
+                           },
 "script_page_owners":
 { Args: { "p_page": string }; Returns: (string)[]
+                           },
+"script_page_pictures_updating":
+{ Args: { "p_page": string }; Returns: boolean
                            },
 "script_page_poor":
 { Args: { "p_answer": boolean,"p_marking": string,"p_quality": Json }; Returns: boolean
@@ -2327,6 +2348,11 @@ isOneToOne: false
                            },
 "script_pages_remasked":
 { Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_worker": string }; Returns: Json
+                           },
+"script_pages_to_check":
+{ Args: { "p_script": string }; Returns: {
+              "copy_page": number,"page_id": string
+            }[]
                            },
 "script_pages_valid":
 { Args: { "p_pages": Json,"p_prefix": string }; Returns: boolean

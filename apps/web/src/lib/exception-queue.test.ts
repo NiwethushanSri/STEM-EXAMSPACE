@@ -1,19 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   KIND_LABEL,
+  MARKING_CHECK_NOTE,
+  NAME_SHOWS_MESSAGE,
   actionLabel,
   actionsFor,
+  asksMarkingCheck,
+  checkTitle,
   conflictMessage,
   failureMessage,
   foundInWords,
+  markingCheckedMessage,
+  markingCheckFailure,
   NAME_BOX_MESSAGE,
+  needsMarkingCheck,
   needsNameCheck,
   noNameOffered,
   parseCandidates,
+  parseMarkingChecks,
   parseQueue,
   reasonProblem,
   resolutionLabel,
   resolvedMessage,
+  resolvedNote,
   rpcFor,
   type QueueItem,
 } from "./exception-queue";
@@ -410,5 +419,91 @@ describe("parseCandidates", () => {
       { bookingId: "b", name: "Sam Pupil", indexNumber: "SE-2026-0001", sitting: "centre", status: "paid", attendance: "present", scriptNumber: "S-1", pages: [2, 3], copyPages: 6 },
     ]);
     expect(parseCandidates({ ok: false, code: "invalid_input" })).toBeNull();
+  });
+});
+
+describe("marking pictures to check (Phase 3A Task 8)", () => {
+  const check = (over: Record<string, unknown> = {}) => ({
+    page_id: "11111111-1111-4111-8111-111111111111",
+    exam_id: "55555555-5555-4555-8555-555555555555",
+    script_number: "S-MATH1-0001",
+    booking: { id: "66666666-6666-4666-8666-666666666666", name: "Sam Pupil", index_number: "SE-2026-0001", sitting: "home", status: "paid" },
+    copy_page: 2,
+    full_path: "e/u/1-full.jpg",
+    marking_path: "e/u/7-1/1-marking.jpg",
+    ...over,
+  });
+
+  it("reads what script_marking_checks_list answers, and skips malformed items", () => {
+    const c = parseMarkingChecks({ ok: true, items: [check(), check({ page_id: null }), check({ marking_path: "" }), 4] });
+    expect(c?.items).toEqual([
+      {
+        pageId: "11111111-1111-4111-8111-111111111111",
+        examId: "55555555-5555-4555-8555-555555555555",
+        scriptNumber: "S-MATH1-0001",
+        booking: { id: "66666666-6666-4666-8666-666666666666", name: "Sam Pupil", indexNumber: "SE-2026-0001", sitting: "home", status: "paid" },
+        copyPage: 2,
+        fullPath: "e/u/1-full.jpg",
+        markingPath: "e/u/7-1/1-marking.jpg",
+      },
+    ]);
+    expect(parseMarkingChecks({ ok: false, code: "forbidden" })).toBeNull();
+    expect(parseMarkingChecks({ ok: true, items: "x" })).toBeNull();
+  });
+
+  it("counts the pages that wait, once each", () => {
+    const c = parseMarkingChecks({ ok: true, items: [check(), check({ page_id: "22222222-2222-4222-8222-222222222222", copy_page: null }), check()] })!;
+    expect(needsMarkingCheck(c.items)).toBe(2);
+    expect(needsMarkingCheck([])).toBe(0);
+  });
+
+  it("names the script and its page, or a page the family added", () => {
+    const [a, b] = parseMarkingChecks({ ok: true, items: [check(), check({ copy_page: null })] })!.items;
+    expect(checkTitle(a)).toBe("Script S-MATH1-0001, page 2");
+    expect(checkTitle(b)).toBe("Script S-MATH1-0001, a page the family added");
+  });
+
+  it("after an accept, says where to check the marking picture", () => {
+    expect(MARKING_CHECK_NOTE).toBe("Accepted. When the marking picture is made, check it under Marking pictures to check.");
+    const quality = item({ kind: "poor_quality", details: { flags: ["layout_unexpected"], copy_page: 2 } });
+    expect(asksMarkingCheck(quality, "confirm")).toBe(true);
+    expect(resolvedNote(quality, "confirm", "Confirmed.")).toBe(MARKING_CHECK_NOTE);
+    expect(resolvedNote(item({ kind: "name_visible", details: {} }), "confirm", "Confirmed.")).toBe(MARKING_CHECK_NOTE);
+    expect(resolvedNote(item({ kind: "uncoded_family_page", details: {} }), "confirm", "Confirmed.")).toBe(MARKING_CHECK_NOTE);
+    expect(resolvedNote(item({ kind: "no_code", details: {} }), "assign", "Assigned. The page is in the candidate's script.")).toBe(
+      "Assigned. The page is in the candidate's script. When the marking picture is made, check it under Marking pictures to check.",
+    );
+  });
+
+  it("says nothing more when the page needs no check", () => {
+    expect(resolvedNote(item(), "keep_existing", "Kept the page already chosen.")).toBe("Kept the page already chosen.");
+    expect(resolvedNote(item({ kind: "not_expected", details: {} }), "assign", "Assigned.")).toBe("Assigned.");
+    expect(resolvedNote(item({ kind: "poor_quality", details: {} }), "reject", "Rejected.")).toBe("Rejected.");
+    expect(resolvedNote(item({ kind: "mixed_versions", details: {}, page: null }), "confirm", "Confirmed.")).toBe("Confirmed.");
+    expect(resolvedNote(item({ kind: "poor_quality", details: { from: "remask", stale_marking: true } }), "confirm", "Confirmed.")).toBe("Confirmed.");
+    expect(asksMarkingCheck(item({ kind: "processing_failed", details: { kind: "remask" }, page: null }), "confirm")).toBe(false);
+  });
+
+  it("says why a check was refused", () => {
+    expect(markingCheckFailure({ code: "conflict", reason: "changed" })).toContain("changed since it was shown");
+    expect(markingCheckFailure({ code: "conflict", reason: "pictures_updating" })).toContain("being made again");
+    expect(markingCheckFailure({ code: "conflict", reason: "name_visible" })).toContain("Hide it under Problems first");
+    expect(markingCheckFailure({ code: "conflict", reason: "not_needed" })).toContain("needs no check");
+    expect(markingCheckFailure({ code: "conflict" })).toContain("changed since it was shown");
+    expect(markingCheckFailure({ code: "forbidden" })).toBe("You do not have permission to do that.");
+    expect(markingCheckFailure({ code: "reason_required" })).toBe("Give a reason of 3 to 300 characters.");
+  });
+
+  it("says what a check did", () => {
+    expect(markingCheckedMessage("verified")).toBe("Checked. The name is hidden, and the script is verified.");
+    expect(markingCheckedMessage("needs_attention")).toBe("Checked. The name is hidden.");
+    expect(NAME_SHOWS_MESSAGE).toContain('under Problems as "Name visible"');
+  });
+
+  it("says when staff saw a name on a marking picture", () => {
+    expect(foundInWords(item({ kind: "name_visible", details: { from: "staff_check" } }))[0]).toBe(
+      "Staff saw a name on this page's marking picture. Hide it, then confirm.",
+    );
+    expect(foundInWords(item({ kind: "name_visible", details: { from: "marker" } }))[0]).toContain("A marker reported");
   });
 });
