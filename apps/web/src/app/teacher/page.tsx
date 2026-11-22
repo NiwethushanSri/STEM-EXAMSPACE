@@ -46,6 +46,9 @@ async function Body() {
         <Link href="/teacher/attendance" className="font-medium text-blue-700 underline">
           Attendance registers
         </Link>
+        <Link href="/marking" className="font-medium text-blue-700 underline">
+          Marking
+        </Link>
       </div>
     </div>
   );

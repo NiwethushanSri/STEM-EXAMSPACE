@@ -29,26 +29,6 @@ export type Annotation = {
   text?: string;
 };
 
-const key = (paperId: string) => `stem-paper-ann-${paperId}`;
-
-export function loadAnnotations(paperId: string): Annotation[] {
-  try {
-    const raw = window.localStorage.getItem(key(paperId));
-    return raw ? (JSON.parse(raw) as Annotation[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function saveAnnotations(paperId: string, list: Annotation[]): boolean {
-  try {
-    window.localStorage.setItem(key(paperId), JSON.stringify(list));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export const TOOL_LABELS: Record<Exclude<Tool, "select">, string> = {
   tick: "Tick",
   cross: "Cross",

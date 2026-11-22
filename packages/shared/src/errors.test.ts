@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, allocationMessageFor, attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -305,5 +305,30 @@ describe("markingWorkMessageFor", () => {
     expect(markingWorkMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("alertMessageFor and releaseBlockedMessage", () => {
+  it("says in one sentence why Release waits", () => {
+    expect(releaseBlockedMessage("picture_unchecked")).toBe("Release waits for a staff check of the new marking picture.");
+    expect(releaseBlockedMessage("picture_missing")).toBe("Release waits until every page has a marking picture.");
+    expect(releaseBlockedMessage("taken_back")).toBe("Release waits until staff hand the script back to the markers.");
+    expect(releaseBlockedMessage("pictures_updating")).toBe("Release waits until the new marking pictures are made.");
+    expect(releaseBlockedMessage("__proto__")).toBe("This cannot be released yet.");
+    expect(releaseBlockedMessage(null)).toBe("This cannot be released yet.");
+  });
+  it("maps each code of releasing and noting an alert", () => {
+    expect(alertMessageFor("forbidden")).toBe("You do not have permission to do that.");
+    expect(alertMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(alertMessageFor("not_found")).toBe("This alert could not be found. Refresh the page.");
+    expect(alertMessageFor("wrong_kind")).toBe("That action does not fit this kind of alert.");
+    expect(alertMessageFor("conflict", "closed")).toBe("This alert is already closed. Refresh the page.");
+    expect(alertMessageFor("conflict", "picture_unchecked")).toBe("Release waits for a staff check of the new marking picture.");
+    expect(alertMessageFor("conflict")).toBe("This cannot be released yet.");
+  });
+  it("falls back to the generic message", () => {
+    expect(alertMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(alertMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(alertMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });

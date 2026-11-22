@@ -209,9 +209,9 @@ test("tutor_sees_exactly_assigned_students_upcoming_bookings", async ({ page }) 
   await expect(page.getByText("£")).toHaveCount(0);
 });
 
-test("corrector_sees_the_placeholder", async ({ page }) => {
+test("corrector_home_links_to_marking", async ({ page }) => {
   await signIn(page, corrector, /\/corrector$/);
-  await expect(page.getByText("Marking arrives in the next update")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Go to marking" })).toHaveAttribute("href", "/marking");
   await expect(page.getByText("Preview — sample data")).toHaveCount(0);
 });
 

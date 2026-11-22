@@ -126,6 +126,33 @@ describe("questions and mark scheme actions", () => {
   });
 });
 
+describe("marking actions", () => {
+  it("the marker and lead ones are refused for a tutor and touch nothing", async () => {
+    state.role = "tutor";
+    const m = await import("./marking/actions");
+    await expect(m.nextScript(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.nextScript(UUID, UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.giveBack(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.releaseAlert(UUID, "Pictures checked")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.noteAlert(UUID, "Seen it")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.releaseAllAlerts(UUID, "All checked")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(6);
+    expect(state.calls.every((c) => c.join() === "corrector,teacher,admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the admin ones are refused for a corrector (a lead marker too) and touch nothing", async () => {
+    state.role = "corrector";
+    const a = await import("./admin/marking/actions");
+    await expect(a.assignUnits([UUID], UUID, "Cover for Ann")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.assignSome(UUID, null, UUID, 5, "Even the load")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.takeBackUnits([UUID], "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.reassignUnits([UUID], UUID, "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(4);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+});
+
 describe("attendance actions called by a student or parent", () => {
   it("every attendance action is refused and touches nothing", async () => {
     state.role = "student";

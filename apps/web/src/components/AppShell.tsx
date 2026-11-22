@@ -13,7 +13,7 @@ export function ShellUserProvider({ user, children }: { user: ShellUser; childre
   return <ShellUserContext.Provider value={user}>{children}</ShellUserContext.Provider>;
 }
 
-const LIVE_ADMIN = ["/admin/attendance", "/admin/accounts", "/admin/exams", "/admin/venues", "/admin/bookings", "/admin/finance", "/admin/scripts", "/admin/marking/markers"];
+const LIVE_ADMIN = ["/admin/attendance", "/admin/accounts", "/admin/exams", "/admin/venues", "/admin/bookings", "/admin/finance", "/admin/scripts", "/admin/marking"];
 
 /** Admin pages that still show sample data until their part of the build. */
 function isPreviewPath(pathname: string) {
@@ -69,8 +69,6 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
     name: "Examiner",
     items: [
       { href: "/examiner", label: "Worklist" },
-      { href: "/examiner/papers", label: "Student papers" },
-      { href: "/examiner/marking", label: "Marking" },
       { href: "/examiner/standardisation", label: "Standardisation" },
     ],
   },
@@ -87,6 +85,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/finance", label: "Finance" },
       { href: "/admin/scripts", label: "Scripts" },
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
+      { href: "/admin/marking", label: "Marking" },
       { href: "/admin/marking/markers", label: "Markers" },
     ],
   },
@@ -96,10 +95,17 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/teacher", label: "Home" },
       { href: "/teacher/exams", label: "Exams" },
       { href: "/teacher/attendance", label: "Attendance" },
+      { href: "/marking", label: "Marking" },
     ],
   },
   tutor: { name: "Tutor", items: [{ href: "/tutor", label: "Home" }] },
-  corrector: { name: "Exam corrector", items: [{ href: "/corrector", label: "Home" }] },
+  corrector: {
+    name: "Exam corrector",
+    items: [
+      { href: "/corrector", label: "Home" },
+      { href: "/marking", label: "Marking" },
+    ],
+  },
   admin: {
     name: "Admin",
     items: [
@@ -115,7 +121,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/attendance", label: "Attendance" },
       { href: "/admin/scripts", label: "Scripts" },
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
-      { href: "/admin/marking", label: "Marking progress" },
+      { href: "/admin/marking", label: "Marking" },
       { href: "/admin/marking/markers", label: "Markers" },
       { href: "/admin/notices", label: "Notices" },
       { href: "/admin/audit", label: "Audit log" },

@@ -672,7 +672,8 @@ select is((select array_agg(x order by x) from (
   array['pages_set_aside c1', 'picture_changed a1'], 'the closed alerts of exam e');
 select is((select a from jsonb_array_elements(pg_temp.r('list_admin') -> 'alerts') a where (a ->> 'script_id')::uuid = pg_temp.k('a2') and a ->> 'kind' = 'picture_missing'),
   (select jsonb_build_object('id', al.id, 'kind', 'picture_missing', 'exam_id', pg_temp.k('e'), 'exam_title', 'ZZ Marking exam', 'script_id', pg_temp.k('a2'),
-     'script_number', s.number, 'index_number', d.index_number, 'page_n', 3, 'unit_id', null, 'created_at', al.created_at, 'can_release', false)
+     'script_number', s.number, 'index_number', d.index_number, 'page_n', 3, 'unit_id', null, 'created_at', al.created_at, 'can_release', false,
+     'release_blocked', null)
    from public.marking_alerts al join public.scripts s on s.id = al.script_id join public.bookings b on b.id = s.booking_id
    join public.student_details d on d.profile_id = b.student_id
    where al.id = pg_temp.alert('a2', 'picture_missing')),

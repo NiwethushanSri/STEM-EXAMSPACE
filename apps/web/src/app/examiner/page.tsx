@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { AppShell, Card, Stat } from "@/components/AppShell";
 import { responses } from "@/lib/mock-data";
 import { examinerProgress } from "@/lib/site-data";
@@ -16,7 +15,7 @@ export default function ExaminerHome() {
           <ul className="divide-y divide-slate-100 text-sm">
             {responses.map((r) => (
               <li key={r.id} className="flex items-center justify-between py-2.5">
-                <Link href="/examiner/marking" className="text-blue-700 underline">{r.id}</Link>
+                <span className="text-slate-900">{r.id}</span>
                 <span className="text-slate-500">{r.status === "not_started" ? "Marking not started" : "In progress"}</span>
               </li>
             ))}

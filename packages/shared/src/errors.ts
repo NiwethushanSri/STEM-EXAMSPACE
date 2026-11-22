@@ -475,3 +475,33 @@ export function markingWorkMessageFor(code: string | null | undefined, reason?: 
   }
   return code && Object.hasOwn(markingWorkMessages, code) ? markingWorkMessages[code] : messages.internal;
 }
+
+/** Why an open picture_changed alert cannot be released yet: the reason marking_alert_can_release gives, which
+ * marking_alerts_list returns as release_blocked and marking_alert_release answers as a conflict's reason. */
+const releaseBlocked: Record<string, string> = {
+  taken_back: "Release waits until staff hand the script back to the markers.",
+  pictures_updating: "Release waits until the new marking pictures are made.",
+  picture_missing: "Release waits until every page has a marking picture.",
+  picture_unchecked: "Release waits for a staff check of the new marking picture.",
+};
+
+/** One plain sentence for why Release is not offered; an unknown reason gets a general one. */
+export function releaseBlockedMessage(reason: string | null | undefined): string {
+  return reason && Object.hasOwn(releaseBlocked, reason) ? releaseBlocked[reason] : "This cannot be released yet.";
+}
+
+/** Failure codes of releasing and noting marking alerts (marking_alert_release, marking_alerts_release_all,
+ * marking_alert_note, marking_alerts_list). A conflict says why in `reason`: closed, or what holds a release back. */
+const alertMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  reason_required: "Give a reason of 3 to 300 characters.",
+  invalid_input: "Check the details and try again.",
+  not_found: "This alert could not be found. Refresh the page.",
+  wrong_kind: "That action does not fit this kind of alert.",
+};
+
+/** Message for a marking alert RPC failure code (and a conflict's reason); unknown codes get the generic message. */
+export function alertMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") return reason === "closed" ? "This alert is already closed. Refresh the page." : releaseBlockedMessage(reason);
+  return code && Object.hasOwn(alertMessages, code) ? alertMessages[code] : messages.internal;
+}
