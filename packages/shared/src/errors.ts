@@ -476,6 +476,15 @@ export function markingWorkMessageFor(code: string | null | undefined, reason?: 
   return code && Object.hasOwn(markingWorkMessages, code) ? markingWorkMessages[code] : messages.internal;
 }
 
+/** The marking screen's one entry point for every code it can meet: opening, saving and submitting a piece
+ * (marking_unit_open, marking_save, marking_submit), reporting a name (marking_name_visible: invalid_input, not_found,
+ * forbidden) and the marker's allocation codes (marking_next, marking_give_back). A conflict says why in `reason`.
+ * markingMessageFor stays the exam settings' messages (Task 4): its codes mean other things there. */
+export function markingScreenMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict" || (code && Object.hasOwn(markingWorkMessages, code))) return markingWorkMessageFor(code, reason);
+  return allocationMessageFor(code, "marker");
+}
+
 /** Why an open picture_changed alert cannot be released yet: the reason marking_alert_can_release gives, which
  * marking_alerts_list returns as release_blocked and marking_alert_release answers as a conflict's reason. */
 const releaseBlocked: Record<string, string> = {

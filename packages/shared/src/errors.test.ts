@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -305,6 +305,33 @@ describe("markingWorkMessageFor", () => {
     expect(markingWorkMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("markingScreenMessageFor", () => {
+  it("covers every code the marking screen meets in one place", () => {
+    expect(markingScreenMessageFor("on_hold")).toBe("This script is on hold. The lead marker has been told.");
+    expect(markingScreenMessageFor("hold_expired")).toBe("Your hold on this script has ended. Press Next script to carry on.");
+    expect(markingScreenMessageFor("incomplete")).toBe("Give every question a mark, or NR, before you submit.");
+    expect(markingScreenMessageFor("mark_out_of_range")).toBe("That mark is not allowed for this question.");
+    expect(markingScreenMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(markingScreenMessageFor("not_found")).toBe("This script could not be found. Go back to your list.");
+    expect(markingScreenMessageFor("conflict", "rev")).toBe("This script was changed on another screen. Reload to carry on.");
+    expect(markingScreenMessageFor("conflict", "set_aside")).toContain("no longer yours");
+    expect(markingScreenMessageFor("conflict", "submitted")).toContain("already been submitted");
+  });
+  it("also says the marker's allocation codes", () => {
+    expect(markingScreenMessageFor("nothing_left")).toBe("Nothing left to mark for now.");
+    expect(markingScreenMessageFor("not_approved")).toBe("You are not approved to mark this subject. Ask an admin.");
+    expect(markingScreenMessageFor("marking_not_open")).toBe("Marking has not opened for this exam.");
+  });
+  it("falls back to the generic message", () => {
+    expect(markingScreenMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(markingScreenMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(markingScreenMessageFor(null)).toBe("Something went wrong. Please try again.");
+  });
+  it("leaves the exam settings' messages as they were", () => {
+    expect(markingMessageFor("conflict")).toBe("Marking has opened, so how this exam is marked can no longer change.");
   });
 });
 
