@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { PageViewer } from "@/components/scripts/PageViewer";
 import { markingCheckedAction, markingNameShowsAction } from "@/app/admin/scripts/exceptions/actions";
-import { candidateLabel, checkTitle, reasonProblem, type MarkingCheckItem } from "@/lib/exception-queue";
+import { canSayNameHidden, candidateLabel, checkTitle, reasonProblem, type MarkingCheckItem } from "@/lib/exception-queue";
 
 const BUTTON = "rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
 const QUIET = "rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
@@ -29,10 +29,11 @@ function NoteLine({ note }: { note: Note | null }) {
 /**
  * The marking pictures staff check before their page counts (Phase 3A Task 8): pages staff accepted, whose marking
  * picture was made afterwards. On the left the pages, oldest first; on the right the one chosen, with its full picture
- * beside its marking picture (what markers see). "The name is hidden" lets the page count; "A name still shows", with
- * a reason, sends it back to "Hide the name" under Problems.
+ * beside its marking picture (what markers see). "The name is hidden" lets the page count, and works only once the
+ * marking picture has loaded: a check never counts for a picture nobody saw. "A name still shows", with a reason, sends
+ * it back to "Hide the name" under Problems. more: the server has others beyond the 200 oldest shown.
  */
-export function MarkingChecks({ items }: { items: MarkingCheckItem[] }) {
+export function MarkingChecks({ items, more }: { items: MarkingCheckItem[]; more: boolean }) {
   const [selected, setSelected] = useState<string | null>(items[0]?.pageId ?? null);
   /** What the last check did: kept here, as the page leaves the list. */
   const [flash, setFlash] = useState<string | null>(null);
@@ -80,7 +81,7 @@ export function MarkingChecks({ items }: { items: MarkingCheckItem[] }) {
               </li>
             ))}
           </ul>
-          {items.length >= 200 && <p className="px-3 py-2 text-xs text-slate-500">Showing the 200 oldest. Check these to see the rest.</p>}
+          {more && <p className="px-3 py-2 text-xs text-slate-500">Showing the 200 oldest. Check these to see the rest.</p>}
         </section>
         {current && <Check key={`${current.pageId}|${current.markingPath}`} item={current} onDone={setFlash} focusOnOpen={chosen} />}
       </div>
@@ -92,7 +93,10 @@ function Check({ item, onDone, focusOnOpen }: { item: MarkingCheckItem; onDone: 
   const router = useRouter();
   const headingId = useId();
   const reasonId = useId();
+  const waitId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
+  /** Set once the marking picture has loaded and shows (this component starts again for another picture). */
+  const [pictureShown, setPictureShown] = useState(false);
   useEffect(() => {
     if (focusOnOpen) heading.current?.focus();
   }, [focusOnOpen]);
@@ -138,12 +142,30 @@ function Check({ item, onDone, focusOnOpen }: { item: MarkingCheckItem; onDone: 
       </div>
       <div className="grid gap-4 xl:grid-cols-2">
         <PageViewer path={item.fullPath} label={`${title}, full picture`} caption={<>Full picture: staff only.</>} />
-        <PageViewer path={item.markingPath} label={`${title}, marking picture`} caption={<>Marking picture: what markers see.</>} />
+        <PageViewer
+          path={item.markingPath}
+          label={`${title}, marking picture`}
+          caption={<>Marking picture: what markers see.</>}
+          onLoaded={() => setPictureShown(true)}
+        />
       </div>
       <div className="space-y-3 border-t border-slate-100 pt-4">
-        <button type="button" className={BUTTON} disabled={busy !== null} onClick={() => run(false)}>
-          {busy === "hidden" ? "Saving..." : "The name is hidden"}
-        </button>
+        <div className="space-y-1">
+          <button
+            type="button"
+            className={BUTTON}
+            disabled={!canSayNameHidden({ pictureShown, busy: busy !== null })}
+            aria-describedby={pictureShown ? undefined : waitId}
+            onClick={() => run(false)}
+          >
+            {busy === "hidden" ? "Saving..." : "The name is hidden"}
+          </button>
+          {!pictureShown && (
+            <p id={waitId} className="text-xs text-slate-500">
+              This works once the marking picture shows above.
+            </p>
+          )}
+        </div>
         <div className="space-y-1">
           <label htmlFor={reasonId} className="block text-sm font-medium text-slate-800">
             If a name still shows, say where (kept in the audit log)

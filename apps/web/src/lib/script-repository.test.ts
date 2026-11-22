@@ -5,6 +5,7 @@ import {
   actionText,
   beingMarked,
   handBackBlocked,
+  picturesToCheckText,
   listArgs,
   pageLabel,
   pagesEditable,
@@ -239,6 +240,26 @@ describe("taking a script back from the markers", () => {
     expect(handBackBlocked(takenBack("verified", [{ ...remask[0], state: "done" }]))).toBeNull();
     // Not taken back: there is nothing to hand back.
     expect(handBackBlocked(parseScriptDetail(detail())!)).toBeNull();
+  });
+  it("says when a marking picture check is what keeps it back (Phase 3A Task 8)", () => {
+    const waiting = (n: number, exceptions: unknown[] = []) => {
+      const d = detail();
+      return parseScriptDetail({
+        ...d,
+        script: { ...d.script, state: "needs_attention", taken_back_at: "2031-08-05T09:00:00Z", taken_back_reason: "Check", pictures_to_check: n },
+        uploads: [{ ...d.uploads[0], jobs: [] }],
+        exceptions,
+      })!;
+    };
+    expect(waiting(1).script.picturesToCheck).toBe(1);
+    expect(parseScriptDetail(detail())!.script.picturesToCheck).toBe(0);
+    expect(handBackBlocked(waiting(1))).toBe("A marking picture waits for a check under Marking pictures to check.");
+    expect(handBackBlocked(waiting(2))).toBe("2 marking pictures wait for a check under Marking pictures to check.");
+    expect(picturesToCheckText(0)).toBeNull();
+    // An open problem keeps it from verified first: settle that.
+    const open = { id: "e1", kind: "poor_quality", state: "open", created_at: "2031-08-04T11:00:00Z", details: {} };
+    expect(handBackBlocked(waiting(1, [open]))).toContain("Settle its open problems first");
+    expect(handBackBlocked(waiting(0))).toContain("Settle its open problems first");
   });
   it("makes the calls and says what happened", () => {
     expect(repoRpc(SCRIPT, { action: "take_back", reason: " Place a page " })).toEqual({

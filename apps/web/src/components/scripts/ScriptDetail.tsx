@@ -19,6 +19,7 @@ import {
   jobText,
   pageLabel,
   pagesEditable,
+  picturesToCheckText,
   remaskPending,
   reprocessable,
   reprocessRefusal,
@@ -294,11 +295,22 @@ export function ScriptDetailView({ detail }: { detail: ScriptDetail }) {
               <p className="text-sm text-amber-800">The booking is {s.bookingStatus.replace(/_/g, " ")}.</p>
             )}
           </div>
-          {open.length > 0 && (
-            <Link href={`/admin/scripts/exceptions${s.exam ? `?exam=${s.exam.id}` : ""}`} className="text-sm text-blue-700 underline">
-              {open.length} open {open.length === 1 ? "problem" : "problems"} in the exception queue
-            </Link>
-          )}
+          <div className="space-y-1 text-sm">
+            {open.length > 0 && (
+              <Link href={`/admin/scripts/exceptions${s.exam ? `?exam=${s.exam.id}` : ""}`} className="block text-blue-700 underline">
+                {open.length} open {open.length === 1 ? "problem" : "problems"} in the exception queue
+              </Link>
+            )}
+            {s.picturesToCheck > 0 && (
+              <Link
+                href={`/admin/scripts/exceptions?tab=checks${s.exam ? `&exam=${s.exam.id}` : ""}`}
+                data-testid="pictures-to-check"
+                className="block text-blue-700 underline"
+              >
+                {picturesToCheckText(s.picturesToCheck)}
+              </Link>
+            )}
+          </div>
         </div>
       </Card>
 

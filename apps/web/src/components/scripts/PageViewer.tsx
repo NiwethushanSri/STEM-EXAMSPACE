@@ -13,13 +13,16 @@ const TOOL = "rounded border border-slate-300 bg-white px-2 py-1 text-xs font-me
  * shown through a signed link of 300 seconds, asked for again once if the picture fails to load (a link that ran
  * out). Zoom in and out, and turn the view a quarter at a time (the view only: the stored picture does not change).
  * Hidden areas show over the picture; with `onDraw` staff draw new ones on it, upright, as fractions of the picture.
+ * `onLoaded` is called once the picture has actually loaded and shows (not while it is loading or after it failed).
  */
-export function PageViewer(props: { path: string; label: string; areas?: Area[]; onDraw?: (a: Area) => void; caption?: ReactNode }) {
+type ViewerProps = { path: string; label: string; areas?: Area[]; onDraw?: (a: Area) => void; caption?: ReactNode; onLoaded?: () => void };
+
+export function PageViewer(props: ViewerProps) {
   // A new picture starts again: its own link, zoom and view.
   return <Viewer key={props.path} {...props} />;
 }
 
-function Viewer({ path, label, areas = [], onDraw, caption }: { path: string; label: string; areas?: Area[]; onDraw?: (a: Area) => void; caption?: ReactNode }) {
+function Viewer({ path, label, areas = [], onDraw, caption, onLoaded }: ViewerProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -58,6 +61,7 @@ function Viewer({ path, label, areas = [], onDraw, caption }: { path: string; la
       className="block w-full"
       onLoad={() => {
         retried.current = false;
+        onLoaded?.();
       }}
       onError={() => {
         if (retried.current) return setFailed(true);

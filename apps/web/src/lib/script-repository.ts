@@ -236,6 +236,8 @@ export type ScriptDetail = {
      * reported a visible name). */
     takenBackAt: string | null;
     takenBackReason: string | null;
+    /** How many of its pages wait for staff to check their marking picture (Phase 3A Task 8). */
+    picturesToCheck: number;
   };
   candidate: Candidate;
   versions: DetailVersion[];
@@ -326,6 +328,7 @@ export function parseScriptDetail(data: unknown): ScriptDetail | null {
       bookingStatus: isObject(s.booking) ? str(s.booking.status) : null,
       takenBackAt: str(s.taken_back_at),
       takenBackReason: str(s.taken_back_reason),
+      picturesToCheck: num(s.pictures_to_check) ?? 0,
     },
     candidate: parseCandidate(data.candidate),
     versions: list(data.versions, (v) =>
@@ -421,11 +424,28 @@ export const reprocessable = (u: DetailUpload, s: ScriptState) => (u.state === "
 /** Whether the script is with the markers (ready to mark, being marked or marked): staff take it back to change it. */
 export const beingMarked = (s: ScriptState) => s === "ready_to_mark" || s === "marking" || s === "marked";
 
+/** That marking pictures of the script wait for staff to check them (Phase 3A Task 8), or null when none does. */
+export function picturesToCheckText(n: number): string | null {
+  if (n <= 0) return null;
+  return n === 1
+    ? "A marking picture waits for a check under Marking pictures to check."
+    : `${n} marking pictures wait for a check under Marking pictures to check.`;
+}
+
+/** Whether a check of a marking picture is what keeps the script from verified (or, being marked, its holds from
+ * release): a picture waits for a check and no problem of the script is open. */
+export const checkBlocks = (d: ScriptDetail) => d.script.picturesToCheck > 0 && !d.exceptions.some((e) => e.state === "open");
+
 /** Why a taken-back script cannot be handed back to the markers yet, in words (null: it can). It must be verified, and
- * no file of its pages may be waiting to be prepared or to have its marking pictures made. The database checks again. */
+ * no file of its pages may be waiting to be prepared or to have its marking pictures made. When a marking picture
+ * check is what keeps it from verified, that is said. The database checks again. */
 export function handBackBlocked(d: ScriptDetail): string | null {
   if (!d.script.takenBackAt) return null;
-  if (d.script.state !== "verified") return "The script must be verified before it goes back to the markers. Settle its open problems first.";
+  if (d.script.state !== "verified") {
+    return checkBlocks(d)
+      ? picturesToCheckText(d.script.picturesToCheck)
+      : "The script must be verified before it goes back to the markers. Settle its open problems first.";
+  }
   const busy = d.uploads.some((u) => u.jobs.some((j) => (j.kind === "remask" || j.kind === "prepare") && (j.state === "queued" || j.state === "running")));
   return busy ? "Its marking pictures are being made again. Hand it back when they are ready." : null;
 }

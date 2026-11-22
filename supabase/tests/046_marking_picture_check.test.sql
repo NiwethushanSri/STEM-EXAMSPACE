@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(86);
+select plan(114);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -99,6 +99,10 @@ begin
   b := public.script_exception_confirm(pg_temp.k('x:' || p_script));
   return pg_temp.code(a) || '/' || pg_temp.code(b);
 end $$;
+-- After a resolution, whether its page waits for a check (script_exception_check_due), as the caller reads it.
+create function pg_temp.due(p_exception uuid) returns text language sql as $$
+  select coalesce(public.script_exception_check_due(p_exception) ->> 'due', public.script_exception_check_due(p_exception) ->> 'code') $$;
+grant execute on function pg_temp.due(uuid) to public;
 grant execute on function pg_temp.uid(text), pg_temp.k(text), pg_temp.r(text), pg_temp.code(jsonb), pg_temp.why(jsonb), pg_temp.st(text),
   pg_temp.path(text), pg_temp.checked(text), pg_temp.upload(text), pg_temp.listed(text), pg_temp.audits(text, uuid),
   pg_temp.accept(text, int) to public;
@@ -121,6 +125,7 @@ select pg_temp.unproved('t1', 2);
 select is(pg_temp.st('a1'), 'needs_attention', 'confirmed_page_is_not_verified_until_its_marking_picture_is_checked: a1 has a page the server could not prove');
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.accept('a1', 2), 'ok/ok', 'staff hide the name on it and accept it');
+select is(pg_temp.due(pg_temp.k('x:a1')), 'later', 'the queue is told its marking picture is still to be made, then to be checked');
 select tests.as_postgres();
 select is(pg_temp.st('a1'), 'needs_attention', 'it has no marking picture yet');
 select is(pg_temp.sim(pg_temp.upload('a1')), '3/3', 'the remask makes the marking pictures of the file''s three pages');
@@ -129,9 +134,13 @@ select is(pg_temp.st('a1'), 'needs_attention', 'the script is not verified: nobo
 select is(array[pg_temp.needs('p:a1:1'), pg_temp.needs('p:a1:2'), pg_temp.needs('p:a1:3')], array[false, true, false],
   'only the page staff accepted needs a check');
 select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.due(pg_temp.k('x:a1')), 'now', 'now its picture is there to check');
 insert into res values ('list1', public.script_marking_checks_list(pg_temp.k('e')));
+insert into res values ('detail1', public.script_detail(pg_temp.k('a1')));
 select tests.as_postgres();
-select is(pg_temp.code(pg_temp.r('list1')), 'ok', 'admins read the list of marking pictures to check');
+select is(array[pg_temp.code(pg_temp.r('list1')), pg_temp.r('list1') ->> 'more'], array['ok', 'false'],
+  'admins read the list of marking pictures to check; there are no more than it shows');
+select is(pg_temp.r('detail1') -> 'script' ->> 'pictures_to_check', '1', 'the script page says one marking picture waits for a check');
 select is((select array_agg(x ->> 'page_id') from jsonb_array_elements(pg_temp.r('list1') -> 'items') x),
   array[pg_temp.k('p:a1:2')::text], 'it holds a1''s page 2, and nothing else');
 select is((select array[x ->> 'exam_id', x ->> 'script_number', x -> 'booking' ->> 'name', x ->> 'copy_page', x ->> 'full_path', x ->> 'marking_path']
@@ -197,6 +206,10 @@ insert into res values ('ck1', public.script_page_marking_checked(pg_temp.k('p:a
 select tests.as_postgres();
 select is(pg_temp.r('ck1') - 'script_state', jsonb_build_object('ok', true, 'page_id', pg_temp.k('p:a1:2')), 'the picture shown is checked');
 select is(pg_temp.r('ck1') ->> 'script_state', 'verified', 'and the answer says the script is verified now');
+select tests.as_user(pg_temp.uid('admin'));
+select is(array[pg_temp.due(pg_temp.k('x:a1')), public.script_detail(pg_temp.k('a1')) -> 'script' ->> 'pictures_to_check'], array['none', '0'],
+  'once checked, nothing waits: the queue and the script page say so');
+select tests.as_postgres();
 select is(pg_temp.st('a1'), 'verified', 'confirmed_page_is_not_verified_until_its_marking_picture_is_checked: once checked, a1 is verified');
 select is((select array[marking_checked_path, marking_checked_by::text, (marking_checked_at = now())::text] from public.script_pages where id = pg_temp.k('p:a1:2')),
   array[pg_temp.path('p:a1:2'), pg_temp.uid('admin')::text, 'true'], 'the page says which picture was checked, by whom and when');
@@ -236,6 +249,9 @@ select is((select array_agg(pg_temp.code(public.script_exception_confirm(e.id)) 
            where e.script_id = pg_temp.k('c1') and e.kind = 'poor_quality'),
   array['ok', 'ok'], 'staff accept c1''s blurred cover and page 2 as they are');
 select is(pg_temp.listed('g'), array[pg_temp.k('p:c1:2')], 'page 2 waits for a check; the cover does not');
+select is((select array_agg(pg_temp.due(e.id) order by (e.details ->> 'copy_page')::int) from public.script_exceptions e
+           where e.script_id = pg_temp.k('c1') and e.kind = 'poor_quality'),
+  array['none', 'now'], 'the queue promises no check for the cover, and a check now for page 2, whose picture is there');
 select tests.as_postgres();
 select is(pg_temp.st('c1'), 'needs_attention', 'so c1 is not verified yet');
 select tests.as_user(pg_temp.uid('admin'));
@@ -314,8 +330,9 @@ select tests.as_postgres();
 select tests.as_user(pg_temp.uid('teacher'));
 select is(array[pg_temp.code(public.script_marking_checks_list()),
                 pg_temp.code(public.script_page_marking_checked(pg_temp.k('p:a1:2'), 'x')),
-                pg_temp.code(public.script_page_marking_name_shows(pg_temp.k('p:a1:2'), 'A name shows'))],
-  array['forbidden', 'forbidden', 'forbidden'], 'a teacher may not read it, check or say a name shows');
+                pg_temp.code(public.script_page_marking_name_shows(pg_temp.k('p:a1:2'), 'A name shows')),
+                pg_temp.code(public.script_exception_check_due(pg_temp.k('x:a1')))],
+  array['forbidden', 'forbidden', 'forbidden', 'forbidden'], 'a teacher may not read it, check, say a name shows or ask whether a check is due');
 select tests.as_postgres();
 select tests.as_user(pg_temp.uid('corr'));
 select is(array[pg_temp.code(public.script_marking_checks_list()),
@@ -330,7 +347,13 @@ update public.profiles set status = 'suspended' where id = pg_temp.uid('admin2')
 select tests.as_user(pg_temp.uid('admin2'));
 select is(pg_temp.code(public.script_marking_checks_list()), 'forbidden', 'nor a suspended admin');
 select tests.as_postgres();
+select tests.as_user(pg_temp.uid('admin'));
+select is(array[pg_temp.code(public.script_exception_check_due(null)), pg_temp.code(public.script_exception_check_due(gen_random_uuid()))],
+  array['invalid_input', 'not_found'], 'asking whether a check is due needs an exception that exists');
+select tests.as_postgres();
 select ok(not has_function_privilege('anon', 'public.script_marking_checks_list(uuid)', 'execute')
+      and not has_function_privilege('anon', 'public.script_exception_check_due(uuid)', 'execute')
+      and has_function_privilege('authenticated', 'public.script_exception_check_due(uuid)', 'execute')
       and not has_function_privilege('anon', 'public.script_page_marking_checked(uuid, text)', 'execute')
       and not has_function_privilege('anon', 'public.script_page_marking_name_shows(uuid, text)', 'execute')
       and has_function_privilege('authenticated', 'public.script_marking_checks_list(uuid)', 'execute')
@@ -349,8 +372,9 @@ select ok(not has_function_privilege('authenticated', 'public.script_page_needs_
 select is((select array_agg(p.prosecdef::text || ':' || coalesce(array_to_string(p.proconfig, ','), '') order by p.proname)
            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname in ('script_marking_checks_list', 'script_page_marking_checked', 'script_page_marking_name_shows',
-                                                       'script_page_needs_marking_check', 'script_pages_to_check', 'script_page_pictures_updating')),
-  array_fill('true:search_path=""'::text, array[6]), 'each is security definer with an empty search path');
+                                                       'script_page_needs_marking_check', 'script_pages_to_check', 'script_page_pictures_updating',
+                                                       'script_exception_check_due')),
+  array_fill('true:search_path=""'::text, array[7]), 'each is security definer with an empty search path');
 
 -- ---------------------------------------------------------------------------------------------
 -- check_writes_audit
@@ -404,6 +428,137 @@ select is((select array_agg(distinct coalesce(u.hold_reason, '-')) from public.m
 select is((select array[e.state, e.details ->> 'from'] from public.script_exceptions e
            where e.page_id = pg_temp.k('p:t1:2') and e.kind = 'name_visible'),
   array['open', 'staff_check'], 'and the page goes through "Hide the name"');
+
+-- ---------------------------------------------------------------------------------------------
+-- A script being marked (Task 8 review): exam q is marked by question (G1: question 1; G2: question 2). s1's page 2 was
+-- accepted and its picture checked; m1 submitted G1 and m2 is marking G2. Then a paper area changes on page 2, which
+-- makes that page's marking picture again: the pieces are held (Task 7).
+-- ---------------------------------------------------------------------------------------------
+insert into c values ('m1', tests.create_user('corrector', 'active')), ('m2', tests.create_user('corrector', 'active')),
+  ('lead', tests.create_user('corrector', 'active'));
+insert into public.marker_approvals (marker_id, subject_id, lead, approved_at)
+select c.id, (select id from public.subjects where name = 'ZZ Marking checks'), c.name = 'lead', now() from c where c.name in ('m1', 'm2', 'lead');
+insert into kv values ('q', tests.marking_exam((select id from public.subjects where name = 'ZZ Marking checks')));
+select tests.structure(pg_temp.k('q'));
+insert into public.question_groups (exam_id, label, position) values (pg_temp.k('q'), 'G1', 1), (pg_temp.k('q'), 'G2', 2);
+update public.exam_questions q set group_id = g.id from public.question_groups g
+where q.exam_id = pg_temp.k('q') and q.parent_id is null and g.exam_id = q.exam_id and g.label = 'G' || q.label;
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('q'), 'by_question');
+select pg_temp.script('s1', 'q');
+select pg_temp.unproved('s1', 2);
+select tests.as_user(pg_temp.uid('admin'));
+select pg_temp.accept('s1', 2);
+select tests.as_postgres();
+select pg_temp.sim(pg_temp.upload('s1'));
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_marking_checked(pg_temp.k('p:s1:2'), pg_temp.path('p:s1:2'));
+select tests.as_postgres();
+update public.exam_marking set opened_at = now(), opened_by = pg_temp.uid('admin') where exam_id = pg_temp.k('q');
+select public.marking_exam_sync(pg_temp.k('q'), null);
+insert into kv select 'u:s1/' || g.label, u.id from public.marking_units u join public.question_groups g on g.id = u.group_id
+where u.script_id = pg_temp.k('s1');
+select public.marking_unit_take(pg_temp.k('u:s1/G1'), pg_temp.uid('m1'), 'next', null, now() + interval '2 hours');
+select public.marking_unit_take(pg_temp.k('u:s1/G2'), pg_temp.uid('m2'), 'next', null, now() + interval '2 hours');
+select tests.as_user(pg_temp.uid('m1'));
+select public.marking_unit_open(pg_temp.k('u:s1/G1'));
+select tests.as_postgres();
+insert into kv select 'mk:s1/G1', m.id from public.markings m where m.unit_id = pg_temp.k('u:s1/G1') and m.marker_id = pg_temp.uid('m1');
+create temp table q1 as select q.id from public.exam_questions q where q.exam_id = pg_temp.k('q') and q.parent_id is null and q.label = '1';
+grant select on q1 to public;
+select tests.as_user(pg_temp.uid('m1'));
+select public.marking_save(pg_temp.k('mk:s1/G1'), 0,
+  jsonb_build_array(jsonb_build_object('op', 'mark', 'na', false, 'mark', 2, 'question_id', (select id from q1))));
+select public.marking_submit(pg_temp.k('mk:s1/G1'), 1);
+select tests.as_postgres();
+select tests.as_user(pg_temp.uid('m2'));
+select public.marking_unit_open(pg_temp.k('u:s1/G2'));
+select tests.as_postgres();
+create function pg_temp.piece(p text) returns text language sql stable security definer as $$
+  select u.state || ':' || case when u.on_hold then coalesce(u.hold_reason, '?') else '-' end from public.marking_units u where u.id = pg_temp.k(p) $$;
+create function pg_temp.mstatus(p text, p_marker text) returns text language sql stable security definer as $$
+  select coalesce((select m.status || coalesce(' ' || m.set_aside_reason, '') from public.markings m
+                   where m.unit_id = pg_temp.k(p) and m.kind = 'live' and m.marker_id = pg_temp.uid(p_marker)), '-') $$;
+select is(array[pg_temp.st('s1'), pg_temp.piece('u:s1/G1'), pg_temp.piece('u:s1/G2'), pg_temp.mstatus('u:s1/G1', 'm1'), pg_temp.mstatus('u:s1/G2', 'm2')],
+  array['marking', 'submitted:-', 'taken:-', 'submitted', 'in_progress'], 'fixture: s1 is being marked; m1 submitted G1, m2 is marking G2');
+
+-- check_pictures_of_scripts_being_marked_before_release
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.set_paper_hidden_areas((select id from public.exam_papers where exam_id = pg_temp.k('q') and kind = 'paper'),
+  '[{"page":2,"x":0.6,"y":0.9,"w":0.1,"h":0.05}]')), 'ok', 'check_pictures_of_scripts_being_marked_before_release: an admin adds a paper area on page 2');
+select tests.as_postgres();
+select is(pg_temp.sim(pg_temp.upload('s1')), '3/3', 's1''s marking pictures are made again');
+select is(array[pg_temp.piece('u:s1/G1'), pg_temp.piece('u:s1/G2'), pg_temp.needs('p:s1:2')::text,
+                (select a.state from public.marking_alerts a where a.script_id = pg_temp.k('s1') and a.kind = 'picture_changed')],
+  array['submitted:picture_changed', 'taken:picture_changed', 'true', 'open'],
+  'the pieces are held, page 2''s new picture waits for a check, and the lead is alerted');
+insert into kv select 'al:s1', a.id from public.marking_alerts a where a.script_id = pg_temp.k('s1') and a.kind = 'picture_changed';
+select is(public.marking_alert_can_release(pg_temp.k('s1')), 'picture_unchecked', 'the hold may not be released before the check');
+select tests.as_user(pg_temp.uid('lead'));
+select is(pg_temp.why(public.marking_alert_release(pg_temp.k('al:s1'), 'The name is still hidden')), 'conflict picture_unchecked',
+  'so the lead cannot release it');
+select is((select x ->> 'can_release' from jsonb_array_elements(public.marking_alerts_list(pg_temp.k('q')) -> 'alerts') x
+           where (x ->> 'id')::uuid = pg_temp.k('al:s1')), 'false', 'and the lead''s list does not offer it');
+select is((public.marking_alerts_release_all(pg_temp.k('q'), 'All checked') ->> 'released')::int, 0, 'nor does releasing the exam''s alerts at once');
+select tests.as_postgres();
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.listed('q'), array[pg_temp.k('p:s1:2')], 'staff find the page under Marking pictures to check, though s1 is being marked');
+select is(public.script_detail(pg_temp.k('s1')) -> 'script' ->> 'pictures_to_check', '1', 'and its script page says a picture waits');
+insert into res values ('ck_s1', public.script_page_marking_checked(pg_temp.k('p:s1:2'), pg_temp.path('p:s1:2')));
+select tests.as_postgres();
+select is(array[pg_temp.code(pg_temp.r('ck_s1')), pg_temp.r('ck_s1') ->> 'script_state', pg_temp.st('s1')], array['ok', 'marking', 'marking'],
+  'staff check it; the script stays with the markers');
+select is(public.marking_alert_can_release(pg_temp.k('s1')), null, 'now the hold may be released');
+select tests.as_user(pg_temp.uid('lead'));
+select is(pg_temp.code(public.marking_alert_release(pg_temp.k('al:s1'), 'The name is still hidden')), 'ok', 'and the lead releases it');
+select tests.as_postgres();
+select is(array[pg_temp.piece('u:s1/G1'), pg_temp.piece('u:s1/G2')], array['submitted:-', 'taken:-'], 'the markers carry on');
+
+-- name_shows_excludes_every_marker_who_may_have_seen_it: staff then see a name on s1's page 2.
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.script_page_marking_name_shows(pg_temp.k('p:s1:2'), 'A name along the edge')), 'ok',
+  'name_shows_excludes_every_marker_who_may_have_seen_it: staff say a name shows on s1''s page 2');
+select tests.as_postgres();
+select is((select array[s.state::text, s.taken_back_reason] from public.scripts s where s.id = pg_temp.k('s1')),
+  array['needs_attention', 'A name along the edge'], 's1 is taken back from the markers');
+select is((select array_agg(t.s order by t.s) from (
+             select g.label || ':' || (select c.name from c where c.id = x.marker_id) || ':' || x.reason as s
+           from public.marking_unit_exclusions x join public.marking_units u on u.id = x.unit_id
+           join public.question_groups g on g.id = u.group_id where u.script_id = pg_temp.k('s1')) t),
+  array['G1:m1:name_seen', 'G1:m2:name_seen', 'G2:m1:name_seen', 'G2:m2:name_seen'],
+  'm1 and m2, who both had s1 open, are kept from every piece of it; the lead, who did not, is not');
+select is(array[pg_temp.mstatus('u:s1/G2', 'm2'), pg_temp.piece('u:s1/G2'),
+                (select a.end_reason from public.marking_assignments a where a.unit_id = pg_temp.k('u:s1/G2') and a.marker_id = pg_temp.uid('m2'))],
+  array['set_aside name_seen', 'open:taken_back', 'name_seen'], 'm2''s marking in progress is set aside, their hold ends and G2 is open, on hold');
+select is(array[pg_temp.mstatus('u:s1/G1', 'm1'), pg_temp.piece('u:s1/G1')], array['submitted', 'submitted:taken_back'],
+  'm1''s submitted marking stands');
+-- Staff hide the name; the new picture is made and checked; s1 is handed back.
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_set_hidden_areas(pg_temp.k('p:s1:2'), '[{"x":0.1,"y":0.02,"w":0.5,"h":0.08},{"x":0.9,"y":0.1,"w":0.08,"h":0.8}]', 'Hide the edge');
+select public.script_exception_confirm((select e.id from public.script_exceptions e where e.page_id = pg_temp.k('p:s1:2') and e.kind = 'name_visible'));
+select tests.as_postgres();
+select pg_temp.sim(pg_temp.upload('s1'));
+select tests.as_user(pg_temp.uid('admin'));
+select public.script_page_marking_checked(pg_temp.k('p:s1:2'), pg_temp.path('p:s1:2'));
+select is(pg_temp.code(public.marking_script_hand_back(pg_temp.k('s1'))), 'ok', 'once the name is hidden and checked, s1 is handed back');
+select tests.as_postgres();
+select is(array[public.marking_unit_blocked(pg_temp.k('u:s1/G2'), pg_temp.uid('m2'), null, true),
+                public.marking_unit_blocked(pg_temp.k('u:s1/G2'), pg_temp.uid('m1'), null, true),
+                coalesce(public.marking_unit_blocked(pg_temp.k('u:s1/G2'), pg_temp.uid('lead'), null, true), 'free'),
+                pg_temp.mstatus('u:s1/G1', 'm1')],
+  array['name_seen', 'name_seen', 'free', 'submitted'], 'G2 goes to neither m1 nor m2, only to a marker who never had it open; m1''s G1 stands');
+
+-- The list says when there are more than the 200 it sends: on exam m, s200's 201 pages were each accepted as they are.
+insert into kv values ('m', tests.marking_exam((select id from public.subjects where name = 'ZZ Marking checks')));
+insert into kv values ('s200', tests.verified_script(pg_temp.k('m'), 'home', 201));
+insert into public.script_exceptions (exam_id, kind, booking_id, script_id, page_id, upload_id, details, state, resolution, resolved_at)
+select s.exam_id, 'poor_quality', s.booking_id, s.id, p.id, p.upload_id, '{"flags": ["blurred"]}'::jsonb, 'resolved', 'confirmed', now()
+from public.scripts s join public.script_page_links l on l.script_id = s.id and l.version = s.version
+join public.script_pages p on p.id = l.page_id where s.id = pg_temp.k('s200');
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('list_m', public.script_marking_checks_list(pg_temp.k('m')));
+select tests.as_postgres();
+select is(array[jsonb_array_length(pg_temp.r('list_m') -> 'items')::text, pg_temp.r('list_m') ->> 'more'], array['200', 'true'],
+  'with 201 pages waiting, the list sends the 200 oldest and says there are more');
 
 -- ---------------------------------------------------------------------------------------------
 -- A verified script whose accepted page was never checked (one verified before this rule) needs attention once worked

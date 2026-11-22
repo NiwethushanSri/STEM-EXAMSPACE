@@ -2167,6 +2167,9 @@ isOneToOne: false
 "script_exception_candidates":
 { Args: { "p_exam": string,"p_query": string }; Returns: Json
                            },
+"script_exception_check_due":
+{ Args: { "p_exception": string }; Returns: Json
+                           },
 "script_exception_close":
 { Args: { "p_action": string,"p_actor": string,"p_id": string,"p_now": string,"p_reason": string,"p_resolution": string }; Returns: undefined
                            },

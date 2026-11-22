@@ -5,7 +5,8 @@ import {
   NAME_SHOWS_MESSAGE,
   actionLabel,
   actionsFor,
-  asksMarkingCheck,
+  canSayNameHidden,
+  checksTabLabel,
   checkTitle,
   conflictMessage,
   failureMessage,
@@ -17,6 +18,7 @@ import {
   needsNameCheck,
   noNameOffered,
   parseCandidates,
+  parseCheckDue,
   parseMarkingChecks,
   parseQueue,
   reasonProblem,
@@ -463,25 +465,56 @@ describe("marking pictures to check (Phase 3A Task 8)", () => {
     expect(checkTitle(b)).toBe("Script S-MATH1-0001, a page the family added");
   });
 
-  it("after an accept, says where to check the marking picture", () => {
-    expect(MARKING_CHECK_NOTE).toBe("Accepted. When the marking picture is made, check it under Marking pictures to check.");
+  it("reads whether a check is due, as script_exception_check_due answers", () => {
+    expect(parseCheckDue({ ok: true, due: "now" })).toBe("now");
+    expect(parseCheckDue({ ok: true, due: "later" })).toBe("later");
+    expect(parseCheckDue({ ok: true, due: "none" })).toBe("none");
+    expect(parseCheckDue({ ok: true, due: "soon" })).toBeNull();
+    expect(parseCheckDue({ ok: false, code: "forbidden" })).toBeNull();
+    expect(parseCheckDue(null)).toBeNull();
+  });
+
+  it("after an accept, says where to check the marking picture, as the database says", () => {
     const quality = item({ kind: "poor_quality", details: { flags: ["layout_unexpected"], copy_page: 2 } });
-    expect(asksMarkingCheck(quality, "confirm")).toBe(true);
-    expect(resolvedNote(quality, "confirm", "Confirmed.")).toBe(MARKING_CHECK_NOTE);
-    expect(resolvedNote(item({ kind: "name_visible", details: {} }), "confirm", "Confirmed.")).toBe(MARKING_CHECK_NOTE);
-    expect(resolvedNote(item({ kind: "uncoded_family_page", details: {} }), "confirm", "Confirmed.")).toBe(MARKING_CHECK_NOTE);
-    expect(resolvedNote(item({ kind: "no_code", details: {} }), "assign", "Assigned. The page is in the candidate's script.")).toBe(
+    expect(resolvedNote(quality, "confirm", "Confirmed.", "later")).toBe(MARKING_CHECK_NOTE);
+    expect(MARKING_CHECK_NOTE).toBe("Accepted. When the marking picture is made, check it under Marking pictures to check.");
+    // A page that already has its picture (a blurred page accepted as it is): check it now.
+    expect(resolvedNote(quality, "confirm", "Confirmed.", "now")).toBe("Accepted. Check its marking picture now under Marking pictures to check.");
+    expect(resolvedNote(item({ kind: "name_visible", details: {} }), "confirm", "Confirmed.", "later")).toBe(MARKING_CHECK_NOTE);
+    expect(resolvedNote(item({ kind: "no_code", details: {} }), "assign", "Assigned. The page is in the candidate's script.", "later")).toBe(
       "Assigned. The page is in the candidate's script. When the marking picture is made, check it under Marking pictures to check.",
+    );
+    expect(resolvedNote(item({ kind: "no_code", details: {} }), "assign", "Assigned.", "now")).toBe(
+      "Assigned. Check its marking picture now under Marking pictures to check.",
+    );
+    // Noting a stale marking picture also makes its page wait for a check when the database says so.
+    expect(resolvedNote(item({ kind: "poor_quality", details: { from: "remask", stale_marking: true } }), "confirm", "Confirmed.", "now")).toBe(
+      "Noted. Check its marking picture now under Marking pictures to check.",
     );
   });
 
-  it("says nothing more when the page needs no check", () => {
-    expect(resolvedNote(item(), "keep_existing", "Kept the page already chosen.")).toBe("Kept the page already chosen.");
-    expect(resolvedNote(item({ kind: "not_expected", details: {} }), "assign", "Assigned.")).toBe("Assigned.");
-    expect(resolvedNote(item({ kind: "poor_quality", details: {} }), "reject", "Rejected.")).toBe("Rejected.");
-    expect(resolvedNote(item({ kind: "mixed_versions", details: {}, page: null }), "confirm", "Confirmed.")).toBe("Confirmed.");
-    expect(resolvedNote(item({ kind: "poor_quality", details: { from: "remask", stale_marking: true } }), "confirm", "Confirmed.")).toBe("Confirmed.");
-    expect(asksMarkingCheck(item({ kind: "processing_failed", details: { kind: "remask" }, page: null }), "confirm")).toBe(false);
+  it("promises no check where the database says none is due, or did not say", () => {
+    // A blurred cover accepted as it is: markers never see it.
+    expect(resolvedNote(item({ kind: "poor_quality", details: { flags: ["blurred"] } }), "confirm", "Confirmed.", "none")).toBe("Confirmed.");
+    expect(resolvedNote(item(), "keep_existing", "Kept the page already chosen.", null)).toBe("Kept the page already chosen.");
+    expect(resolvedNote(item({ kind: "mixed_versions", details: {}, page: null }), "confirm", "Confirmed.", undefined)).toBe("Confirmed.");
+    expect(resolvedNote(item({ kind: "not_expected", details: {} }), "assign", "Assigned.", "none")).toBe("Assigned.");
+  });
+
+  it("lets staff say the name is hidden only once the marking picture shows", () => {
+    expect(canSayNameHidden({ pictureShown: false, busy: false })).toBe(false);
+    expect(canSayNameHidden({ pictureShown: true, busy: true })).toBe(false);
+    expect(canSayNameHidden({ pictureShown: true, busy: false })).toBe(true);
+  });
+
+  it("says 200+ only when the server has more than it sent", () => {
+    const one = parseMarkingChecks({ ok: true, items: [check()], more: false })!;
+    expect(one.more).toBe(false);
+    expect(checksTabLabel(one)).toBe("Marking pictures to check (1)");
+    const many = parseMarkingChecks({ ok: true, items: [check()], more: true })!;
+    expect(many.more).toBe(true);
+    expect(checksTabLabel(many)).toBe("Marking pictures to check (200+)");
+    expect(parseMarkingChecks({ ok: true, items: [] })?.more).toBe(false);
   });
 
   it("says why a check was refused", () => {

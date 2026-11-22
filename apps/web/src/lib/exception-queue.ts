@@ -596,26 +596,33 @@ export function failureMessage(a: { code?: unknown; reason?: unknown; resolved_b
   return exceptionMessageFor(typeof a.code === "string" ? a.code : null);
 }
 
-/** Said after staff accept a page whose name the server did not hide: its marking picture is made next, and staff
- * check it before the page counts (Phase 3A Task 8). */
+/** Whether a resolution left its page waiting for staff to check its marking picture (Phase 3A Task 8), as the
+ * database says (script_exception_check_due): "now" (its picture is there to check), "later" (its picture is still to
+ * be made) or "none" (no check: the server proved the page, markers never see it, such as a cover, or it is checked). */
+export type CheckDue = "now" | "later" | "none";
+
+/** script_exception_check_due's answer, or null for a failure or an answer that is not one. */
+export const parseCheckDue = (data: unknown): CheckDue | null =>
+  isObject(data) && data.ok === true && (data.due === "now" || data.due === "later" || data.due === "none") ? data.due : null;
+
+/** Said after staff accept a page whose marking picture is still to be made. */
 export const MARKING_CHECK_NOTE = "Accepted. When the marking picture is made, check it under Marking pictures to check.";
+const CHECK_LATER = "When the marking picture is made, check it under Marking pictures to check.";
+const CHECK_NOW = "Check its marking picture now under Marking pictures to check.";
 
-/** Whether resolving this problem this way makes its page wait for a marking picture check, as the database decides
- * (script_page_confirm_given): accepting a poor-quality page, a reported name or a family's page, or assigning a page
- * with no code (or an unknown one). Noting a stale marking picture does not ask for it here. */
-export function asksMarkingCheck(item: QueueItem, action: QueueAction): boolean {
-  if (!item.page || isStaleNotice(item)) return false;
-  if (action === "confirm") return item.kind === "poor_quality" || item.kind === "name_visible" || item.kind === "uncoded_family_page";
-  if (action === "assign") return item.kind === "no_code" || item.kind === "unknown_code" || item.kind === "uncoded_family_page";
-  return false;
+/** The note after a resolution: the database's message, or, when the page now waits for a check, where to check it
+ * (later, once the picture is made, or now). Accepting says "Accepted.", noting a stale marking picture "Noted.";
+ * assigning keeps its own message first. */
+export function resolvedNote(item: QueueItem, action: QueueAction, message: string, due: CheckDue | null | undefined): string {
+  if (due !== "now" && due !== "later") return message;
+  const where = due === "later" ? CHECK_LATER : CHECK_NOW;
+  if (action !== "confirm") return `${message} ${where}`;
+  return `${isStaleNotice(item) ? "Noted." : "Accepted."} ${where}`;
 }
 
-/** The note after a resolution: the database's message, or, when the page now waits for its marking picture to be
- * checked, the note that says where. */
-export function resolvedNote(item: QueueItem, action: QueueAction, message: string): string {
-  if (!asksMarkingCheck(item, action)) return message;
-  return action === "confirm" ? MARKING_CHECK_NOTE : `${message} When the marking picture is made, check it under Marking pictures to check.`;
-}
+/** "The name is hidden" counts only for a picture staff saw: it works once the marking picture has loaded, and not
+ * while an answer is being saved. */
+export const canSayNameHidden = (s: { pictureShown: boolean; busy: boolean }) => s.pictureShown && !s.busy;
 
 /** A marking picture staff check before its page counts: a page staff accepted, with the script that shows it. */
 export type MarkingCheckItem = {
@@ -630,8 +637,8 @@ export type MarkingCheckItem = {
 };
 
 /** script_marking_checks_list's answer, or null for a failure or an answer that is not one. Malformed items are left
- * out. */
-export function parseMarkingChecks(data: unknown): { items: MarkingCheckItem[] } | null {
+ * out; more says the server has others beyond the 200 oldest it sent. */
+export function parseMarkingChecks(data: unknown): { items: MarkingCheckItem[]; more: boolean } | null {
   if (!isObject(data) || data.ok !== true || !Array.isArray(data.items)) return null;
   return {
     items: data.items.flatMap((v): MarkingCheckItem[] => {
@@ -640,11 +647,16 @@ export function parseMarkingChecks(data: unknown): { items: MarkingCheckItem[] }
       if (!pageId || !scriptNumber || !fullPath || !markingPath) return [];
       return [{ pageId, examId: str(v.exam_id), scriptNumber, booking: parseBooking(v.booking), copyPage: num(v.copy_page), fullPath, markingPath }];
     }),
+    more: data.more === true,
   };
 }
 
 /** How many marking pictures wait for staff to check them (one per page). */
 export const needsMarkingCheck = (items: readonly MarkingCheckItem[]): number => new Set(items.map((i) => i.pageId)).size;
+
+/** The tab's label: "Marking pictures to check (3)", or "(200+)" when the server has more than it sent. */
+export const checksTabLabel = (c: { items: readonly MarkingCheckItem[]; more: boolean }) =>
+  `Marking pictures to check (${c.more ? "200+" : needsMarkingCheck(c.items)})`;
 
 /** "Script S-MATH1-0001, page 2", or "a page the family added" for an extra page. */
 export const checkTitle = (i: MarkingCheckItem) => `Script ${i.scriptNumber}, ${i.copyPage !== null ? `page ${i.copyPage}` : "a page the family added"}`;

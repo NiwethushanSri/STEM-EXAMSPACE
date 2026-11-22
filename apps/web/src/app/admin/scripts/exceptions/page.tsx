@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import { AppShell, Card } from "@/components/AppShell";
 import { ExceptionQueue } from "@/components/scripts/ExceptionQueue";
 import { MarkingChecks } from "@/components/scripts/MarkingChecks";
-import { EXCEPTION_KINDS, KIND_LABEL, needsMarkingCheck, parseMarkingChecks, parseQueue, type ExceptionKind } from "@/lib/exception-queue";
+import { EXCEPTION_KINDS, KIND_LABEL, checksTabLabel, parseMarkingChecks, parseQueue, type ExceptionKind } from "@/lib/exception-queue";
 import { formatLondon } from "@/lib/money";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
@@ -51,7 +51,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
           data-testid="tab-checks"
           className={`${TAB} ${checksTab ? "border-slate-200 bg-white text-slate-900" : "border-transparent text-blue-700 hover:bg-slate-50"}`}
         >
-          Marking pictures to check{checks ? ` (${needsMarkingCheck(checks.items)})` : ""}
+          {checks ? checksTabLabel(checks) : "Marking pictures to check"}
         </Link>
       </nav>
       <Card title={checksTab ? "Filter the pictures" : "Filter the queue"}>
@@ -103,7 +103,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
       </Card>
       {checksTab ? (
         checks ? (
-          <MarkingChecks key={exam} items={checks.items} />
+          <MarkingChecks key={exam} items={checks.items} more={checks.more} />
         ) : (
           <p role="alert" className="text-sm text-red-700">
             The marking pictures could not be loaded. Refresh the page to try again.

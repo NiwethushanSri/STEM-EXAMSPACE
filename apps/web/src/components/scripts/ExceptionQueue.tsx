@@ -322,8 +322,8 @@ function ActionForm({ item, action, onDone }: { item: QueueItem; action: QueueAc
     setNote(null);
     const r = await resolveExceptionAction(input).catch(() => ({ ok: false as const, message: "Something went wrong. Please try again." }));
     setBusy(false);
-    // An accepted page whose name the server did not hide waits for its marking picture to be checked (Task 8).
-    const text = r.ok ? resolvedNote(item, action, r.message) : r.message;
+    // An accepted page may now wait for its marking picture to be checked (Task 8): the database says whether.
+    const text = r.ok ? resolvedNote(item, action, r.message, r.due) : r.message;
     setNote({ ok: r.ok, text });
     if (r.ok) {
       onDone(`${KIND_LABEL[item.kind]}, ${candidateLabel(item.booking ?? item.printedFor)}: ${text}`);
