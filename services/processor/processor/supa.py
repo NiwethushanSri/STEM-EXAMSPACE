@@ -81,6 +81,11 @@ class Client:
         booking's late window has been closed a day. A file stored in a draft is never listed."""
         return self.rpc("script_discarded_take", {"p_limit": limit}) or []
 
+    def pictures_unused_take(self, limit: int) -> list[str]:
+        """Up to `limit` names of page pictures in script-pages that nothing points at (script_pictures_unused_take):
+        over 24 hours old, no page row names them, and no job of their upload is waiting or running."""
+        return [item["name"] for item in self.rpc("script_pictures_unused_take", {"p_limit": limit}) or []]
+
     def mark_purged(self, upload_ids: list[str]) -> None:
         """Records that these discarded uploads' objects are deleted (script_upload_purged)."""
         self.rpc("script_upload_purged", {"p_ids": upload_ids})

@@ -30,6 +30,7 @@ IDLE_SECONDS = 2.0  # between claims when there is nothing to do
 HEARTBEAT_SECONDS = 30.0  # the job's lock is renewed this often while it runs (a quiet job is reclaimed after 15 min)
 CLEANUP_SECONDS = 60.0  # discarded draft files are looked for at most this often, between jobs
 CLEANUP_BATCH = 100  # discarded files deleted per look (one storage request)
+PICTURES_LOOK = 500  # unused page pictures listed per look; they are deleted CLEANUP_BATCH at a time
 MAX_PAGES = 5000  # a file of more pages is not read (the database takes at most this many pages of one file)
 
 
@@ -279,6 +280,22 @@ def cleanup(client: Any) -> int:
     return len(items)
 
 
+def cleanup_pictures(client: Any) -> int:
+    """Deletes from script-pages the page pictures nothing points at, as script_pictures_unused_take lists them (over
+    24 hours old, named by no page row, their upload with no job waiting or running), CLEANUP_BATCH per storage
+    request. A failure stops the step; whatever is still there is listed again next time. Returns how many were
+    deleted."""
+    names = client.pictures_unused_take(PICTURES_LOOK)
+    deleted = 0
+    for i in range(0, len(names), CLEANUP_BATCH):
+        batch = names[i:i + CLEANUP_BATCH]
+        client.remove(PAGES, batch)
+        deleted += len(batch)
+    if deleted:
+        log.info("cleanup: %d unused page pictures deleted", deleted)
+    return deleted
+
+
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGINT)  # the host's stop (fly.toml: kill_signal) and an interrupt
 
 
@@ -301,7 +318,8 @@ def run(client: Any, worker_id: str, *, once: bool = False, stop: threading.Even
         cleanup_seconds: float = CLEANUP_SECONDS) -> int:
     """Claims and runs jobs until SIGTERM or SIGINT (or `stop`), finishing the current job first; waits `idle_seconds`
     when there is nothing to do. Before a claim, when `cleanup_seconds` have passed since the last one (and at the
-    start), deletes discarded draft files (cleanup; a failure is logged and tried again next time). With `once`,
+    start), deletes discarded draft files (cleanup) and then page pictures nothing points at (cleanup_pictures); a failure of
+    either is logged by its class name and tried again next time. With `once`,
     claims once and runs at most that job. Returns the jobs run."""
     stop = stop or threading.Event()
     restore = _on_stop_signals(stop)
@@ -315,6 +333,10 @@ def run(client: Any, worker_id: str, *, once: bool = False, stop: threading.Even
                     cleanup(client)
                 except Exception as exc:
                     log.warning("cleanup failed: %s", type(exc).__name__)
+                try:
+                    cleanup_pictures(client)
+                except Exception as exc:
+                    log.warning("picture cleanup failed: %s", type(exc).__name__)
             try:
                 claimed = client.claim(worker_id)
             except Exception as exc:
