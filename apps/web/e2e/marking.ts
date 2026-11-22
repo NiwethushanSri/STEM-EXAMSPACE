@@ -152,12 +152,14 @@ async function seedScript(exam: SeededExam, i: number, tag: string, code: string
  * An exam marked as whole scripts (or by question: question 1 and 2 in "Section A", 3 in "Section B") with the
  * structure above, an approved corrector, an admin, and `scripts` verified home scripts of new active students with
  * names and index numbers, each with its 3 matched pages and their marking pictures. The exam finished 3 days ago, so
- * the hand-in time is over; the admin opens marking, which makes every script ready to mark.
+ * the hand-in time is over; the admin opens marking, which makes every script ready to mark. `markers` (1 by default)
+ * approved correctors are made: `marker` is the first, `markers` all of them.
  */
-export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | "by_question" }): Promise<{
+export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | "by_question"; markers?: number }): Promise<{
   examId: string;
   title: string;
   marker: Login;
+  markers: Login[];
   admin: Login;
   students: SeededStudent[];
 }> {
@@ -166,10 +168,14 @@ export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | 
   const tag = crypto.randomUUID().slice(0, 8);
   const pictures = await markingPictures();
   const admin = await createAccount({ role: "admin" });
-  const marker = await createAccount({ role: "corrector", firstName: "Marker" });
+  const markers: Login[] = [];
+  for (let i = 0; i < (opts.markers ?? 1); i++) markers.push(await createAccount({ role: "corrector", firstName: i === 0 ? "Marker" : `Marker${i + 1}` }));
+  const marker = markers[0];
   const exam = await seedExam({ tag, title: "Marking", sitting: "home", startedMinutesAgo: 3 * 24 * 60, adminId: admin.id });
   seeded.set(exam.examId, exam);
-  must(await svc().from("marker_approvals").insert({ marker_id: marker.id, subject_id: exam.subjectId, approved_by: admin.id, approved_at: new Date().toISOString() }).select("marker_id").single(), "approval insert");
+  for (const m of markers) {
+    must(await svc().from("marker_approvals").insert({ marker_id: m.id, subject_id: exam.subjectId, approved_by: admin.id, approved_at: new Date().toISOString() }).select("marker_id").single(), "approval insert");
+  }
 
   // The structure, entered directly (exam_structure_save needs an editor's session).
   const groups: Record<string, string> = {};
@@ -222,7 +228,28 @@ export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | 
     throw new Error(`marking open failed: ${opened.error?.message ?? JSON.stringify(opened.data)}`);
   }
   await client.auth.signOut();
-  return { examId: exam.examId, title: exam.title, marker, admin, students };
+  return { examId: exam.examId, title: exam.title, marker, markers, admin, students };
+}
+
+/** The admin takes pieces back from their markers (marking_take_back, as "Take back" on the admin marking page). */
+export async function takeBackPieces(admin: Login, unitIds: string[], reason: string): Promise<void> {
+  const client = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  const signIn = await client.auth.signInWithPassword({ email: admin.email, password: admin.password });
+  if (signIn.error) throw new Error(`admin sign-in failed: ${signIn.error.message}`);
+  try {
+    const r = await client.rpc("marking_take_back", { p_units: unitIds, p_reason: reason });
+    if (r.error || r.data?.ok !== true) throw new Error(`take back failed: ${r.error?.message ?? JSON.stringify(r.data)}`);
+  } finally {
+    await client.auth.signOut();
+  }
+}
+
+/** Who holds each piece of an exam now (an open live assignment), by piece. */
+export async function holdersOf(examId: string): Promise<{ unitId: string; holder: string }[]> {
+  const units = ids((await svc().from("marking_units").select("id").eq("exam_id", examId)).data);
+  if (units.length === 0) return [];
+  const { data } = await svc().from("marking_assignments").select("unit_id, marker_id").in("unit_id", units).eq("kind", "live").is("ended_at", null);
+  return (data ?? []).map((a) => ({ unitId: a.unit_id as string, holder: a.marker_id as string }));
 }
 
 const PROCESSOR = resolve(__dirname, "../../../services/processor");

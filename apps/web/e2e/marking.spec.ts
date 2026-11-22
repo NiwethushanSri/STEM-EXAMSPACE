@@ -1,8 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { assertNoOwner, cleanup, clearLoginAttempts, countTestUsers, signInUI } from "./admin";
 import {
   annotationKinds,
   bumpRev,
+  holdersOf,
   markingOf,
   marksOf,
   penStroke,
@@ -10,6 +11,7 @@ import {
   pinch,
   removeMarkingExam,
   seedMarkingExam,
+  takeBackPieces,
   touchDrag,
   type Login,
   type SeededStudent,
@@ -339,5 +341,153 @@ test.describe("reporting a name", () => {
     await expect(page.getByTestId("question-1-mark")).toHaveText("2");
     await page.waitForLoadState("networkidle");
     expect(saves).toBe(sent);
+  });
+});
+
+// Two real sessions (final review I3), on an exam of their own with one script and two approved markers: both markers
+// press Next script at the same moment; the marker who got the piece then has it open on two screens; and a page taken
+// back while it is only being read leaves the screen within a minute (M1). Each session is its own browser context.
+test.describe("two sessions", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  let raceExam: string;
+  let raceAdmin: Login;
+  let racers: Login[];
+  let raceStudents: SeededStudent[];
+  let winner: Login;
+  let raceUnit: string;
+  const contexts: BrowserContext[] = [];
+
+  test.beforeAll(async () => {
+    const seed = await seedMarkingExam({ scripts: 1, markers: 2 });
+    raceExam = seed.examId;
+    raceAdmin = seed.admin;
+    racers = seed.markers;
+    raceStudents = seed.students;
+  });
+  test.afterEach(async () => {
+    for (const c of contexts.splice(0)) await c.close();
+  });
+  test.afterAll(async () => {
+    if (raceExam) await removeMarkingExam(raceExam);
+  });
+
+  /** A signed-in session of its own (a new browser context) for a marker. */
+  async function session(browser: import("@playwright/test").Browser, who: Login, opts: { clock?: boolean } = {}): Promise<Page> {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, baseURL: test.info().project.use.baseURL });
+    contexts.push(context);
+    const p = await context.newPage();
+    if (opts.clock) await p.clock.install();
+    await signInUI(p, who.email, who.password);
+    await p.waitForURL((u) => !u.pathname.startsWith("/login"));
+    return p;
+  }
+  const HOLD_ENDED = "Your hold on this script has ended. Press Next script to carry on.";
+  const onPiece = (p: Page) => /^\/marking\/[0-9a-f-]{36}$/.test(new URL(p.url()).pathname);
+
+  test("two_markers_one_piece_left", async ({ browser }) => {
+    const pages = [await session(browser, racers[0]), await session(browser, racers[1])];
+    const buttons = [];
+    for (const p of pages) {
+      await p.goto("/marking");
+      const next = p.getByRole("button", { name: /^Next script/ }).first();
+      await expect(next).toBeEnabled();
+      buttons.push(next);
+    }
+    // Both press at the same moment, with one piece left.
+    await Promise.all(buttons.map((b) => b.click()));
+    await expect
+      .poll(async () => {
+        const nothing = await Promise.all(pages.map((p) => p.getByText("Nothing left to mark for now.").isVisible()));
+        return pages.map((p, i) => (onPiece(p) ? "piece" : nothing[i] ? "nothing" : "waiting")).sort().join(" ");
+      })
+      .toBe("nothing piece");
+    const got = onPiece(pages[0]) ? 0 : 1;
+    winner = racers[got];
+    raceUnit = new URL(pages[got].url()).pathname.split("/").pop()!;
+    await expect(pages[got].getByTestId("page-surface")).toBeVisible();
+    // The other marker stays on the marking home with the plain words and no piece.
+    await expect(pages[1 - got].getByText("Nothing left to mark for now.")).toBeVisible();
+    expect(new URL(pages[1 - got].url()).pathname).toBe("/marking");
+    // Exactly one holder, and one marking at most: nobody marks the script twice.
+    expect(await holdersOf(raceExam)).toEqual([{ unitId: raceUnit, holder: winner.id }]);
+    for (const p of pages) {
+      const html = await p.content();
+      for (const s of raceStudents) {
+        expect(html).not.toContain(s.firstName);
+        expect(html).not.toContain(s.lastName);
+      }
+    }
+  });
+
+  test("one_marker_two_screens_second_save_is_refused", async ({ browser }) => {
+    const first = await session(browser, winner);
+    const second = await session(browser, winner);
+    for (const p of [first, second]) {
+      await p.goto(`/marking/${raceUnit}`);
+      await expect(p.getByTestId("page-surface")).toBeVisible();
+      await saved(p);
+    }
+    let secondSaves = 0;
+    second.on("request", (r) => {
+      if (r.url().includes("/rest/v1/rpc/marking_save")) secondSaves++;
+    });
+
+    // The first screen saves 3 for question 1 and a tick.
+    await first.keyboard.press("3");
+    await first.getByRole("button", { name: "Tick", exact: true }).click();
+    await first.getByTestId("page-surface").click({ position: { x: 200, y: 160 } });
+    await saved(first);
+    await expect.poll(() => marksOf(raceUnit)).toEqual({ "1": 3 });
+    await expect.poll(() => annotationKinds(raceUnit)).toEqual(["tick"]);
+    const rev = (await markingOf(raceUnit))!.rev;
+
+    // The second screen, opened before that save, then saves: it is told to reload and nothing it holds is written.
+    await second.keyboard.press("1");
+    await expect(second.getByText("This script was changed on another screen. Reload to carry on.")).toBeVisible();
+    expect(secondSaves).toBe(1);
+    await second.keyboard.press("4");
+    await second.waitForLoadState("networkidle");
+    expect(secondSaves).toBe(1);
+    expect(await marksOf(raceUnit)).toEqual({ "1": 3 });
+    expect(await annotationKinds(raceUnit)).toEqual(["tick"]);
+    expect((await markingOf(raceUnit))!.rev).toBe(rev);
+    // The first screen carries on.
+    await first.keyboard.press("Enter");
+    await first.getByRole("button", { name: "2 marks", exact: true }).click();
+    await saved(first);
+    await expect.poll(() => marksOf(raceUnit)).toEqual({ "1": 3, "2": 2 });
+
+    // Reloaded, the second screen shows what the first saved.
+    await second.reload();
+    await expect(second.getByTestId("question-1-mark")).toHaveText("3");
+    await expect(second.getByTestId("question-2-mark")).toHaveText("2");
+  });
+
+  test("a_page_taken_back_leaves_the_screen_within_a_minute", async ({ browser }) => {
+    // The page's own clock is in the test's hands, so the minute does not have to be waited for.
+    const p = await session(browser, winner, { clock: true });
+    await p.goto(`/marking/${raceUnit}`);
+    const picture = p.getByTestId("page-surface").locator("img");
+    await expect(picture).toBeVisible();
+    let saves = 0;
+    p.on("request", (r) => {
+      if (r.url().includes("/rest/v1/rpc/marking_save")) saves++;
+    });
+
+    // Still the marker's: a minute passes and the page stays.
+    await p.clock.fastForward(61_000);
+    await p.waitForLoadState("networkidle");
+    await expect(picture).toBeVisible();
+    await expect(p.getByText(HOLD_ENDED)).toHaveCount(0);
+
+    // The admin takes the piece back while the marker only reads: nothing is saved, so no save can tell the screen.
+    await takeBackPieces(raceAdmin, [raceUnit], "Another marker will take it");
+    expect(await holdersOf(raceExam)).toEqual([]);
+    await p.clock.fastForward(61_000);
+    await expect(p.getByText(HOLD_ENDED)).toBeVisible();
+    await expect(p.getByTestId("page-surface").locator("img")).toHaveCount(0);
+    await expect(p.locator('img[src*="/storage/v1/object/sign/"]')).toHaveCount(0);
+    expect(saves).toBe(0);
   });
 });
