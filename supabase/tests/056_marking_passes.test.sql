@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(82);
+select plan(92);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -9,7 +9,7 @@ select tests.assert_no_owner();
 -- scripts) has the home scripts x1 to x6, opened (tests.open_marking). m1 marks every one of them (their live pass is
 -- submitted and each script is marked); x1 by hand, with an annotation and a note to the lead. A piece waits for a
 -- second marking when its check_state is set to waiting_second here, as postgres (Task 4 sets it). Scripts made later
--- (y1, y2, h1) come in once marking is open. A unit is kept as 'u:<script>', a page as 'p:<script>:<copy page>', a
+-- (y1, y2, z1, z2, h1) come in once marking is open; exam eb is the timing guard's. A unit is kept as 'u:<script>', a page as 'p:<script>:<copy page>', a
 -- question as 'q:<label>', a marking as 'mk<marker number>:<script>'.
 -- ---------------------------------------------------------------------------------------------
 create temp table c (name text primary key, id uuid not null);
@@ -87,6 +87,12 @@ create function pg_temp.found(p_words text[], p_text text) returns text[] langua
 -- A piece of the caller's work list (marking_my_work), by its script.
 create function pg_temp.piece(j jsonb, p text) returns jsonb language sql stable as $$
   select x from jsonb_array_elements(j -> 'pieces') x where x ->> 'unit_id' = pg_temp.u(p)::text $$;
+-- A piece of a list of pieces (marking_units_list), by its script.
+create function pg_temp.unit(j jsonb, p text) returns jsonb language sql stable as $$
+  select x from jsonb_array_elements(j -> 'units') x where x ->> 'unit_id' = pg_temp.u(p)::text $$;
+-- The stored mark scheme of exam e (read as postgres).
+create function pg_temp.scheme() returns text language sql stable security definer as $$
+  select f.storage_path from public.exam_mark_scheme_files f where f.exam_id = pg_temp.k('e') and f.state = 'stored' limit 1 $$;
 -- A new verified home script of exam e, its pages and, once marking is open, its piece.
 create function pg_temp.script(p_name text) returns void language plpgsql as $$
 begin
@@ -106,7 +112,7 @@ create function pg_temp.marker_lock(p text) returns text language sql stable as 
     and ((l.classid::bigint << 32) | l.objid::bigint) = hashtextextended('marker:' || pg_temp.uid(p)::text, 0) $$;
 grant execute on function pg_temp.uid(text), pg_temp.k(text), pg_temp.u(text), pg_temp.r(text), pg_temp.code(jsonb), pg_temp.who(uuid),
   pg_temp.mk(text, numeric), pg_temp.all_marks(numeric, numeric, numeric), pg_temp.rev(text), pg_temp.pages(text),
-  pg_temp.piece(jsonb, text) to public;
+  pg_temp.piece(jsonb, text), pg_temp.unit(jsonb, text), pg_temp.scheme(), pg_temp.subj(), pg_temp.student(text) to public;
 
 insert into public.subjects (name, kind) values ('ZZ Passes', 'school');
 insert into c values ('admin', tests.create_user('admin', 'active')), ('corr', tests.create_user('corrector', 'active'));
@@ -257,6 +263,17 @@ select throws_ok(format('insert into public.marking_assignments (unit_id, kind, 
   '23505', 'duplicate key value violates unique constraint "marking_assignments_one_holder"', 'and the database refuses a second holder');
 select is(pg_temp.holders('x1'), 'm2 second next', 'm2 alone holds it');
 
+-- lead_second_marker_never_sees_the_first_total: the lead holds x2's second pass.
+select tests.as_user(pg_temp.uid('lead'));
+insert into res values ('f_lead_list', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('f_admin_list', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres();
+select is(array[pg_temp.unit(pg_temp.r('f_lead_list'), 'x2') ->> 'total', pg_temp.unit(pg_temp.r('f_lead_list'), 'x2') ->> 'submitted_at',
+                pg_temp.unit(pg_temp.r('f_lead_list'), 'x3') ->> 'total', pg_temp.unit(pg_temp.r('f_admin_list'), 'x2') ->> 'total'],
+  array[null, null, '3.0', '3.0'],
+  'lead_second_marker_never_sees_the_first_total: the lead''s list gives x2''s total and submit time as null while they hold its second pass; x3''s, and the admin''s, are shown');
+
 -- ---------------------------------------------------------------------------------------------
 -- second_hold_expires_and_frees_only_the_second_pass
 -- ---------------------------------------------------------------------------------------------
@@ -268,52 +285,63 @@ select is(array[pg_temp.ended('x1', 'm2'), pg_temp.ms('x1', 'm2'), pg_temp.us('x
   'second_hold_expires_and_frees_only_the_second_pass: m2''s hold ends and their marking is kept; the piece stays submitted, the first marking stands and the script stays marked');
 select is(array[pg_temp.marks('mk1:x1'), pg_temp.rev('mk1:x1')::text], array['1=2,2(a)=1,2(b)=4', pg_temp.r('sub1') ->> 'rev'],
   'the first marking is untouched');
-select tests.as_user(pg_temp.uid('m3'));
-insert into res values ('g_next3', public.marking_next(pg_temp.k('e')));
-select tests.as_postgres(); select tests.as_user(pg_temp.uid('m2'));
+select tests.as_user(pg_temp.uid('m2'));
 insert into res values ('g_open', public.marking_unit_open(pg_temp.u('x1')));
 insert into res values ('g_next', public.marking_next(pg_temp.k('e')));
 select tests.as_postgres();
-select is(pg_temp.code(pg_temp.r('g_next3')), 'nothing_left', 'while m2''s second marking is in progress nobody else is given the pass');
 select is(array[pg_temp.code(pg_temp.r('g_open')), pg_temp.r('g_next')::text],
   array['hold_expired', jsonb_build_object('ok', true, 'unit_id', pg_temp.u('x1'), 'resumed', true)::text],
-  'm2 is told the hold ended, as on a live piece, and Next script gives them their marking back');
-select is(array[pg_temp.holders('x1'), pg_temp.ms('x1', 'm2')], array['m2 second next', 'in_progress'], 'they hold it again, with the same marking');
+  'm2 is told the hold ended, as on a live piece; while nobody else has taken the pass, Next script gives them their marking back');
+-- Their hold runs out again, and this time another marker presses Next script first.
+update public.marking_assignments set hold_until = now() - interval '1 minute'
+where unit_id = pg_temp.u('x1') and kind = 'second' and ended_at is null;
+select public.marking_holds_expire(null);
+select tests.as_user(pg_temp.uid('m3'));
+insert into res values ('g_next3', public.marking_next(pg_temp.k('e')));
+insert into res values ('g_open3', public.marking_unit_open(pg_temp.u('x1')));
+select tests.as_postgres();
+insert into kv values ('mk3:x1', (pg_temp.r('g_open3') #>> '{marking,id}')::uuid);
+select is(pg_temp.r('g_next3'), jsonb_build_object('ok', true, 'unit_id', pg_temp.u('x1'), 'resumed', false),
+  'an abandoned second pass frees up, as a live one does: m3 presses Next script and is given it');
+select is(array[pg_temp.holders('x1'), pg_temp.ms('x1', 'm2'), pg_temp.ms('x1', 'm3'), pg_temp.us('x1'), pg_temp.ms('x1', 'm1')],
+  array['m3 second next', 'set_aside expired', 'in_progress', 'submitted', 'submitted'],
+  'm2''s marking is set aside (expired) and m3 starts their own; the piece and the first marking are as they were');
 
 -- ---------------------------------------------------------------------------------------------
 -- give_back_of_a_second_pass_leaves_the_first_marking_alone
 -- ---------------------------------------------------------------------------------------------
-select tests.as_user(pg_temp.uid('m2'));
+select tests.as_user(pg_temp.uid('m3'));
 insert into res values ('h_gb', public.marking_give_back(pg_temp.u('x1'), 'I know this school'));
-select tests.as_postgres(); select tests.as_user(pg_temp.uid('m3'));
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('m2'));
 insert into res values ('h_next', public.marking_next(pg_temp.k('e')));
 select tests.as_postgres();
-select is(pg_temp.r('h_gb'), '{"ok": true}'::jsonb, 'give_back_of_a_second_pass_leaves_the_first_marking_alone: m2 gives x1''s second pass back');
-select is(array[pg_temp.ended('x1', 'm2'), pg_temp.ms('x1', 'm2'),
+select is(pg_temp.r('h_gb'), '{"ok": true}'::jsonb, 'give_back_of_a_second_pass_leaves_the_first_marking_alone: m3 gives x1''s second pass back');
+select is(array[pg_temp.ended('x1', 'm3'), pg_temp.ms('x1', 'm3'),
                 pg_temp.us('x1'), pg_temp.ms('x1', 'm1'), pg_temp.marks('mk1:x1'), pg_temp.rev('mk1:x1')::text],
-  array['expired,given_back', 'set_aside given_back', 'submitted', 'submitted', '1=2,2(a)=1,2(b)=4', pg_temp.r('sub1') ->> 'rev'],
+  array['given_back', 'set_aside given_back', 'submitted', 'submitted', '1=2,2(a)=1,2(b)=4', pg_temp.r('sub1') ->> 'rev'],
   'their hold ends and their marking is set aside; the piece stays submitted and the first marking is untouched');
 select is(pg_temp.audits('marking_given_back', pg_temp.u('x1')), 1, 'audited');
-select is(pg_temp.r('h_next'), jsonb_build_object('ok', true, 'unit_id', pg_temp.u('x1'), 'resumed', false),
-  'the second pass is free: m3 presses Next script and is given it');
+select is(array[pg_temp.r('h_next')::text, pg_temp.ms('x1', 'm2')],
+  array[jsonb_build_object('ok', true, 'unit_id', pg_temp.u('x1'), 'resumed', false)::text, 'in_progress'],
+  'the second pass is free: m2 presses Next script and is given it, with their own earlier marking in progress again');
 
 -- ---------------------------------------------------------------------------------------------
 -- second_submit_ends_only_the_second_hold
 -- ---------------------------------------------------------------------------------------------
-select tests.as_user(pg_temp.uid('m3'));
+select tests.as_user(pg_temp.uid('m2'));
 insert into res values ('i_open', public.marking_unit_open(pg_temp.u('x1')));
-insert into kv values ('mk3:x1', (pg_temp.r('i_open') #>> '{marking,id}')::uuid);
-insert into res values ('i_save', public.marking_save(pg_temp.k('mk3:x1'), 0, pg_temp.all_marks(3, 2, 5)));
-insert into res values ('i_sub', public.marking_submit(pg_temp.k('mk3:x1'), 1));
+insert into res values ('i_save', public.marking_save(pg_temp.k('mk2:x1'), 1, pg_temp.all_marks(3, 2, 5)));
+insert into res values ('i_sub', public.marking_submit(pg_temp.k('mk2:x1'), 2));
 select tests.as_postgres();
-select is(pg_temp.r('i_sub'), '{"ok": true, "rev": 2, "total": 10, "max_total": 10, "feedback": null}'::jsonb,
-  'second_submit_ends_only_the_second_hold: m3 submits the second marking');
-select is(array[pg_temp.ended('x1', 'm3'), pg_temp.ms('x1', 'm3'), pg_temp.holders('x1'), pg_temp.us('x1'), pg_temp.st('x1')],
-  array['submitted', 'submitted', '-', 'submitted', 'marked'], 'their hold ends; the piece and its script are as they were');
+select is(array[pg_temp.r('i_open') #>> '{marking,id}', pg_temp.r('i_sub')::text],
+  array[pg_temp.k('mk2:x1')::text, '{"ok": true, "rev": 3, "total": 10.0, "feedback": null, "max_total": 10.0}'],
+  'second_submit_ends_only_the_second_hold: m2 opens their marking again and submits it');
+select is(array[pg_temp.ended('x1', 'm2'), pg_temp.ms('x1', 'm2'), pg_temp.holders('x1'), pg_temp.us('x1'), pg_temp.st('x1')],
+  array['expired,expired,submitted', 'submitted', '-', 'submitted', 'marked'], 'their hold ends; the piece and its script are as they were');
 select is(array[pg_temp.ms('x1', 'm1'), pg_temp.marks('mk1:x1'), pg_temp.rev('mk1:x1')::text, pg_temp.holders('x2')],
   array['submitted', '1=2,2(a)=1,2(b)=4', pg_temp.r('sub1') ->> 'rev', 'lead second next'],
   'the first marking stands as it was, and the lead still holds x2''s second pass');
-select is(pg_temp.audits('marking_submitted', pg_temp.k('mk3:x1')), 1, 'the submit is audited');
+select is(pg_temp.audits('marking_submitted', pg_temp.k('mk2:x1')), 1, 'the submit is audited');
 
 -- ---------------------------------------------------------------------------------------------
 -- submit_result_has_no_script_state
@@ -341,8 +369,6 @@ insert into kv values ('mk2:y1', (pg_temp.r('k_open_y1') #>> '{marking,id}')::uu
 select public.marking_save(pg_temp.k('mk2:y1'), 0, jsonb_build_array(pg_temp.mk('1', 1)));
 select public.marking_save(pg_temp.k('mk2:x3'), 0, jsonb_build_array(pg_temp.mk('1', 2)));
 insert into res values ('k_work', public.marking_my_work());
-select tests.as_postgres(); select tests.as_user(pg_temp.uid('m3'));
-insert into res values ('k_work3', public.marking_my_work());
 select tests.as_postgres();
 select is(array(select k from jsonb_object_keys(pg_temp.piece(pg_temp.r('k_work'), 'x3')) k order by 1),
           array(select k from jsonb_object_keys(pg_temp.piece(pg_temp.r('k_work'), 'y1')) k order by 1),
@@ -351,9 +377,9 @@ select is(array[pg_temp.piece(pg_temp.r('k_work'), 'x3') ->> 'state', pg_temp.pi
                 pg_temp.piece(pg_temp.r('k_work'), 'x3') ->> 'practice', pg_temp.piece(pg_temp.r('k_work'), 'y1') ->> 'practice'],
   array['taken', 'taken', 'false', 'false'], 'both are taken while m2 holds them (x3''s own state is submitted), and neither is practice');
 select is(pg_temp.found(array['second', 'live', 'kind'], pg_temp.r('k_work')::text), '{}'::text[], 'no key or value of the list names a kind');
-select is(pg_temp.piece(pg_temp.r('k_work3'), 'x1') ->> 'state', 'submitted', 'm3''s submitted second marking shows as submitted');
+select is(pg_temp.piece(pg_temp.r('k_work'), 'x1') ->> 'state', 'submitted', 'm2''s submitted second marking of x1 shows as submitted');
 select is((select (e -> 'mine' ->> 'taken') || ' ' || (e -> 'mine' ->> 'submitted') from jsonb_array_elements(pg_temp.r('k_work') -> 'exams') e
-           where e ->> 'exam_id' = pg_temp.k('e')::text), '2 0', 'm2''s exam counts both pieces they hold');
+           where e ->> 'exam_id' = pg_temp.k('e')::text), '2 1', 'm2''s exam counts the two pieces they hold and the one they submitted');
 
 -- ---------------------------------------------------------------------------------------------
 -- admin_assigns_and_takes_back_a_second_pass
@@ -441,6 +467,38 @@ select is((select string_agg(pg_temp.who(x.marker_id), ',' order by pg_temp.who(
 select is(array[pg_temp.holders('y1'), pg_temp.holders('x3')], array['m2 live next', 'm2 second assigned'], 'm2''s pieces of other scripts are left alone');
 
 -- ---------------------------------------------------------------------------------------------
+-- unapproved_or_conflicted_second_marker_frees_the_pass: m1 marks z1 and z2; m6 is given z1's second pass and m5
+-- z2's, and each opens it. Then m6's approval is removed and m5 declares a conflict with z2's candidate.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script('z1');
+select pg_temp.script('z2');
+select tests.mark_piece(pg_temp.u('z1'), pg_temp.uid('m1'), array[1, 1, 1]);
+select tests.mark_piece(pg_temp.u('z2'), pg_temp.uid('m1'), array[1, 1, 1]);
+select pg_temp.wait_second('z1');
+select pg_temp.wait_second('z2');
+select tests.as_user(pg_temp.uid('admin'));
+select public.marking_assign(array[pg_temp.u('z1')], pg_temp.uid('m6'), 'Second marking please', 'second');
+select public.marking_assign(array[pg_temp.u('z2')], pg_temp.uid('m5'), 'Second marking please', 'second');
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('m6'));
+select public.marking_unit_open(pg_temp.u('z1'));
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('m5'));
+select public.marking_unit_open(pg_temp.u('z2'));
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+select public.marker_unapprove(pg_temp.uid('m6'), pg_temp.subj(), 'No longer marks this subject');
+select public.marker_conflict_set(pg_temp.uid('m5'), pg_temp.student('z2'), null, 'Knows the candidate');
+select tests.as_postgres();
+select is(array[pg_temp.ended('z1', 'm6'), pg_temp.ms('z1', 'm6'), pg_temp.us('z1'), pg_temp.ms('z1', 'm1'),
+                coalesce(public.marking_unit_blocked(pg_temp.u('z1'), pg_temp.uid('m3'), null, true, 'second'), 'ok')],
+  array['unapproved', 'set_aside unapproved', 'submitted', 'submitted', 'ok'],
+  'unapproved_or_conflicted_second_marker_frees_the_pass: m6''s approval goes: their second hold ends, their marking is set aside and another marker may be given the pass; the first marking stands');
+select is(array[pg_temp.ended('z2', 'm5'), pg_temp.ms('z2', 'm5'), pg_temp.us('z2'), pg_temp.ms('z2', 'm1'),
+                coalesce(public.marking_unit_blocked(pg_temp.u('z2'), pg_temp.uid('m3'), null, true, 'second'), 'ok')],
+  array['conflict', 'set_aside conflict', 'submitted', 'submitted', 'ok'],
+  'm5 declares a conflict: the same, with conflict');
+-- z1 and z2 wait no more, for the tests below.
+update public.marking_units set check_state = null where id in (pg_temp.u('z1'), pg_temp.u('z2'));
+
+-- ---------------------------------------------------------------------------------------------
 -- picture_paths_follow_the_pass (marking_picture_paths): m2 holds x3's second pass.
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('m2'));
@@ -487,10 +545,59 @@ select is(array[public.marking_script_waiting(pg_temp.k('x3'), null), public.mar
 update public.script_pages set marking_checked_path = marking_path, marking_checked_by = pg_temp.uid('admin'), marking_checked_at = now()
 where id = pg_temp.k('p:x3:1');
 select tests.as_user(pg_temp.uid('m4'));
+insert into res values ('p_work', public.marking_my_work());
 insert into res values ('p_checked', public.marking_next(pg_temp.k('e')));
 select tests.as_postgres();
+select is((select e ->> 'left' from jsonb_array_elements(pg_temp.r('p_work') -> 'exams') e where e ->> 'exam_id' = pg_temp.k('e')::text), '1',
+  'left_counts_second_passes: with only x3''s second pass free for them, m4''s list says 1 left');
 select is(pg_temp.r('p_checked'), jsonb_build_object('ok', true, 'unit_id', pg_temp.u('x3'), 'resumed', false),
   'once the picture is checked, Next script gives m4 the second pass');
+
+-- ---------------------------------------------------------------------------------------------
+-- second_hold_restarts_when_its_alert_is_released: x3's picture changed while m4 held its second pass, and their hold
+-- would have run out meanwhile.
+-- ---------------------------------------------------------------------------------------------
+update public.marking_units set on_hold = true, hold_reason = 'picture_changed' where id = pg_temp.u('x3');
+update public.marking_assignments set hold_until = now() - interval '1 hour' where unit_id = pg_temp.u('x3') and ended_at is null;
+with a as (insert into public.marking_alerts (exam_id, kind, script_id) values (pg_temp.k('e'), 'picture_changed', pg_temp.k('x3')) returning id)
+insert into kv select 'al:x3', a.id from a;
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('s_release', public.marking_alert_release(pg_temp.k('al:x3'), 'The picture is fine'));
+select tests.as_postgres();
+select is(array[pg_temp.code(pg_temp.r('s_release')), pg_temp.hold('x3'),
+                (select (a.hold_until = now() + interval '2 hours')::text from public.marking_assignments a
+                 where a.unit_id = pg_temp.u('x3') and a.marker_id = pg_temp.uid('m4') and a.ended_at is null)],
+  array['ok', '-', 'true'], 'second_hold_restarts_when_its_alert_is_released: the release lifts the hold and m4''s Next script hold restarts at 2 hours');
+
+-- ---------------------------------------------------------------------------------------------
+-- mark_scheme_for_a_second_marker: exam e has a stored mark scheme; m4's only pass on e is x3's second.
+-- ---------------------------------------------------------------------------------------------
+with f as (select gen_random_uuid() as id)
+insert into public.exam_mark_scheme_files (id, exam_id, storage_path, byte_size, state, uploaded_by, uploaded_at)
+select f.id, pg_temp.k('e'), pg_temp.k('e')::text || '/' || f.id::text || '.pdf', 1000, 'stored', pg_temp.uid('admin'), now() from f;
+select tests.as_user(pg_temp.uid('m4'));
+insert into res values ('t_m4', to_jsonb(public.mark_scheme_path_allowed(pg_temp.scheme())));
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('m7'));
+insert into res values ('t_m7', to_jsonb(public.mark_scheme_path_allowed(pg_temp.scheme())));
+select tests.as_postgres();
+select is(array[pg_temp.r('t_m4'), pg_temp.r('t_m7')], array['true', 'false']::jsonb[],
+  'mark_scheme_for_a_second_marker: m4 may read the mark scheme, as a first marker may; m7, with no pass on the exam, may not');
+
+-- ---------------------------------------------------------------------------------------------
+-- units_list_says_who_has_the_second_pass
+-- ---------------------------------------------------------------------------------------------
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('v_list', public.marking_units_list(pg_temp.k('e')));
+insert into res values ('v_list_m4', public.marking_units_list(pg_temp.k('e'), null, pg_temp.uid('m4')));
+select tests.as_postgres();
+select is(array[pg_temp.unit(pg_temp.r('v_list'), 'x2') -> 'second', pg_temp.unit(pg_temp.r('v_list'), 'x1') -> 'second',
+                pg_temp.unit(pg_temp.r('v_list'), 'x4') -> 'second', pg_temp.unit(pg_temp.r('v_list'), 'x2') -> 'check_state'],
+  array[jsonb_build_object('marker_id', pg_temp.uid('lead'), 'marker_name', 'Marker ' || left(pg_temp.uid('lead')::text, 8), 'state', 'taken', 'how', 'next'),
+        jsonb_build_object('marker_id', pg_temp.uid('m2'), 'marker_name', 'Marker ' || left(pg_temp.uid('m2')::text, 8), 'state', 'submitted', 'how', null),
+        'null'::jsonb, '"waiting_second"'::jsonb],
+  'units_list_says_who_has_the_second_pass: the lead holds x2''s (Next script); m2 submitted x1''s; nobody has x4''s; and the piece''s check state');
+select is(array(select x ->> 'unit_id' from jsonb_array_elements(pg_temp.r('v_list_m4') -> 'units') x),
+  array[pg_temp.u('x3')::text], 'filtered by marker, m4''s pieces are the one whose second pass they hold');
 
 -- ---------------------------------------------------------------------------------------------
 -- next_drops_a_held_piece_when_another_kind_stands (controller note c): m3 holds y2's live pass while a second marking
@@ -565,6 +672,41 @@ select is(array(select f from unnest(array[
   where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')
      or has_function_privilege('service_role', f, 'execute')), '{}'::text[],
   'new_helpers_are_internal: marking_pass, marking_after_submit, marking_after_change and marking_units_offered cannot be called from the API');
+
+-- ---------------------------------------------------------------------------------------------
+-- next_and_left_in_time_at_1500_second_passes (a timing guard, as 043, Ruling R25: the fixture tables are analysed
+-- first). Exam eb, marked by question in 5 groups, has 300 marked scripts: m1's live marking of each of the 1,500
+-- pieces is submitted (written as postgres) and every piece waits for a second marking. Each timed call runs under the
+-- statement_timeout it must meet.
+-- ---------------------------------------------------------------------------------------------
+insert into c values ('mb', tests.marker(pg_temp.subj()));
+insert into kv values ('eb', tests.marking_exam(pg_temp.subj()));
+insert into public.question_groups (exam_id, label, position) select pg_temp.k('eb'), 'B' || i, i from generate_series(1, 5) i;
+do $$ begin for i in 1..300 loop perform tests.verified_script(pg_temp.k('eb')); end loop; end $$;
+update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('eb');
+select tests.open_marking(pg_temp.k('eb'));
+insert into public.markings (unit_id, kind, marker_id, status, total, last_saved_at, submitted_at)
+select u.id, 'live', pg_temp.uid('m1'), 'submitted', 1, now(), now() from public.marking_units u where u.exam_id = pg_temp.k('eb');
+update public.marking_units set state = 'submitted', check_state = 'waiting_second' where exam_id = pg_temp.k('eb');
+update public.scripts set state = 'marked' where exam_id = pg_temp.k('eb');
+analyze public.scripts, public.script_pages, public.script_page_links, public.script_versions, public.question_groups,
+        public.marking_units, public.marking_assignments, public.markings, public.marking_alerts, public.exam_marking,
+        public.marker_approvals, public.marker_conflicts, public.marking_unit_exclusions, public.exams, public.profiles, public.bookings, public.home_submissions,
+        public.script_uploads, public.script_exceptions, public.script_page_hidden_areas, public.question_marks, public.tutor_students;
+select tests.as_user(pg_temp.uid('mb'));
+set local statement_timeout = '2s';
+insert into res values ('w_next', public.marking_next(pg_temp.k('eb')));
+reset statement_timeout;
+set local statement_timeout = '4s';
+insert into res values ('w_work', public.marking_my_work());
+reset statement_timeout;
+select tests.as_postgres();
+select is(array[pg_temp.code(pg_temp.r('w_next')), pg_temp.r('w_next') ->> 'resumed',
+                (select a.kind::text from public.marking_assignments a where a.marker_id = pg_temp.uid('mb') and a.ended_at is null)],
+  array['ok', 'false', 'second'],
+  'next_and_left_in_time_at_1500_second_passes: Next script hands mb one of the 1,500 second passes within 2 s');
+select is((select e ->> 'left' from jsonb_array_elements(pg_temp.r('w_work') -> 'exams') e where e ->> 'exam_id' = pg_temp.k('eb')::text), '1499',
+  'and their list counts the 1,499 left within 4 s');
 
 select * from finish();
 rollback;

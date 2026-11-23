@@ -11,13 +11,14 @@
 -- check_state is waiting_second (Task 4 decides it). Its second pass may be given to a marker by the one rule
 -- (marking_units_allowed, kind second): the common rule (marking open, the marker approved, the piece not on hold, the
 -- script not taken back, no declared conflict or tutor link, one pass on the piece per marker), the script in marking,
--- marked or checked, nobody else holding the second pass and no second marking of another marker in progress or
--- submitted. So the first marker never is (they have a pass on the piece), and a marker who saw a name on the piece
--- never is, by Next script or by an admin. The second marker is shown the piece's pages, questions and mark scheme
--- and none of the first marker's marks, total, annotations or note. When their hold runs out their marking is kept
--- and the pass waits for them (Next script gives it back to them), as nobody else may be given it while that marking
--- is in progress; giving it back, or an admin taking it back, sets that marking aside and frees the pass. Neither
--- touches the first marking or the piece's state. Admins assign and take back second passes as they do live ones.
+-- marked or checked, nobody else holding the second pass and no second marking of another marker submitted. So the
+-- first marker never is (they have a pass on the piece), and a marker who saw a name on the piece never is, by Next
+-- script or by an admin. The second marker is shown the piece's pages, questions and mark scheme and none of the first
+-- marker's marks, total, annotations or note (nor, for a lead marker, the first total in the list of pieces). A second
+-- pass is freed as a live one is: when its hold runs out the marker's marking is kept and Next script gives it back to
+-- them while nobody else has taken the pass; another marker who takes it has that marking set aside (expired); giving
+-- it back, an admin taking it back, or the marker losing their approval or declaring a conflict sets it aside. None of
+-- these touches the first marking or the piece's state. Admins assign and take back second passes as they do live ones.
 --
 -- The name-seen rules (Rulings R14, R15) and the picture check (R16, R17) hold for every kind of pass: "Name visible",
 -- "A name still shows" and a hand-back with changed pages treat every marker with a marking of any kind on the script
@@ -43,18 +44,19 @@
 --   marking_unit_take, marking_unit_take_back (20261122000006): take p_kind (default live). Another kind leaves the
 --     piece's state, and the script's, alone.
 --   marking_next (20261122000006): step 1 resumes a held piece of any kind and step 2 a marking of any kind in
---     progress on a free pass, each while the one rule of that kind allows it; step 3 picks live and second pieces.
+--     progress on a free pass, each while the one rule of that kind allows it (step 2 tries each such marking in turn,
+--     so one taken meanwhile leaves the next); step 3 picks live and second pieces.
 --   marking_give_back (20261122000006), marking_my_work (20261122000006): the caller's pass of any kind. A piece of
 --     marking_my_work says state taken while they hold it, submitted once their marking is (else open), and practice
 --     (false until Task 5).
 --   marking_assign (20261122000006): takes p_kind (live or second; invalid_input otherwise). A second pass is skipped
---     as taken while another marker holds it or has their second marking in progress, and as submitted once one is.
---     Audited marking_second_assigned.
+--     as taken while a marker holds it, and as submitted once a second marking is. Audited marking_second_assigned.
 --   marking_assign_some (20261122000006): reads the new marking_units_pick, live only.
 --   marking_take_back (20261122000006): takes p_kind (live or second). Audited marking_second_taken_back for second.
 --   marking_units_list (20261122000015): each piece also says check_state and second: {marker_id, marker_name, state
 --     (taken, open: their marking in progress with no hold, or submitted), how} or null; p_marker also keeps the pieces
---     whose second pass that marker holds or has marked.
+--     whose second pass that marker holds or has marked. A lead holding a piece's second pass, or with their second
+--     marking of it in progress, gets its total and submitted_at as null.
 --   marking_work_blocked (20261122000007): the caller's pass of any kind (a marking of theirs set aside, with no pass,
 --     is hold_expired as before); a checked script is accepted.
 --   marking_unit_open (20261123000002): the caller's pass; marking also says practice (false) and sent_back_note.
@@ -73,6 +75,8 @@
 --     not_verified, so the picture check and the busy rule hold a second pass back. Its other callers read the
 --     script's state themselves.
 --   mark_scheme_path_allowed (20261122000013): a marker holding a piece, or with a marking on one, of any kind.
+--   marker_unapprove, marker_conflict_set (20261122000004): the marker's markings in progress of the kind of each
+--     assignment that ends are set aside, not only live ones.
 -- Nothing else in them changed. Every changed function names a candidate no more than before.
 --
 -- Lock order (as 20261123000003): marker key -> exam_marking -> booking lock -> script rows in id order -> units in id
@@ -215,8 +219,9 @@ $$;
 --   kind stands on it (one pass per marker).
 --   live: the script is ready to mark or being marked; for Next script only (p_next), they did not see a name on it.
 --   second: the script is being marked, marked or checked; the piece waits for a second marking (check_state); nobody
---   else holds its second pass and no second marking of another marker is in progress or submitted on it; and they did
---   not see a name on it, whoever hands it out.
+--   else holds its second pass and no second marking of another marker is submitted on it (one in progress whose hold
+--   ended is set aside when the pass is taken, as on a live piece); and they did not see a name on it, whoever hands it
+--   out.
 -- Other kinds allow nothing yet (Task 5). One piece is found by its key: the exam is scanned only when p_unit is null.
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.marking_units_allowed(p_exam uuid, p_marker uuid, p_kind public.marking_kind, p_next boolean,
@@ -242,12 +247,12 @@ as $$
     and s.taken_back_at is null
     and case when p_kind = 'live' then s.state in ('ready_to_mark', 'marking')
              else s.state in ('marking', 'marked', 'checked') and u.check_state = 'waiting_second'
-                  -- Nobody else has the second pass: no other holder, no other second marking in progress or submitted.
+                  -- Nobody else has the second pass: no other holder, no other second marking submitted.
                   and not exists (select 1 from public.marking_assignments x
                                   where x.unit_id = u.id and x.kind = 'second' and x.ended_at is null and x.marker_id <> p_marker)
                   and not exists (select 1 from public.markings k
                                   where k.unit_id = u.id and k.kind = 'second' and k.marker_id <> p_marker
-                                    and k.status in ('in_progress', 'submitted')) end
+                                    and k.status = 'submitted') end
     -- Read once: the exam's marking is open and not closed, and the marker is approved for its subject.
     and exists (select 1 from public.exams e join public.exam_marking m on m.exam_id = e.id
                 where e.id = p_exam and m.opened_at is not null and m.closed_at is null
@@ -431,12 +436,10 @@ begin
         and s.state in ('marking', 'marked', 'checked') and s.taken_back_at is null
       for no key update of s skip locked
       for update of u skip locked;
-      -- Held now: nobody took the second pass or submitted it, and no other marker's second marking is in progress.
+      -- Held now: nobody took the second pass or submitted it meanwhile.
       if v_unit is not null and (
            exists (select 1 from public.marking_assignments a where a.unit_id = v_unit and a.kind = r.pass and a.ended_at is null)
-           or exists (select 1 from public.markings m
-                      where m.unit_id = v_unit and m.kind = r.pass
-                        and (m.status = 'submitted' or (m.status = 'in_progress' and m.marker_id <> p_marker)))) then
+           or exists (select 1 from public.markings m where m.unit_id = v_unit and m.kind = r.pass and m.status = 'submitted')) then
         v_unit := null;
       end if;
     end if;
@@ -618,8 +621,9 @@ begin
   end if;
 
   -- (2) A free pass of this exam on which the caller's marking of that kind is in progress: their hold ran out and
-  -- nobody has taken the pass since. The caller's own markings are found first, so the rule runs on those only; the
-  -- states are read again on the locked rows, and a second pass's holder once the piece is held.
+  -- nobody has taken the pass since. The caller's own markings are found first, so the rule runs on those only. Each
+  -- is tried in turn, oldest first: its states are read again on the locked rows, and a second pass's holder once the
+  -- piece is held; one taken or locked meanwhile leaves the next to be tried.
   with mine as materialized (
     select u.id, m.kind, m.started_at, m.id as mid
     from public.markings m
@@ -632,20 +636,22 @@ begin
   select array_agg(t.id order by t.started_at, t.mid), array_agg(t.kind order by t.started_at, t.mid) into v_held, v_kinds
   from mine t
   where public.marking_unit_blocked(t.id, v_actor, v_now, true, t.kind) is null;
-  select u.id, t.kind into v_unit, v_kind
-  from unnest(coalesce(v_held, '{}'), coalesce(v_kinds, '{}')) with ordinality t(id, kind, o)
-  join public.marking_units u on u.id = t.id
-  join public.scripts s on s.id = u.script_id
-  where not u.on_hold and s.taken_back_at is null
-    and case when t.kind = 'live' then u.state = 'open' and s.state in ('ready_to_mark', 'marking')
-             else s.state in ('marking', 'marked', 'checked') end
-  order by t.o
-  limit 1
-  for no key update of s skip locked
-  for update of u skip locked;
-  if v_kind <> 'live' and exists (select 1 from public.marking_assignments a where a.unit_id = v_unit and a.kind = v_kind and a.ended_at is null) then
-    v_unit := null;
-  end if;
+  for i in 1 .. coalesce(cardinality(v_held), 0) loop
+    v_kind := v_kinds[i];
+    select u.id into v_unit
+    from public.marking_units u
+    join public.scripts s on s.id = u.script_id
+    where u.id = v_held[i] and not u.on_hold and s.taken_back_at is null
+      and case when v_kind = 'live' then u.state = 'open' and s.state in ('ready_to_mark', 'marking')
+               else s.state in ('marking', 'marked', 'checked') end
+    for no key update of s skip locked
+    for update of u skip locked;
+    if v_unit is not null and v_kind <> 'live'
+       and exists (select 1 from public.marking_assignments a where a.unit_id = v_unit and a.kind = v_kind and a.ended_at is null) then
+      v_unit := null;
+    end if;
+    exit when v_unit is not null;
+  end loop;
 
   -- (3) One free piece at random, a live or a second pass.
   if v_unit is null then
@@ -727,10 +733,11 @@ $$;
 -- marking_assign: as 20261122000006, with p_kind (live or second; invalid_input otherwise): an admin gives 1 to 200
 -- pieces' p_kind pass to a marker, with a reason, and no time limit. A live pass must be open and may be handed to that
 -- marker now (marking_unit_blocked; a name the marker saw does not stop an admin). A second pass must be free (taken
--- while another marker holds it or has their second marking of it in progress; submitted once one is submitted) and
--- may be handed to the marker as a second pass (a name they saw does stop it). The others are skipped with their
--- code: not_found, taken, submitted, on_hold, marking_not_open, marking_closed, not_ready, not_approved,
--- conflict_of_interest, name_seen, not_eligible. Audited per piece: marking_assigned, or marking_second_assigned.
+-- while a marker holds it; submitted once a second marking is submitted; a second marking in progress whose hold ended
+-- is set aside, as on a live piece) and may be handed to the marker as a second pass (a name they saw does stop it).
+-- The others are skipped with their code: not_found, taken, submitted, on_hold, marking_not_open, marking_closed,
+-- not_ready, not_approved, conflict_of_interest, name_seen, not_eligible. Audited per piece: marking_assigned, or
+-- marking_second_assigned.
 -- Returns {ok, assigned, skipped: [{unit_id, code}]}.
 -- ---------------------------------------------------------------------------------------------
 drop function public.marking_assign(uuid[], uuid, text);
@@ -766,9 +773,7 @@ begin
   for r in
     select x.id, u.id as unit_id,
       case when p_kind = 'live' then u.state
-           when exists (select 1 from public.marking_assignments a where a.unit_id = u.id and a.kind = p_kind and a.ended_at is null)
-                or exists (select 1 from public.markings m where m.unit_id = u.id and m.kind = p_kind and m.status = 'in_progress'
-                             and m.marker_id <> p_marker) then 'taken'
+           when exists (select 1 from public.marking_assignments a where a.unit_id = u.id and a.kind = p_kind and a.ended_at is null) then 'taken'
            when exists (select 1 from public.markings m where m.unit_id = u.id and m.kind = p_kind and m.status = 'submitted') then 'submitted'
            else 'open' end as state
     from unnest(v_units) x(id) left join public.marking_units u on u.id = x.id
@@ -996,7 +1001,9 @@ $$;
 -- marking_units_list: as 20261122000015. Each piece also says check_state and second: who has its second pass and how
 -- ({marker_id, marker_name, state: taken while they hold it, submitted once their second marking is, else open (their
 -- marking in progress, no hold), how}, or null when nobody does). p_marker also keeps the pieces whose second pass that
--- marker holds or has marked. For admins and the subject's lead marker. Returns {ok, units, more}.
+-- marker holds or has marked. For admins and the subject's lead marker. A lead who holds a piece's second pass, or has
+-- their second marking of it in progress, is given its total and submitted_at as null: a second marker never sees the
+-- first total. Returns {ok, units, more}.
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.marking_units_list(p_exam uuid, p_state text default null, p_marker uuid default null)
 returns jsonb
@@ -1039,7 +1046,10 @@ begin
       'state', u.state, 'on_hold', u.on_hold, 'hold_reason', u.hold_reason,
       'marker_id', p.id,
       'marker_name', case when p.id is not null then coalesce(nullif(btrim(p.first_name || ' ' || p.last_name), ''), 'Marker ' || left(p.id::text, 8)) end,
-      'how', a.how, 'hold_until', a.hold_until, 'last_saved_at', x.last_saved_at, 'submitted_at', x.submitted_at, 'total', x.total,
+      'how', a.how, 'hold_until', a.hold_until, 'last_saved_at', x.last_saved_at,
+      -- A lead marking the piece's second pass (holding it, or with their second marking in progress) is not shown the
+      -- first marking's total or when it was submitted.
+      'submitted_at', case when not sm.blind then x.submitted_at end, 'total', case when not sm.blind then x.total end,
       'waiting', case when u.state <> 'submitted' then w.why end,
       'check_state', u.check_state,
       'second', case when p2.id is not null then jsonb_build_object(
@@ -1059,6 +1069,9 @@ begin
     left join public.marking_assignments a2 on a2.unit_id = u.id and a2.kind = 'second' and a2.ended_at is null
     left join public.markings x2 on x2.unit_id = u.id and x2.kind = 'second' and x2.status <> 'set_aside'
     left join public.profiles p2 on p2.id = coalesce(a2.marker_id, x2.marker_id)
+    cross join lateral (
+      select not v_admin and (coalesce(a2.marker_id = v_actor, false)
+                              or coalesce(x2.marker_id = v_actor and x2.status = 'in_progress', false)) as blind) sm
     where u.exam_id = p_exam
       and (p_state is null or (p_state = 'on_hold' and u.on_hold) or u.state = p_state)
       and (p_marker is null or coalesce(a.marker_id, x.marker_id) = p_marker or coalesce(a2.marker_id, x2.marker_id) = p_marker)
@@ -1952,6 +1965,181 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
+-- marker_unapprove: as 20261122000004, and the marker's markings in progress of the kind of each assignment that ends
+-- are set aside (unapproved), not only live ones, so a second pass they held is free for another marker. Removes the
+-- approval (and the lead flag with it) and ends the marker's open assignments on the subject's exams ('unapproved'; a
+-- taken unit of the live pass goes back to open). Submitted markings stay. Returns {ok, released}.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marker_unapprove(p_marker uuid, p_subject bigint, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_reason text := public.script_resolution_reason(p_reason);
+  v_subject text;
+  v_released int;
+begin
+  if not public.is_staff_admin() then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  if p_marker is null or p_subject is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  if v_reason is null then
+    return jsonb_build_object('ok', false, 'code', 'reason_required');
+  end if;
+  select s.name into v_subject from public.subjects s where s.id = p_subject;
+  perform pg_advisory_xact_lock(hashtextextended('marker:' || p_marker::text, 0));
+  if v_subject is null or not exists (select 1 from public.marker_approvals a where a.marker_id = p_marker and a.subject_id = p_subject) then
+    return jsonb_build_object('ok', false, 'code', 'not_found');
+  end if;
+
+  delete from public.marker_approvals a where a.marker_id = p_marker and a.subject_id = p_subject;
+
+  -- Ruling R9: the rows of the scripts whose pieces the marker holds for the subject, then those pieces, in id order,
+  -- before their assignments and markings change.
+  perform 1 from public.scripts s
+  where s.id in (select u.script_id from public.marking_assignments x
+                 join public.marking_units u on u.id = x.unit_id
+                 join public.exams e on e.id = u.exam_id
+                 where x.marker_id = p_marker and x.ended_at is null and e.subject_id = p_subject)
+  order by s.id
+  for no key update;
+  perform 1 from public.marking_units u
+  where u.id in (select x.unit_id from public.marking_assignments x
+                 join public.marking_units v on v.id = x.unit_id
+                 join public.exams e on e.id = v.exam_id
+                 where x.marker_id = p_marker and x.ended_at is null and e.subject_id = p_subject)
+  order by u.id
+  for update;
+
+  with ended as (
+    update public.marking_assignments x set ended_at = now(), end_reason = 'unapproved'
+    from public.marking_units u
+    join public.exams e on e.id = u.exam_id
+    where x.unit_id = u.id and x.marker_id = p_marker and x.ended_at is null and e.subject_id = p_subject
+    returning x.unit_id, x.kind
+  ),
+  reopened as (
+    update public.marking_units u set state = 'open'
+    from ended where u.id = ended.unit_id and ended.kind = 'live' and u.state = 'taken'
+    returning u.id
+  ),
+  aside as (
+    update public.markings m
+    set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'unapproved'
+    from ended where m.unit_id = ended.unit_id and m.marker_id = p_marker and m.kind = ended.kind and m.status = 'in_progress'
+    returning m.id
+  )
+  select count(*)::int into v_released from ended;
+
+  insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+  values (v_actor, 'marker_unapproved', 'marker', p_marker, public.marker_audit_reason(v_reason, 'subject: ' || v_subject));
+  return jsonb_build_object('ok', true, 'released', v_released);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- marker_conflict_set: as 20261122000004, and the marker's markings in progress of the kind of each assignment that
+-- ends are set aside (conflict), not only live ones. The marker must never mark this candidate; ends their open
+-- assignments on the candidate's scripts ('conflict'). already_marked counts their submitted markings on them.
+-- Returns {ok, released, already_marked}.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marker_conflict_set(p_marker uuid, p_student uuid, p_note text, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_reason text := public.script_resolution_reason(p_reason);
+  v_note text := nullif(btrim(coalesce(p_note, '')), '');
+  v_index text;
+  v_released int;
+  v_marked int;
+begin
+  if not public.is_staff_admin() then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  if p_marker is null or p_student is null or char_length(coalesce(v_note, '')) > 300 then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  if v_reason is null then
+    return jsonb_build_object('ok', false, 'code', 'reason_required');
+  end if;
+  if not exists (select 1 from public.profiles p where p.id = p_marker and p.role in ('corrector', 'teacher')) then
+    return jsonb_build_object('ok', false, 'code', 'not_found');
+  end if;
+  select d.index_number into v_index
+  from public.profiles s left join public.student_details d on d.profile_id = s.id
+  where s.id = p_student and s.role = 'student';
+  if not found then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended('marker:' || p_marker::text, 0));
+  insert into public.marker_conflicts (marker_id, student_id, note, recorded_by, recorded_at)
+  values (p_marker, p_student, v_note, v_actor, now())
+  on conflict (marker_id, student_id) do update set note = excluded.note, recorded_by = excluded.recorded_by, recorded_at = excluded.recorded_at;
+
+  -- Ruling R9: the rows of the candidate's scripts whose pieces the marker holds, then those pieces, in id order, before
+  -- their assignments and markings change.
+  perform 1 from public.scripts s
+  where s.id in (select u.script_id from public.marking_assignments x
+                 join public.marking_units u on u.id = x.unit_id
+                 join public.scripts t on t.id = u.script_id
+                 join public.bookings b on b.id = t.booking_id
+                 where x.marker_id = p_marker and x.ended_at is null and b.student_id = p_student)
+  order by s.id
+  for no key update;
+  perform 1 from public.marking_units u
+  where u.id in (select x.unit_id from public.marking_assignments x
+                 join public.marking_units v on v.id = x.unit_id
+                 join public.scripts t on t.id = v.script_id
+                 join public.bookings b on b.id = t.booking_id
+                 where x.marker_id = p_marker and x.ended_at is null and b.student_id = p_student)
+  order by u.id
+  for update;
+
+  with ended as (
+    update public.marking_assignments x set ended_at = now(), end_reason = 'conflict'
+    from public.marking_units u
+    join public.scripts s on s.id = u.script_id
+    join public.bookings b on b.id = s.booking_id
+    where x.unit_id = u.id and x.marker_id = p_marker and x.ended_at is null and b.student_id = p_student
+    returning x.unit_id, x.kind
+  ),
+  reopened as (
+    update public.marking_units u set state = 'open'
+    from ended where u.id = ended.unit_id and ended.kind = 'live' and u.state = 'taken'
+    returning u.id
+  ),
+  aside as (
+    update public.markings m
+    set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'conflict'
+    from ended where m.unit_id = ended.unit_id and m.marker_id = p_marker and m.kind = ended.kind and m.status = 'in_progress'
+    returning m.id
+  )
+  select count(*)::int into v_released from ended;
+
+  select count(distinct u.script_id)::int into v_marked
+  from public.markings m
+  join public.marking_units u on u.id = m.unit_id
+  join public.scripts s on s.id = u.script_id
+  join public.bookings b on b.id = s.booking_id
+  where m.marker_id = p_marker and m.status = 'submitted' and b.student_id = p_student;
+
+  insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+  values (v_actor, 'marker_conflict_set', 'marker', p_marker, public.marker_audit_reason(v_reason, 'candidate: ' || coalesce(v_index, 'no index number')));
+  return jsonb_build_object('ok', true, 'released', v_released, 'already_marked', v_marked);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
 -- mark_scheme_path_allowed: as 20261122000013, and the marker branch counts a piece they hold, or a marking of theirs
 -- not set aside, of any kind: a second marker reads the mark scheme as a first marker does. Editors (structure_can_edit)
 -- keep their access; an approved marker of the exam's subject reads the stored PDF only while its marking is open, and
@@ -2015,6 +2203,8 @@ revoke execute on function public.marking_script_hand_back(uuid, text) from publ
 revoke execute on function public.marking_alert_release(uuid, text) from public, anon;
 revoke execute on function public.marking_alerts_release_all(uuid, text) from public, anon;
 revoke execute on function public.mark_scheme_path_allowed(text) from public, anon;
+revoke execute on function public.marker_unapprove(uuid, bigint, text) from public, anon;
+revoke execute on function public.marker_conflict_set(uuid, uuid, text, text) from public, anon;
 grant execute on function public.marking_next(uuid, uuid, timestamptz) to authenticated;
 grant execute on function public.marking_give_back(uuid, text) to authenticated;
 grant execute on function public.marking_assign(uuid[], uuid, text, public.marking_kind) to authenticated;
@@ -2031,3 +2221,5 @@ grant execute on function public.marking_script_hand_back(uuid, text) to authent
 grant execute on function public.marking_alert_release(uuid, text) to authenticated;
 grant execute on function public.marking_alerts_release_all(uuid, text) to authenticated;
 grant execute on function public.mark_scheme_path_allowed(text) to authenticated;
+grant execute on function public.marker_unapprove(uuid, bigint, text) to authenticated;
+grant execute on function public.marker_conflict_set(uuid, uuid, text, text) to authenticated;
