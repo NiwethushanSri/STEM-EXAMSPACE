@@ -435,6 +435,7 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     submitted: "This script has been marked. Take it back or reassign it.",
     on_hold: "This script is on hold.",
     not_ready: "This script cannot be handed out yet.",
+    not_eligible: "This script cannot be given to this marker.",
   },
 };
 

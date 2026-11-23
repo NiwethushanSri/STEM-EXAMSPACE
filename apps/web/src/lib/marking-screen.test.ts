@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { keyAction } from "./marking-keys";
 import {
   ACCESS_CHECK_MS,
+  ACCESS_TICK_MS,
   accessCheckDue,
   accessCheckOutcome,
   firstLeaf,
@@ -158,8 +159,17 @@ describe("zoom steps and lists", () => {
 
 describe("the minute check of a shown page", () => {
   const base = { visible: true, covered: false, path: "e/u/1-1/0-marking.jpg", lastAt: 0, now: ACCESS_CHECK_MS };
+  it("access_check_is_due_at_55_seconds", () => {
+    expect(ACCESS_CHECK_MS).toBe(55_000);
+    expect(accessCheckDue({ ...base, lastAt: 0, now: 54_999 })).toBe(false);
+    expect(accessCheckDue({ ...base, lastAt: 0, now: 55_000 })).toBe(true);
+  });
+  it("tick_is_15_seconds", () => {
+    expect(ACCESS_TICK_MS).toBe(15_000);
+    // The first tick after the check falls due runs it: at most 70 seconds after the last check.
+    expect(ACCESS_CHECK_MS + ACCESS_TICK_MS).toBeLessThanOrEqual(70_000);
+  });
   it("withdrawn_page_check_runs_each_minute_while_in_view", () => {
-    expect(ACCESS_CHECK_MS).toBe(60_000);
     expect(accessCheckDue(base)).toBe(true);
     expect(accessCheckDue({ ...base, now: ACCESS_CHECK_MS - 1 })).toBe(false);
     expect(accessCheckDue({ ...base, lastAt: 30_000, now: 90_000 })).toBe(true);

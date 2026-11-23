@@ -233,11 +233,15 @@ export function zoomStepOut(z: number): number {
   return [...ZOOM_STEPS].reverse().find((v) => v < z - 1e-6) ?? ZOOM_MIN;
 }
 
-/** How often the marking screen asks whether the page it shows may still be seen (ms). */
-export const ACCESS_CHECK_MS = 60_000;
+/** How long after the last check the marking screen asks again whether the page it shows may still be seen (ms). */
+export const ACCESS_CHECK_MS = 55_000;
 
-/** Whether the check runs now: only while the screen is in view, with a page's picture on it, and at most once a
- * minute (a tab coming back into view checks at once if a minute has gone by). */
+/** How often the marking screen looks whether that check is due (ms). With the check due at 55 seconds, it lands at
+ * most 70 seconds after the last (Ruling R23). */
+export const ACCESS_TICK_MS = 15_000;
+
+/** Whether the check runs now: only while the screen is in view, with a page's picture on it, and once 55 seconds
+ * have gone by since the last (a tab coming back into view checks at once if they have). */
 export function accessCheckDue(s: { visible: boolean; covered: boolean; path: string | null; lastAt: number; now: number }): boolean {
   return s.visible && !s.covered && s.path !== null && s.now - s.lastAt >= ACCESS_CHECK_MS;
 }

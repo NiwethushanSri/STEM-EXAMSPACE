@@ -273,6 +273,7 @@ describe("allocationMessageFor", () => {
     expect(allocationMessageFor("submitted", "admin")).toBe("This script has been marked. Take it back or reassign it.");
     expect(allocationMessageFor("on_hold", "admin")).toBe("This script is on hold.");
     expect(allocationMessageFor("not_ready", "admin")).toBe("This script cannot be handed out yet.");
+    expect(allocationMessageFor("not_eligible", "admin")).toBe("This script cannot be given to this marker.");
     expect(allocationMessageFor("reason_required", "admin")).toBe("Give a reason of 3 to 300 characters.");
   });
   it("falls back to the generic message", () => {

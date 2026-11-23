@@ -17,7 +17,7 @@ import { act, applyOps, fromServer, redo, undo, type MarkingState, type Op, type
 import { ZOOM_MAX, ZOOM_MIN, isPhone } from "@/lib/marking-pointer";
 import { createSaveQueue, restorePending, type SaveQueue, type SaveResult, type SaveStatus } from "@/lib/marking-save";
 import {
-  ACCESS_CHECK_MS,
+  ACCESS_TICK_MS,
   accessCheckDue,
   accessCheckOutcome,
   firstLeaf,
@@ -335,8 +335,9 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   }, [page?.markingPath, covered]);
 
   // A page withdrawn while the marker only reads (another marker reported a name, staff pressed "A name still shows",
-  // the hold ended) must not stay on screen until their next save. Every minute while the screen is in view, the link
-  // of the shown picture is asked for again: the storage rule answers for the piece as it is now. Given, nothing
+  // the hold ended) must not stay on screen until their next save. About every minute while the screen is in view (due
+  // 55 seconds after the last check, looked at every 15 seconds: at most 70 seconds apart), the link of the shown
+  // picture is asked for again: the storage rule answers for the piece as it is now. Given, nothing
   // changes on screen. Refused, the picture is taken off at once and the piece is asked for again (marking_unit_open):
   // its refusal becomes the cover, in its own words; if the piece is still the marker's (the picture itself changed),
   // it is opened afresh.
@@ -369,7 +370,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   });
   useEffect(() => {
     lastAccessCheck.current = Date.now();
-    const every = setInterval(() => void checkAccess(), ACCESS_CHECK_MS);
+    const every = setInterval(() => void checkAccess(), ACCESS_TICK_MS);
     const onVisible = () => void checkAccess();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
