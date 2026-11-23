@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(92);
+select plan(98);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -232,6 +232,19 @@ select is(pg_temp.r('d_assign') -> 'skipped', jsonb_build_array(jsonb_build_obje
   'so an admin cannot give m6 the second pass of x2');
 select is(coalesce(public.marking_unit_blocked(pg_temp.u('x2'), pg_temp.uid('m3'), null, true, 'second'), 'ok'), 'ok',
   'm3, with none of these, may be given it');
+
+-- ---------------------------------------------------------------------------------------------
+-- lead_is_blind_to_pieces_waiting_for_a_second_marking: the lead holds nothing yet; x1 and x2 wait, x3 does not.
+-- ---------------------------------------------------------------------------------------------
+select tests.as_user(pg_temp.uid('lead'));
+insert into res values ('d_lead_list', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres();
+select is(array[pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'total', pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'submitted_at',
+                pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'last_saved_at', pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'marker_id',
+                pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'marker_name', pg_temp.unit(pg_temp.r('d_lead_list'), 'x3') ->> 'marker_name',
+                pg_temp.unit(pg_temp.r('d_lead_list'), 'x3') ->> 'total'],
+  array[null, null, null, null, null, 'Mara One', '3.0'],
+  'lead_is_blind_to_pieces_waiting_for_a_second_marking: holding nothing, the lead sees nothing of x2''s first marking; x3''s shows');
 
 -- ---------------------------------------------------------------------------------------------
 -- lead_may_take_a_second_pass
@@ -647,6 +660,73 @@ select is((select array[m.status, (m.pages_changed_at is not null)::text] from p
   array['in_progress', 'true', 'm1 live assigned,m7 second assigned', 'taken'],
   'm7''s second marking is in progress again, marked as changed, with an assigned hold, beside m1''s live one');
 select is(pg_temp.marker_lock('m7'), 'ShareLock', 'the hand-back took m7''s key, shared, as a hand-out does');
+
+-- ---------------------------------------------------------------------------------------------
+-- assign_takes_over_an_abandoned_second_pass: m5 is given x4's second pass by Next script, opens it, and their hold
+-- runs out; an admin then gives the pass to m3.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.wait_second('x4');
+select tests.as_user(pg_temp.uid('m5'));
+insert into res values ('u_next', public.marking_next(pg_temp.k('e')));
+select public.marking_unit_open(pg_temp.u('x4'));
+select tests.as_postgres();
+update public.marking_assignments set hold_until = now() - interval '1 minute'
+where unit_id = pg_temp.u('x4') and kind = 'second' and ended_at is null;
+select public.marking_holds_expire(null);
+insert into res values ('u_before', to_jsonb(pg_temp.ended('x4', 'm5') || ' ' || pg_temp.ms('x4', 'm5')));
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('u_assign', public.marking_assign(array[pg_temp.u('x4')], pg_temp.uid('m3'), 'Give it to m3', 'second'));
+select tests.as_postgres();
+select is(array[pg_temp.r('u_next') ->> 'unit_id', pg_temp.r('u_before') #>> '{}', pg_temp.r('u_assign')::text],
+  array[pg_temp.u('x4')::text, 'expired in_progress', '{"ok": true, "skipped": [], "assigned": 1}'],
+  'assign_takes_over_an_abandoned_second_pass: m5''s hold on x4''s second pass ran out with their marking in progress; an admin gives the pass to m3');
+select is(array[pg_temp.holders('x4'), pg_temp.ms('x4', 'm5'), pg_temp.ms('x4', 'm3'), pg_temp.us('x4'), pg_temp.ms('x4', 'm1')],
+  array['m3 second assigned', 'set_aside expired', 'in_progress', 'submitted', 'submitted'],
+  'm5''s marking is set aside (expired) and m3 holds the pass, their own earlier marking in progress again; the first marking stands');
+
+-- ---------------------------------------------------------------------------------------------
+-- lead_stays_blind_while_their_second_marking_stands: the lead's hold on x2's second pass runs out with their marking
+-- in progress, and x2 is moved on (to_lead, as Task 4 may move it); then they take it up again and submit it, and x2
+-- is checked.
+-- ---------------------------------------------------------------------------------------------
+update public.marking_assignments set hold_until = now() - interval '1 minute'
+where unit_id = pg_temp.u('x2') and marker_id = pg_temp.uid('lead') and ended_at is null;
+select public.marking_holds_expire(null);
+update public.marking_units set check_state = 'to_lead' where id = pg_temp.u('x2');
+select tests.as_user(pg_temp.uid('lead'));
+insert into res values ('bl_list1', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres();
+select is(array[pg_temp.unit(pg_temp.r('bl_list1'), 'x2') ->> 'total', pg_temp.unit(pg_temp.r('bl_list1'), 'x2') ->> 'submitted_at',
+                pg_temp.unit(pg_temp.r('bl_list1'), 'x2') ->> 'last_saved_at', pg_temp.unit(pg_temp.r('bl_list1'), 'x2') ->> 'marker_id',
+                pg_temp.unit(pg_temp.r('bl_list1'), 'x2') ->> 'marker_name', pg_temp.unit(pg_temp.r('bl_list1'), 'x2') #>> '{second,state}',
+                pg_temp.holders('x2')],
+  array[null, null, null, null, null, 'open', '-'],
+  'lead_stays_blind_while_their_second_marking_stands: with their second marking in progress and no hold, the lead sees nothing of x2''s first marking');
+update public.marking_units set check_state = 'waiting_second' where id = pg_temp.u('x2');
+select tests.as_user(pg_temp.uid('lead'));
+insert into res values ('bl_next', public.marking_next(pg_temp.k('e')));
+insert into res values ('bl_open', public.marking_unit_open(pg_temp.u('x2')));
+insert into res values ('bl_save', public.marking_save((pg_temp.r('bl_open') #>> '{marking,id}')::uuid, (pg_temp.r('bl_open') #>> '{marking,rev}')::int,
+  pg_temp.all_marks(1, 1, 1)));
+insert into res values ('bl_sub', public.marking_submit((pg_temp.r('bl_open') #>> '{marking,id}')::uuid, (pg_temp.r('bl_save') ->> 'rev')::int));
+select tests.as_postgres();
+update public.marking_units set check_state = 'checked' where id = pg_temp.u('x2');
+select tests.as_user(pg_temp.uid('lead'));
+insert into res values ('bl_list2', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('bl_admin', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres();
+select is(array[pg_temp.r('bl_next')::text, pg_temp.code(pg_temp.r('bl_sub')),
+                pg_temp.unit(pg_temp.r('bl_list2'), 'x2') ->> 'total', pg_temp.unit(pg_temp.r('bl_list2'), 'x2') ->> 'submitted_at',
+                pg_temp.unit(pg_temp.r('bl_list2'), 'x2') ->> 'last_saved_at', pg_temp.unit(pg_temp.r('bl_list2'), 'x2') ->> 'marker_id',
+                pg_temp.unit(pg_temp.r('bl_list2'), 'x2') ->> 'marker_name', pg_temp.unit(pg_temp.r('bl_list2'), 'x2') #>> '{second,state}'],
+  array[jsonb_build_object('ok', true, 'unit_id', pg_temp.u('x2'), 'resumed', true)::text, 'ok', null, null, null, null, null, 'submitted'],
+  'Next script gives the lead their marking back and they submit it; with the piece checked, the lead still sees nothing of the first marking');
+select is(array[pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'total', pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'marker_name',
+                (pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'marker_id' = pg_temp.uid('m1')::text)::text,
+                (pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'last_saved_at' is not null)::text,
+                (pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'submitted_at' is not null)::text],
+  array['3.0', 'Mara One', 'true', 'true', 'true'], 'an admin sees the first marking in full');
 
 -- ---------------------------------------------------------------------------------------------
 -- second_rule_and_blocked_agree: for every user of c and every piece of e, whatever its state and holders, the rule

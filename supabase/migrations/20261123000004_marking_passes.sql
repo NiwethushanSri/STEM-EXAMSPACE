@@ -14,7 +14,7 @@
 -- marked or checked, nobody else holding the second pass and no second marking of another marker submitted. So the
 -- first marker never is (they have a pass on the piece), and a marker who saw a name on the piece never is, by Next
 -- script or by an admin. The second marker is shown the piece's pages, questions and mark scheme and none of the first
--- marker's marks, total, annotations or note (nor, for a lead marker, the first total in the list of pieces). A second
+-- marker's marks, total, annotations or note (nor, for a lead marker, the first marking in the list of pieces). A second
 -- pass is freed as a live one is: when its hold runs out the marker's marking is kept and Next script gives it back to
 -- them while nobody else has taken the pass; another marker who takes it has that marking set aside (expired); giving
 -- it back, an admin taking it back, or the marker losing their approval or declaring a conflict sets it aside. None of
@@ -55,8 +55,9 @@
 --   marking_take_back (20261122000006): takes p_kind (live or second). Audited marking_second_taken_back for second.
 --   marking_units_list (20261122000015): each piece also says check_state and second: {marker_id, marker_name, state
 --     (taken, open: their marking in progress with no hold, or submitted), how} or null; p_marker also keeps the pieces
---     whose second pass that marker holds or has marked. A lead holding a piece's second pass, or with their second
---     marking of it in progress, gets its total and submitted_at as null.
+--     whose second pass that marker holds or has marked. For a caller who is not an admin, a piece waiting for a
+--     second marking, or whose second pass is theirs (held, or a second marking not set aside), shows no first
+--     marker, times or total.
 --   marking_work_blocked (20261122000007): the caller's pass of any kind (a marking of theirs set aside, with no pass,
 --     is hold_expired as before); a checked script is accepted.
 --   marking_unit_open (20261123000002): the caller's pass; marking also says practice (false) and sent_back_note.
@@ -643,11 +644,14 @@ begin
     join public.scripts s on s.id = u.script_id
     where u.id = v_held[i] and not u.on_hold and s.taken_back_at is null
       and case when v_kind = 'live' then u.state = 'open' and s.state in ('ready_to_mark', 'marking')
+               when v_kind = 'second' then u.check_state = 'waiting_second' and s.state in ('marking', 'marked', 'checked')
                else s.state in ('marking', 'marked', 'checked') end
     for no key update of s skip locked
     for update of u skip locked;
-    if v_unit is not null and v_kind <> 'live'
-       and exists (select 1 from public.marking_assignments a where a.unit_id = v_unit and a.kind = v_kind and a.ended_at is null) then
+    -- Held now, read again as marking_units_pick reads a second pass: nobody took the pass or submitted it meanwhile.
+    if v_unit is not null and v_kind <> 'live' and (
+         exists (select 1 from public.marking_assignments a where a.unit_id = v_unit and a.kind = v_kind and a.ended_at is null)
+         or exists (select 1 from public.markings m where m.unit_id = v_unit and m.kind = v_kind and m.status = 'submitted')) then
       v_unit := null;
     end if;
     exit when v_unit is not null;
@@ -1001,9 +1005,10 @@ $$;
 -- marking_units_list: as 20261122000015. Each piece also says check_state and second: who has its second pass and how
 -- ({marker_id, marker_name, state: taken while they hold it, submitted once their second marking is, else open (their
 -- marking in progress, no hold), how}, or null when nobody does). p_marker also keeps the pieces whose second pass that
--- marker holds or has marked. For admins and the subject's lead marker. A lead who holds a piece's second pass, or has
--- their second marking of it in progress, is given its total and submitted_at as null: a second marker never sees the
--- first total. Returns {ok, units, more}.
+-- marker holds or has marked. For admins and the subject's lead marker. A lead (any caller who is not an admin) is
+-- blind to the first marking of a piece waiting for a second marking, and of a piece whose second pass is theirs (they
+-- hold it, or have a second marking of it that is not set aside, whatever its status): its marker_id, marker_name,
+-- last_saved_at, submitted_at and total are null. Admins see everything. Returns {ok, units, more}.
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.marking_units_list(p_exam uuid, p_state text default null, p_marker uuid default null)
 returns jsonb
@@ -1044,11 +1049,11 @@ begin
     select u.id, s.number, g.position, jsonb_build_object(
       'unit_id', u.id, 'script_number', s.number, 'index_number', d.index_number, 'source', s.source, 'group_label', g.label,
       'state', u.state, 'on_hold', u.on_hold, 'hold_reason', u.hold_reason,
-      'marker_id', p.id,
-      'marker_name', case when p.id is not null then coalesce(nullif(btrim(p.first_name || ' ' || p.last_name), ''), 'Marker ' || left(p.id::text, 8)) end,
-      'how', a.how, 'hold_until', a.hold_until, 'last_saved_at', x.last_saved_at,
-      -- A lead marking the piece's second pass (holding it, or with their second marking in progress) is not shown the
-      -- first marking's total or when it was submitted.
+      -- A piece the lead may be blind to (sm.blind) shows nothing of its first marking: no marker, no times, no total.
+      'marker_id', case when not sm.blind then p.id end,
+      'marker_name', case when p.id is not null and not sm.blind
+                          then coalesce(nullif(btrim(p.first_name || ' ' || p.last_name), ''), 'Marker ' || left(p.id::text, 8)) end,
+      'how', a.how, 'hold_until', a.hold_until, 'last_saved_at', case when not sm.blind then x.last_saved_at end,
       'submitted_at', case when not sm.blind then x.submitted_at end, 'total', case when not sm.blind then x.total end,
       'waiting', case when u.state <> 'submitted' then w.why end,
       'check_state', u.check_state,
@@ -1069,9 +1074,12 @@ begin
     left join public.marking_assignments a2 on a2.unit_id = u.id and a2.kind = 'second' and a2.ended_at is null
     left join public.markings x2 on x2.unit_id = u.id and x2.kind = 'second' and x2.status <> 'set_aside'
     left join public.profiles p2 on p2.id = coalesce(a2.marker_id, x2.marker_id)
+    -- Blind, for a caller who is not an admin: a piece waiting for a second marking (they may be handed it), or one
+    -- whose second pass is theirs (they hold it, or their second marking of it is not set aside, whatever its status).
     cross join lateral (
-      select not v_admin and (coalesce(a2.marker_id = v_actor, false)
-                              or coalesce(x2.marker_id = v_actor and x2.status = 'in_progress', false)) as blind) sm
+      select not v_admin and (u.check_state is not distinct from 'waiting_second'
+                              or coalesce(a2.marker_id = v_actor, false)
+                              or coalesce(x2.marker_id = v_actor, false)) as blind) sm
     where u.exam_id = p_exam
       and (p_state is null or (p_state = 'on_hold' and u.on_hold) or u.state = p_state)
       and (p_marker is null or coalesce(a.marker_id, x.marker_id) = p_marker or coalesce(a2.marker_id, x2.marker_id) = p_marker)
