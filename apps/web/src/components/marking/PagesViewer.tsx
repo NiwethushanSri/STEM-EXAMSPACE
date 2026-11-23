@@ -16,15 +16,25 @@ type Problem = "refused" | "failed";
  * A read-only pager through a piece's pages, for the lead marker (or an admin) to look at a changed picture before
  * releasing it. It opens on `highlight` (the changed page, marked "Changed") and asks for each page's link when it is
  * shown, through the marking-pictures function: the database decides, as the signed-in user, whether they may see the
- * pages now. Nothing on it names the candidate; it draws nothing and changes nothing.
+ * pages now. A page with has_picture false has no marking picture yet: it says so, and nothing is asked for it. Nothing
+ * on it names the candidate; it draws nothing and changes nothing.
  */
-export function PagesViewer({ unitId, pages, highlight }: { unitId: string; pages: { n: number; page_id: string }[]; highlight?: string }) {
+export function PagesViewer({
+  unitId,
+  pages,
+  highlight,
+}: {
+  unitId: string;
+  pages: { n: number; page_id: string; has_picture?: boolean }[];
+  highlight?: string;
+}) {
   const [index, setIndex] = useState(() => Math.max(0, pages.findIndex((p) => p.page_id === highlight)));
   const [links, setLinks] = useState<Record<string, { url: string; at: number }>>({});
   const [problems, setProblems] = useState<Record<string, Problem>>({});
   const asking = useRef(new Set<string>());
   const page = pages[index] ?? null;
-  const pageId = page?.page_id ?? null;
+  const noPicture = page?.has_picture === false;
+  const pageId = page && !noPicture ? page.page_id : null;
 
   const ask = async (id: string, again = false) => {
     const known = links[id];
@@ -75,7 +85,9 @@ export function PagesViewer({ unitId, pages, highlight }: { unitId: string; page
         </div>
       </div>
       <div data-testid="pages-viewer-page" className="flex h-[65vh] items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-100">
-        {link && !problem ? (
+        {noPicture ? (
+          <p className="p-6 text-center text-sm text-slate-700">This page has no marking picture yet.</p>
+        ) : link && !problem ? (
           // eslint-disable-next-line @next/next/no-img-element -- a 120-second signed link to a private picture, not optimisable
           <img
             key={link.url}

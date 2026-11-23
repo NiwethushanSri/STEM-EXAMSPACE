@@ -876,7 +876,8 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
 }
 
 /** Asks the marking-pictures function for a page's 120-second link. A refusal (the piece may no longer be the marker's
- * to see, or the page no longer its) opens the piece again, once per page; any other failure is shown. */
+ * to see, or the page no longer its) opens the piece again, once per page until its link is given again; any other
+ * failure is shown. */
 async function signPicture(
   unitId: string,
   pageId: string,
@@ -891,6 +892,8 @@ async function signPicture(
   const links = await fetchPictureLinks(unitId, [pageId]);
   const url = links.ok ? links.urls[pageId] : undefined;
   if (url) {
+    // Given again: a later refusal of this page opens the piece again.
+    h.refusedPages.current.delete(pageId);
     h.onSigned();
     h.setUrls((m) => ({ ...m, [pageId]: url }));
     h.setFailed((m) => ({ ...m, [pageId]: false }));

@@ -28,6 +28,8 @@ import { noSidewaysScroll } from "./scripts";
 // the first is marked and submitted, the second is submitted while the marker tries to change it (and Next script on
 // the screen then opens the third), the third takes pen and finger and then reports a name, the fourth meets a second
 // screen. Every row and file is removed afterwards.
+// Needs the Edge Functions served locally (supabase functions serve --env-file supabase/functions/.env.test.local): the
+// screen's picture links come from marking-pictures. npm run e2e:local starts them when they are not served already.
 
 let examId: string;
 let marker: Login;

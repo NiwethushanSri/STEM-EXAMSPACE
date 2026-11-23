@@ -52,7 +52,8 @@ create function pg_temp.put(p_names text[]) returns void language sql as $$
   insert into storage.objects (bucket_id, name) select 'script-pages', n from unnest(p_names) n on conflict do nothing $$;
 -- 3B (Ruling R12): a marker or lead reads no picture from storage; links are signed for what marking_picture_paths
 -- gives. The pieces that show the page whose current marking picture is p_name (read as postgres), and how many of
--- these pictures the caller is given by marking_picture_paths, asking with each such piece.
+-- these pictures the caller is given by marking_picture_paths, asking with each such piece. Only a page's current
+-- marking picture is found this way: an old or full picture is checked by asking for its page instead.
 create function pg_temp.shown(p_name text) returns table (unit_id uuid, page_id uuid) language sql stable security definer as $$
   with pages as (select p.id, p.upload_id from public.script_pages p where p.marking_path = p_name and p.replaced_at is null),
   scripts as (
@@ -281,12 +282,14 @@ select is(array[pg_temp.marks('mk:a1'), pg_temp.rev('mk:a1')::text,
   array['1=2', '1', '1'], 'the marks and the tick are as m1 saved them');
 select pg_temp.put(array[pg_temp.r('old_a1') #>> '{}', pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1'), pg_temp.full('p:a1:2')]);
 select tests.as_user(pg_temp.uid('m1'));
-select is(pg_temp.got(array[pg_temp.r('old_a1') #>> '{}', pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0,
-  'm1 reads neither the old picture nor the new one, nor the piece''s other pages');
+select is(array[pg_temp.got(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')])::text,
+                pg_temp.code(public.marking_picture_paths(pg_temp.u('a1'), array[pg_temp.k('p:a1:2')]))],
+  array['0', 'on_hold'], 'm1 reads neither the new picture nor the piece''s other pages: asked for the changed page, the piece is on hold');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('lead'));
-select is(array[pg_temp.got(array[pg_temp.path('p:a1:2')]), pg_temp.got(array[pg_temp.path('p:a1:1')]),
-                pg_temp.got(array[pg_temp.r('old_a1') #>> '{}']), pg_temp.got(array[pg_temp.full('p:a1:2')])],
-  array[1, 1, 0, 0], 'the lead reads the script''s marking pictures while the alert is open: never the old one or a full picture');
+select is(array[pg_temp.got(array[pg_temp.path('p:a1:2')])::text, pg_temp.got(array[pg_temp.path('p:a1:1')])::text,
+                public.marking_picture_paths(pg_temp.u('a1'), array[pg_temp.k('p:a1:2')]) -> 'paths' -> 0 ->> 'marking_path'],
+  array['1', '1', pg_temp.path('p:a1:2')],
+  'the lead reads the script''s marking pictures while the alert is open: asked for the changed page, its new picture, never the old one or a full picture');
 select tests.as_postgres();
 insert into public.marker_conflicts (marker_id, student_id, recorded_at) values (pg_temp.uid('lead'), pg_temp.student('a1'), now());
 select tests.as_user(pg_temp.uid('lead'));

@@ -174,7 +174,7 @@ export function AlertsList({ alerts, scriptLinks = false, more = false }: { aler
           </p>
           <PagesViewer
             unitId={step.pages.unitId}
-            pages={step.pages.pages.map((p) => ({ n: p.n, page_id: p.pageId }))}
+            pages={step.pages.pages.map((p) => ({ n: p.n, page_id: p.pageId, has_picture: p.hasPicture }))}
             highlight={step.pages.pages.find((p) => p.changed)?.pageId}
           />
         </ViewerDialog>
@@ -188,10 +188,14 @@ export function AlertsList({ alerts, scriptLinks = false, more = false }: { aler
   );
 }
 
-/** A wide modal box for the page viewer: Escape, the backdrop and Close close it; focus starts on Close and goes back to
- * what opened it. */
+/** What Tab may move to inside a box. */
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** A wide modal box for the page viewer: Escape, the backdrop and Close close it; focus starts on Close, Tab and
+ * Shift+Tab stay inside it while it is open, and focus goes back to what opened it. */
 function ViewerDialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
   const close = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
   const onEscape = useEffectEvent(onClose);
   useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -204,7 +208,21 @@ function ViewerDialog({ title, children, onClose }: { title: string; children: R
   useEffect(() => {
     close.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onEscape();
+      if (e.key === "Escape") return onEscape();
+      if (e.key !== "Tab" || !panel.current) return;
+      const items = [...panel.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const at = document.activeElement;
+      const inside = at instanceof Node && panel.current.contains(at);
+      if (e.shiftKey && (at === first || !inside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (at === last || !inside)) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -212,6 +230,7 @@ function ViewerDialog({ title, children, onClose }: { title: string; children: R
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4" onClick={onClose}>
       <div
+        ref={panel}
         role="dialog"
         aria-modal="true"
         aria-label={title}

@@ -301,9 +301,9 @@ describe("parseAlerts and their words", () => {
       script_number: "P1-0007",
       index_number: "SE-2026-0001",
       pages: [
-        { n: 1, page_id: "p1", copy_page: 1, changed: false },
-        { n: 2, page_id: "p2", copy_page: 2, changed: true, marking_path: "e/u/1-1/1-marking.jpg" },
-        { n: 3, page_id: "p3", copy_page: null, changed: false },
+        { n: 1, page_id: "p1", copy_page: 1, changed: false, has_picture: true },
+        { n: 2, page_id: "p2", copy_page: 2, changed: true, has_picture: true, marking_path: "e/u/1-1/1-marking.jpg" },
+        { n: 3, page_id: "p3", copy_page: null, changed: false, has_picture: false },
         { n: "4", page_id: "p4" },
       ],
     };
@@ -314,9 +314,9 @@ describe("parseAlerts and their words", () => {
       scriptNumber: "P1-0007",
       indexNumber: "SE-2026-0001",
       pages: [
-        { n: 1, pageId: "p1", copyPage: 1, changed: false },
-        { n: 2, pageId: "p2", copyPage: 2, changed: true },
-        { n: 3, pageId: "p3", copyPage: null, changed: false },
+        { n: 1, pageId: "p1", copyPage: 1, changed: false, hasPicture: true },
+        { n: 2, pageId: "p2", copyPage: 2, changed: true, hasPicture: true },
+        { n: 3, pageId: "p3", copyPage: null, changed: false, hasPicture: false },
       ],
     });
     expect(parseAlertPages({ ok: false, code: "conflict_of_interest" })).toEqual({ ok: false, code: "conflict_of_interest" });

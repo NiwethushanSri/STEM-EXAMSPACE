@@ -13,7 +13,8 @@
 --     who may see them now (the marker who may work on the piece, as marking_work_blocked says; the subject's lead
 --     marker, by the lead's rule of marking_picture_allowed (20261122000008), word for word; an admin). Never a full
 --     picture.
---   marking_alert_pages(p_alert): the pages of an alert's script, the changed one marked, for the lead's page viewer.
+--   marking_alert_pages(p_alert): the pages of an alert's script, the changed one marked and each saying whether it has
+--     a marking picture, for the lead's page viewer.
 -- Dropped: the policy script_pages_objects_select_marker and marking_picture_allowed(text) (20261122000008).
 -- Changed, each from its latest definition:
 --   marking_unit_open (20261122000007): each page is {n, page_id, copy_page, extra, rotation, has_picture}; its
@@ -212,11 +213,12 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- marking_alert_pages: for an admin or the subject's lead marker, the pages an alert's script shows to its markers
--- (marking_script_pages), the alert's page marked as changed, and a piece of the script (unit_id, the one with the
--- lowest id) to ask marking-pictures for their links. Refused: invalid_input, not_found (an admin; others are told
--- forbidden), forbidden (not the subject's lead), conflict_of_interest (a lead blocked for the candidate,
--- marking_marker_blocked; an admin never is). Returns {ok, unit_id, script_number, index_number,
--- pages: [{n, page_id, copy_page, changed}]}. No candidate name and no path.
+-- (marking_script_pages), the alert's page marked as changed, each saying whether it has a current marking picture (as
+-- marking_unit_open does), and a piece of the script (unit_id, the one with the lowest id) to ask marking-pictures for
+-- their links. Refused: invalid_input, not_found (an admin; others are told forbidden), forbidden (not the subject's
+-- lead), conflict_of_interest (a lead blocked for the candidate, marking_marker_blocked; an admin never is). Returns
+-- {ok, unit_id, script_number, index_number, pages: [{n, page_id, copy_page, changed, has_picture}]}. No candidate name
+-- and no path.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_alert_pages(p_alert uuid)
 returns jsonb
@@ -257,7 +259,8 @@ begin
     'index_number', (select d.index_number from public.student_details d where d.profile_id = v_student),
     'pages', coalesce((
       select jsonb_agg(jsonb_build_object('n', x.n, 'page_id', x.page_id, 'copy_page', x.copy_page,
-                                          'changed', coalesce(x.page_id = v_a.page_id, false)) order by x.n)
+                                          'changed', coalesce(x.page_id = v_a.page_id, false),
+                                          'has_picture', x.marking_path is not null) order by x.n)
       from public.marking_script_pages(v_x.id) x), '[]'::jsonb));
 end;
 $$;

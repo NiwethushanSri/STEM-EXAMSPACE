@@ -1,10 +1,12 @@
 // Runs Playwright against the local Supabase stack (never the hosted project).
 // Cross-platform stand-in for cross-env: sets E2E_ENV_FILE, builds the app once into .next-e2e with the
-// local Supabase URL and anon key, starts the processing server (docker compose), then hands over to playwright
-// (which serves the app with next start) and stops the processing server when it is done (if it started it).
+// local Supabase URL and anon key, starts the processing server (docker compose) and the Edge Functions (supabase
+// functions serve), then hands over to playwright (which serves the app with next start) and stops the processing
+// server and the functions when it is done (each only if it started it).
 import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { functionsServed, serveFunctions } from "./e2e-functions.mjs";
 
 const envFile = "supabase/functions/.env.test.local";
 process.env.E2E_ENV_FILE = envFile;
@@ -46,11 +48,16 @@ const compose = resolve(import.meta.dirname, "../../services/processor/docker-co
 const processor = (args, opts = {}) => spawnSync("docker", ["compose", "-f", compose, ...args], { stdio: "inherit", ...opts });
 const ps = processor(["ps", "--status", "running", "-q", "processor"], { stdio: ["ignore", "pipe", "inherit"], encoding: "utf8" });
 const wasRunning = ps.status === 0 && (ps.stdout ?? "").trim() !== "";
+// The Edge Functions the specs call (marking-pictures; the paper functions), from the same env file. Started after
+// the processing server unless they are served already; ones this script started are stopped, and their runtime
+// container removed, whenever the processing server would be.
+let stopFunctions = null;
 let stopped = false;
 const stop = () => {
-  if (wasRunning || stopped) return;
+  if (stopped) return;
   stopped = true;
-  processor(["down"]);
+  stopFunctions?.();
+  if (!wasRunning) processor(["down"]);
 };
 
 // An interrupt (Ctrl+C) or a termination. The handlers are in place before the processing server is started, so one
@@ -79,6 +86,16 @@ if (!wasRunning && processor(["up", "-d", "processor"]).status !== 0) {
   console.error("e2e:local: the processing server did not start; not running tests");
   stop();
   process.exit(1);
+}
+
+if (!(await functionsServed(vars.SUPABASE_URL))) {
+  const functions = serveFunctions({ supabaseUrl: vars.SUPABASE_URL, envFile, cwd: resolve(import.meta.dirname, "../..") });
+  stopFunctions = functions.stop;
+  if (!(await functions.ready)) {
+    console.error(`e2e:local: the Edge Functions did not start (npx supabase functions serve --env-file ${envFile}); not running tests`);
+    stop();
+    process.exit(1);
+  }
 }
 
 let status = 1;

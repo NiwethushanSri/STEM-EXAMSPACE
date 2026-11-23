@@ -350,7 +350,7 @@ export function alertPagesViewable(a: Pick<AlertRow, "kind" | "releaseBlocked">)
   return a.kind === "picture_changed" && a.releaseBlocked !== "conflict_of_interest";
 }
 
-export type AlertPage = { n: number; pageId: string; copyPage: number | null; changed: boolean };
+export type AlertPage = { n: number; pageId: string; copyPage: number | null; changed: boolean; hasPicture: boolean };
 export type AlertPages = { unitId: string; scriptNumber: string; indexNumber: string | null; pages: AlertPage[] };
 
 /** marking_alert_pages's answer: the script's pages for the lead's viewer (the changed one marked) and the piece to ask
@@ -370,7 +370,7 @@ export function parseAlertPages(data: unknown): ({ ok: true } & AlertPages) | { 
     pages: list(d.pages).flatMap((p) => {
       const pageId = str(p.page_id);
       return pageId && typeof p.n === "number"
-        ? [{ n: p.n, pageId, copyPage: typeof p.copy_page === "number" ? p.copy_page : null, changed: p.changed === true }]
+        ? [{ n: p.n, pageId, copyPage: typeof p.copy_page === "number" ? p.copy_page : null, changed: p.changed === true, hasPicture: p.has_picture === true }]
         : [];
     }),
   };

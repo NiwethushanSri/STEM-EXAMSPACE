@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(45);
+select plan(46);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -338,9 +338,9 @@ select tests.as_postgres();
 select is(pg_temp.r('pages_lead'),
   (select jsonb_build_object('ok', true, 'unit_id', pg_temp.u('a1'), 'script_number', s.number, 'index_number', d.index_number,
      'pages', jsonb_build_array(
-       jsonb_build_object('n', 1, 'page_id', pg_temp.k('p:a1:1'), 'copy_page', 1, 'changed', false),
-       jsonb_build_object('n', 2, 'page_id', pg_temp.k('p:a1:2'), 'copy_page', 2, 'changed', true),
-       jsonb_build_object('n', 3, 'page_id', pg_temp.k('p:a1:3'), 'copy_page', 3, 'changed', false)))
+       jsonb_build_object('n', 1, 'page_id', pg_temp.k('p:a1:1'), 'copy_page', 1, 'changed', false, 'has_picture', true),
+       jsonb_build_object('n', 2, 'page_id', pg_temp.k('p:a1:2'), 'copy_page', 2, 'changed', true, 'has_picture', true),
+       jsonb_build_object('n', 3, 'page_id', pg_temp.k('p:a1:3'), 'copy_page', 3, 'changed', false, 'has_picture', true)))
    from public.scripts s join public.bookings b on b.id = s.booking_id join public.student_details d on d.profile_id = b.student_id
    where s.id = pg_temp.k('a1')),
   'alert_pages_marks_the_changed_page_and_has_no_name: the lead gets the script''s pages, page 2 marked as changed, and a piece to ask for links with');
@@ -350,6 +350,14 @@ select is(pg_temp.r('pages_admin'), pg_temp.r('pages_lead'), 'an admin gets the 
 select is(array[pg_temp.code(pg_temp.r('pages_m1')), pg_temp.code(pg_temp.r('pages_unknown_lead')), pg_temp.code(pg_temp.r('pages_unknown_admin')),
                 pg_temp.code(pg_temp.r('pages_null'))],
   array['forbidden', 'forbidden', 'not_found', 'invalid_input'], 'a marker who leads nothing is refused; an unknown alert is not_found to an admin only');
+-- A page with no current marking picture (a rerun replaced it) says so, as marking_unit_open does.
+update public.script_pages set replaced_at = now() where id = pg_temp.k('p:a1:3');
+select tests.as_user(pg_temp.uid('lead'));
+insert into res values ('pages_no_picture', public.marking_alert_pages(pg_temp.alert('a1', 'picture_changed')));
+select tests.as_postgres();
+update public.script_pages set replaced_at = null where id = pg_temp.k('p:a1:3');
+select is((select array_agg((x ->> 'has_picture')::boolean order by (x ->> 'n')::int) from jsonb_array_elements(pg_temp.r('pages_no_picture') -> 'pages') x),
+  array[true, true, false], 'each page says whether it has a marking picture');
 -- With the pages seen, the lead's links still come through the piece it names.
 select tests.as_user(pg_temp.uid('lead'));
 select is(pg_temp.code(public.marking_picture_paths((pg_temp.r('pages_lead') ->> 'unit_id')::uuid, array[pg_temp.k('p:a1:2')])), 'ok',

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(174);
+select plan(173);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -60,7 +60,8 @@ create function pg_temp.put(p_names text[]) returns void language sql as $$
   insert into storage.objects (bucket_id, name) select 'script-pages', n from unnest(p_names) n on conflict do nothing $$;
 -- 3B (Ruling R12): a marker reads no picture from storage; links are signed for what marking_picture_paths gives. The
 -- pieces that show the page whose current marking picture is p_name (read as postgres), and how many of these
--- pictures the caller is given by marking_picture_paths, asking with each such piece.
+-- pictures the caller is given by marking_picture_paths, asking with each such piece. Only a page's current marking
+-- picture is found this way: a full, old or replaced picture is asked of marking_picture_paths by its page instead.
 create function pg_temp.shown(p_name text) returns table (unit_id uuid, page_id uuid) language sql stable security definer as $$
   with pages as (select p.id, p.upload_id from public.script_pages p where p.marking_path = p_name and p.replaced_at is null),
   scripts as (
@@ -922,7 +923,10 @@ select pg_temp.put(pg_temp.paths('p1', 'marking') || pg_temp.paths('p1', 'full')
                    || array[pg_temp.path('x1_extra'), pg_temp.path('x1_unconfirmed')]);
 select tests.as_user(pg_temp.uid('m1'));
 select is(pg_temp.got(pg_temp.paths('p1', 'marking')), 3, 'marker_reads_only_marking_pictures_of_a_held_piece: the holder reads each marking picture of the piece');
-select is(pg_temp.got(pg_temp.paths('p1', 'full')), 0, 'never a full picture');
+insert into res values ('p1_all', public.marking_picture_paths(pg_temp.u('p1'), array[pg_temp.k('p:p1:1'), pg_temp.k('p:p1:2'), pg_temp.k('p:p1:3')]));
+select is(array[pg_temp.code(pg_temp.r('p1_all')),
+                (select count(*)::text from jsonb_array_elements(pg_temp.r('p1_all') -> 'paths') x where x ->> 'marking_path' = any (pg_temp.paths('p1', 'full')))],
+  array['ok', '0'], 'never a full picture: asked for every page of the piece, it gives none of their full pictures');
 select is(pg_temp.got(pg_temp.paths('a3', 'marking')), 0, 'nor another script''s marking picture');
 select is(array[public.marking_picture_paths(pg_temp.u('p1'), array[pg_temp.k('p:p1:1')]) -> 'paths' -> 0 ->> 'marking_path',
                 pg_temp.code(public.marking_picture_paths(pg_temp.u('p1'), null))],
@@ -1014,15 +1018,14 @@ update public.marking_assignments set hold_until = now() + interval '1 hour' whe
 insert into res select 'old_paths', to_jsonb(pg_temp.paths('p1', 'marking'));
 update public.script_pages set replaced_at = now() where id = pg_temp.k('p:p1:2');
 select tests.as_user(pg_temp.uid('m1'));
-select is(array[pg_temp.got(array[pg_temp.r('old_paths') ->> 1]), pg_temp.got(array[pg_temp.r('old_paths') ->> 0])], array[0, 1],
-  'old_marking_path_not_readable: the picture of a page a rerun replaced cannot be read; the piece''s other pages still can');
+select is(array[pg_temp.code(public.marking_picture_paths(pg_temp.u('p1'), array[pg_temp.k('p:p1:2')])), pg_temp.got(array[pg_temp.r('old_paths') ->> 0])::text],
+  array['forbidden', '1'], 'old_marking_path_not_readable: the picture of a page a rerun replaced cannot be read; the piece''s other pages still can');
 select tests.as_postgres();
 update public.script_pages set marking_path = replace(marking_path, '-marking.jpg', '-remask-marking.jpg') where id = pg_temp.k('p:p1:1');
 select pg_temp.put(array[pg_temp.path('p:p1:1')]);
 select tests.as_user(pg_temp.uid('m1'));
-select is(pg_temp.got(array[pg_temp.r('old_paths') ->> 0]), 0, 'once a page''s marking picture changes, the old one cannot be read');
 select is(public.marking_picture_paths(pg_temp.u('p1'), array[pg_temp.k('p:p1:1')]) -> 'paths' -> 0 ->> 'marking_path', pg_temp.path('p:p1:1'),
-  'marking_picture_paths gives the new one, not the old');
+  'once a page''s marking picture changes, the old one cannot be read: asked for the page, marking_picture_paths gives the new one');
 -- Task 7: this picture was made again from the same inputs (no hidden area or turn changed), so the piece is not held
 -- and its holder reads the new picture.
 select is(pg_temp.got(array[pg_temp.path('p:p1:1')]), 1, 'the new one, made again from the same inputs, can be read');
