@@ -2039,6 +2039,9 @@ isOneToOne: false
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
                            },
+"marking_subject_has_lead":
+{ Args: { "p_subject": number }; Returns: boolean
+                           },
 "marking_subject_markers":
 { Args: { "p_subject": number }; Returns: number
                            },

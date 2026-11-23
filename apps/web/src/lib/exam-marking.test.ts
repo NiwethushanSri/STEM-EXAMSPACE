@@ -139,6 +139,13 @@ describe("parseChecksView", () => {
     expect(parseChecksView({ ...checksAnswer, off: null })?.off).toBeNull();
     expect(parseChecksView({ ...checksAnswer, off: { ...checksAnswer.off, by_name: null } })?.off?.byName).toBeNull();
   });
+  it("reads a lead marker's answer, which has no reason", () => {
+    expect(parseChecksView({ ...checksAnswer, off: { by_name: "Ada Checker", at: "2026-12-03T00:30:00+00:00" } })?.off).toEqual({
+      reason: null,
+      byName: "Ada Checker",
+      at: "2026-12-03T00:30:00+00:00",
+    });
+  });
   it("refuses a failed or odd answer", () => {
     expect(parseChecksView({ ok: false, code: "forbidden" })).toBeNull();
     expect(parseChecksView({ ...checksAnswer, sample_percent: 0 })).toBeNull();
@@ -152,12 +159,12 @@ describe("the rules for saving the checks", () => {
   it("checks each number is whole and in range", () => {
     expect(checksProblem(saved)).toBeNull();
     expect(checksProblem({ ...saved, samplePercent: 1 })).toBeNull();
-    expect(checksProblem({ ...saved, samplePercent: 101 })).toBe("Second-mark a whole number from 1 to 100% of scripts.");
-    expect(checksProblem({ ...saved, samplePercent: 12.5 })).toBe("Second-mark a whole number from 1 to 100% of scripts.");
+    expect(checksProblem({ ...saved, samplePercent: 101 })).toBe("Enter a whole number from 1 to 100 for the scripts second-marked.");
+    expect(checksProblem({ ...saved, samplePercent: 12.5 })).toBe("Enter a whole number from 1 to 100 for the scripts second-marked.");
     expect(checksProblem({ ...saved, tolerancePercent: 0 })).toBe("The difference that goes to the lead marker is a whole number from 1 to 50%.");
     expect(checksProblem({ ...saved, tolerancePercent: 50 })).toBeNull();
-    expect(checksProblem({ ...saved, seedEvery: 2 })).toBe("Seeded scripts come about one in every 3 to 50 scripts.");
-    expect(checksProblem({ ...saved, seedEvery: Number.NaN })).toBe("Seeded scripts come about one in every 3 to 50 scripts.");
+    expect(checksProblem({ ...saved, seedEvery: 2 })).toBe("Enter a whole number from 3 to 50 for how often a seeded script comes.");
+    expect(checksProblem({ ...saved, seedEvery: Number.NaN })).toBe("Enter a whole number from 3 to 50 for how often a seeded script comes.");
   });
   it("asks for a reason to turn a check off", () => {
     expect(checksTurnOff(saved, { ...saved, seeds: false })).toBe(true);
@@ -179,6 +186,9 @@ describe("the rules for saving the checks", () => {
     );
     expect(checksOffLine({ reason: "Only one marker", byName: null, at: "2026-06-30T23:30:00Z" })).toBe(
       "Turned off by a member of staff on 1 July 2026: Only one marker",
+    );
+    expect(checksOffLine({ reason: null, byName: "Ada Checker", at: "2026-12-03T00:30:00+00:00" })).toBe(
+      "Checks were turned off by Ada Checker on 3 December 2026.",
     );
   });
 });

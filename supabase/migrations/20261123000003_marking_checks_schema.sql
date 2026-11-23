@@ -6,7 +6,9 @@
 -- difference; seeded scripts (about one in every 10 pieces by default, 3 to 50); and practice before live marking. All
 -- three are on unless an admin turns them off, which needs a reason and a subject with at most one approved active
 -- marker (Builder's call 10); the reason is kept with who and when, and cleared once all three are on again. Once
--- marking has opened any change needs a reason. Every change writes an audit row saying what changed, with the reason.
+-- marking has opened any change needs a reason, and a check turned on again follows the opening rules below. Every
+-- change writes an audit row saying what changed, with the reason. The subject's lead marker may read the checks, but
+-- never the reason (it is the audit row's free text, which may name someone): only who turned them off and when.
 -- approved_at and approved_by are for Task 10.
 --
 -- Each piece gets a stored random draw for the sample (sample_draw), whether a second marking is wanted (null: not
@@ -25,8 +27,9 @@
 -- markers read nothing directly.
 --
 -- Added:
---   marking_checks_get(p_exam): the exam's checks, for admins and the subject's lead marker.
+--   marking_checks_get(p_exam): the exam's checks, for admins and (without the reason) the subject's lead marker.
 --   marking_checks_set(p_exam, p_settings, p_reason): the exam's checks, for admins.
+--   marking_subject_markers(p_subject), marking_subject_has_lead(p_subject): internal, the counts both read.
 -- Changed: marking_open, from its latest definition (20261122000005). With double marking on it also needs two
 -- approved active markers of the subject (needs_two_markers); with seeds or practice on, an active lead marker of the
 -- subject (no_lead). Both come after its own structure_incomplete and no_markers. Nothing else in it changed.
@@ -201,12 +204,27 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- marking_checks_get: the exam's checks. An exam never saved has the column defaults. off is the reason the checks
--- were last turned off, with who (by_name) and when, or null; markers_approved counts the subject's approved active
--- markers, and can_switch_off says whether that is at most one. Admins, and the subject's lead marker (forbidden
--- otherwise; an unknown exam is not_found to an admin and forbidden to anyone else). Returns {ok, double_marking,
--- sample_percent, tolerance_percent, seeds, seed_every, practice, off:{reason, by_name, at}|null, markers_approved,
--- can_switch_off, opened, approved}.
+-- Internal: whether the subject has an active lead marker (is_lead_for).
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_subject_has_lead(p_subject bigint)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from public.marker_approvals a
+                 where a.subject_id = p_subject and a.lead and public.is_lead_for(a.marker_id, a.subject_id))
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- marking_checks_get: the exam's checks. An exam never saved has the column defaults. off says who (by_name) last
+-- turned the checks off and when, or is null; for an admin it also carries the reason. A lead marker never gets the
+-- reason: it is the audit reason's free text, which may name someone. markers_approved counts the subject's approved
+-- active markers, and can_switch_off says whether that is at most one. Admins, and the subject's lead marker
+-- (forbidden otherwise; an unknown exam is not_found to an admin and forbidden to anyone else). Returns {ok,
+-- double_marking, sample_percent, tolerance_percent, seeds, seed_every, practice, off:{reason (admins only), by_name,
+-- at}|null, markers_approved, can_switch_off, opened, approved}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_checks_get(p_exam uuid)
 returns jsonb
@@ -243,10 +261,10 @@ begin
     'seed_every', coalesce(v_m.seed_every, 10),
     'practice', coalesce(v_m.practice, true),
     'off', case when v_m.checks_off_at is not null then jsonb_build_object(
-             'reason', v_m.checks_off_reason,
              'by_name', (select nullif(btrim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), '')
                          from public.profiles p where p.id = v_m.checks_off_by),
-             'at', v_m.checks_off_at) end,
+             'at', v_m.checks_off_at)
+             || case when v_admin then jsonb_build_object('reason', v_m.checks_off_reason) else '{}'::jsonb end end,
     'markers_approved', v_markers,
     'can_switch_off', v_markers <= 1,
     'opened', v_m.opened_at is not null,
@@ -259,8 +277,10 @@ $$;
 -- tolerance_percent (1 to 50), seeds, seed_every (3 to 50), practice}, the numbers whole (invalid_input otherwise).
 -- Turning any of double marking, seeds and practice off needs at most one approved active marker of the subject
 -- (not_small_subject) and a reason (reason_required), and keeps the reason with who and when; with all three on again
--- they are cleared. Once marking has opened, any change needs a reason. Saving the same settings changes nothing and
--- writes no audit row; a change writes one (marking_checks_set) saying what changed, with the reason. Admins only.
+-- they are cleared. Once marking has opened, any change needs a reason, and a check turned on follows marking_open's
+-- rules: double marking needs two approved active markers (needs_two_markers), seeds or practice an active lead marker
+-- (no_lead). The refusals no reason can change come before reason_required. Saving the same settings changes nothing
+-- and writes no audit row; a change writes one (marking_checks_set) saying what changed, with the reason. Admins only.
 -- Returns {ok, double_marking, sample_percent, tolerance_percent, seeds, seed_every, practice}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_checks_set(p_exam uuid, p_settings jsonb, p_reason text default null)
@@ -288,6 +308,7 @@ declare
   v_was_sv int;
   v_was_pr boolean;
   v_turning_off boolean;
+  v_markers int;
   v_changes text[] := '{}';
   v_off_reason text;
   v_off_by uuid;
@@ -355,17 +376,22 @@ begin
       'seeds', v_se, 'seed_every', v_sv, 'practice', v_pr);
   end if;
 
+  -- What no reason can change is answered first.
   v_turning_off := (v_was_dm and not v_dm) or (v_was_se and not v_se) or (v_was_pr and not v_pr);
-  if v_turning_off then
-    -- No reason can change this, so it is answered first.
-    if public.marking_subject_markers(v_e.subject_id) > 1 then
-      return jsonb_build_object('ok', false, 'code', 'not_small_subject');
+  v_markers := public.marking_subject_markers(v_e.subject_id);
+  if v_turning_off and v_markers > 1 then
+    return jsonb_build_object('ok', false, 'code', 'not_small_subject');
+  end if;
+  -- Once marking has opened, a check turned on needs what opening would have needed.
+  if v_m.opened_at is not null then
+    if v_dm and not v_was_dm and v_markers < 2 then
+      return jsonb_build_object('ok', false, 'code', 'needs_two_markers');
     end if;
-    if v_reason is null then
-      return jsonb_build_object('ok', false, 'code', 'reason_required');
+    if ((v_se and not v_was_se) or (v_pr and not v_was_pr)) and not public.marking_subject_has_lead(v_e.subject_id) then
+      return jsonb_build_object('ok', false, 'code', 'no_lead');
     end if;
   end if;
-  if v_m.opened_at is not null and v_reason is null then
+  if (v_turning_off or v_m.opened_at is not null) and v_reason is null then
     return jsonb_build_object('ok', false, 'code', 'reason_required');
   end if;
 
@@ -446,9 +472,7 @@ begin
   if coalesce(v_m.double_marking, true) and public.marking_subject_markers(v_e.subject_id) < 2 then
     return jsonb_build_object('ok', false, 'code', 'needs_two_markers');
   end if;
-  if (coalesce(v_m.seeds, true) or coalesce(v_m.practice, true))
-     and not exists (select 1 from public.marker_approvals a
-                     where a.subject_id = v_e.subject_id and a.lead and public.is_lead_for(a.marker_id, a.subject_id)) then
+  if (coalesce(v_m.seeds, true) or coalesce(v_m.practice, true)) and not public.marking_subject_has_lead(v_e.subject_id) then
     return jsonb_build_object('ok', false, 'code', 'no_lead');
   end if;
 
@@ -466,6 +490,7 @@ $$;
 -- Privileges. marking_open's are as they were (create or replace keeps them; restated).
 -- ---------------------------------------------------------------------------------------------
 revoke execute on function public.marking_subject_markers(bigint) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_subject_has_lead(bigint) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_checks_get(uuid) from public, anon;
 revoke execute on function public.marking_checks_set(uuid, jsonb, text) from public, anon;
 revoke execute on function public.marking_open(uuid) from public, anon;

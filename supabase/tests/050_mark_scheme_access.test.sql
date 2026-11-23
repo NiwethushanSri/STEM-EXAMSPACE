@@ -61,6 +61,8 @@ insert into public.marker_approvals (marker_id, subject_id, lead, approved_at)
 select c.id, (select id from public.subjects where name = 'ZZ Scheme access'), c.name = 'lead', now() from c where c.name in ('lead', 'm1', 'm2');
 insert into kv values ('e', tests.marking_exam((select id from public.subjects where name = 'ZZ Scheme access'))),
                       ('e_next', tests.marking_exam((select id from public.subjects where name = 'ZZ Scheme access')));
+-- e has no marking settings until the first case saves them: no exam_marking row (tests.marking_exam writes one).
+delete from public.exam_marking where exam_id = pg_temp.k('e');
 select tests.structure(pg_temp.k('e'));
 insert into kv values ('a1', tests.verified_script(pg_temp.k('e'))), ('a2', tests.verified_script(pg_temp.k('e')));
 select pg_temp.scheme('f', 'e');
@@ -71,7 +73,7 @@ select pg_temp.scheme('f_next', 'e_next');
 -- ---------------------------------------------------------------------------------------------
 select is(pg_temp.sees('f'), 'admin teacher',
   'marker_refused_before_marking_opens: with no marking settings, only the editors read the PDF; an approved corrector and the lead do not');
-insert into public.exam_marking (exam_id, mode) values (pg_temp.k('e'), 'whole') on conflict (exam_id) do update set mode = excluded.mode;
+insert into public.exam_marking (exam_id, mode, double_marking, seeds, practice) values (pg_temp.k('e'), 'whole', false, false, false);
 select is(pg_temp.sees('f'), 'admin teacher', 'nor with settings saved and marking not yet open');
 select tests.as_user(pg_temp.uid('m1'));
 select is((select count(*)::int from storage.objects where bucket_id = 'mark-schemes'), 0, 'a storage list shows the corrector no mark scheme at all');

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(106);
+select plan(119);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -9,11 +9,12 @@ select tests.assert_no_owner();
 --   two: two approved markers, m1 and lead2 (its lead).
 --   none: no approved marker.
 --   open: o1 approved, no lead (more are approved in the opening tests).
+--   pair: two approved markers, p1 and p2, and no lead.
 --   fix: for the fixtures test.
 -- corr is a corrector approved for nothing. Exams (tests.marking_exam, finished 2 days ago, with the test structure):
--- e1 (one), e2 and ed (two), e0 (none), eo, eo2 and eo3 (open); e1, e2, ed and e0 have no exam_marking row, as an
--- exam never saved (the fixture's row is deleted), so the column defaults apply. ex (two) holds one row of each new
--- table, for the select test.
+-- e1 and en1 (one), e2 and ed (two), e0 (none), eo, eo2 and eo3 (open), en2 (pair); e1, e2, ed, e0, en1 and en2
+-- have no exam_marking row, as an exam never saved (the fixture's row is deleted), so the column defaults apply. ex
+-- (two) holds one row of each new table, for the select test.
 -- ---------------------------------------------------------------------------------------------
 create temp table c (name text primary key, id uuid not null);
 grant select on c to public;
@@ -49,7 +50,7 @@ grant execute on function pg_temp.uid(text), pg_temp.k(text), pg_temp.r(text), p
 
 insert into public.subjects (name, kind)
 values ('ZZ Checks one', 'school'), ('ZZ Checks two', 'school'), ('ZZ Checks none', 'school'), ('ZZ Checks open', 'school'),
-  ('ZZ Checks fix', 'school');
+  ('ZZ Checks pair', 'school'), ('ZZ Checks fix', 'school');
 insert into c values
   ('admin', tests.create_user('admin', 'active')),
   ('admin2', tests.create_user('admin', 'active')),
@@ -58,7 +59,9 @@ insert into c values
   ('solo', tests.marker(pg_temp.subj('one'), true)),
   ('m1', tests.marker(pg_temp.subj('two'))),
   ('lead2', tests.marker(pg_temp.subj('two'), true)),
-  ('o1', tests.marker(pg_temp.subj('open')));
+  ('o1', tests.marker(pg_temp.subj('open'))),
+  ('p1', tests.marker(pg_temp.subj('pair'))),
+  ('p2', tests.marker(pg_temp.subj('pair')));
 update public.profiles set first_name = 'Ada', last_name = 'Checker' where id = pg_temp.uid('admin');
 update public.profiles set first_name = 'Bea', last_name = 'Second' where id = pg_temp.uid('admin2');
 insert into public.teacher_subjects values (pg_temp.uid('teacher'), pg_temp.subj('one'));
@@ -67,9 +70,11 @@ insert into kv values
   ('e1', tests.marking_exam(pg_temp.subj('one'))), ('e2', tests.marking_exam(pg_temp.subj('two'))),
   ('ed', tests.marking_exam(pg_temp.subj('two'))), ('e0', tests.marking_exam(pg_temp.subj('none'))),
   ('eo', tests.marking_exam(pg_temp.subj('open'))), ('eo2', tests.marking_exam(pg_temp.subj('open'))),
-  ('eo3', tests.marking_exam(pg_temp.subj('open'))), ('ex', tests.marking_exam(pg_temp.subj('two')));
-select tests.structure(pg_temp.k(x)) from unnest(array['e1', 'eo', 'eo2', 'eo3', 'ex']) x;
-delete from public.exam_marking where exam_id in (pg_temp.k('e1'), pg_temp.k('e2'), pg_temp.k('ed'), pg_temp.k('e0'));
+  ('eo3', tests.marking_exam(pg_temp.subj('open'))), ('ex', tests.marking_exam(pg_temp.subj('two'))),
+  ('en1', tests.marking_exam(pg_temp.subj('one'))), ('en2', tests.marking_exam(pg_temp.subj('pair')));
+select tests.structure(pg_temp.k(x)) from unnest(array['e1', 'eo', 'eo2', 'eo3', 'ex', 'en1', 'en2']) x;
+delete from public.exam_marking
+where exam_id in (pg_temp.k('e1'), pg_temp.k('e2'), pg_temp.k('ed'), pg_temp.k('e0'), pg_temp.k('en1'), pg_temp.k('en2'));
 insert into kv values ('x1', tests.verified_script(pg_temp.k('e1'))), ('xo', tests.verified_script(pg_temp.k('eo'))),
   ('xx', tests.verified_script(pg_temp.k('ex')));
 
@@ -273,8 +278,8 @@ select tests.as_postgres();
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(dm => false, se => false, pr => false, sp => 20))), 'reason_required',
   'change_after_open_needs_a_reason: once marking has opened, even a number needs a reason');
-select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(se => false, pr => false))), 'reason_required',
-  'so does turning a check on');
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(dm => false, pr => false))), 'reason_required',
+  'so does turning a check on (seeded scripts: the subject has an active lead marker)');
 select tests.as_postgres();
 select is(pg_temp.audits('marking_checks_set', pg_temp.k('e1')), 5, 'the refusals write no audit row (five changes so far)');
 select tests.as_user(pg_temp.uid('admin'));
@@ -287,6 +292,18 @@ select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(dm =
   'with a reason the change is saved');
 select tests.as_postgres();
 select is(pg_temp.saved('e1'), 'f/20/10/f/10/f', 'the sample is 20%');
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(se => false, pr => false, sp => 20), 'Double marking after all')),
+  'needs_two_markers', 'a check turned on after opening follows the opening rules: double marking needs two approved markers');
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(dm => false, pr => false, sp => 20), 'Seeded scripts after all')), 'ok',
+  'seeded scripts may go on again with a reason: the subject has an active lead marker');
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(dm => false, se => false, pr => false, sp => 20), repeat('x', 301))),
+  'reason_required', 'a reason over 300 characters is refused');
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('e1'), pg_temp.s(dm => false, se => false, pr => false, sp => 20), 'Seeds not needed after all')),
+  'ok', 'a check may be turned off after opening, with a reason, while the subject has one approved marker');
+select tests.as_postgres();
+select is((select concat_ws('/', m.seeds, m.checks_off_reason, m.checks_off_by = pg_temp.uid('admin')) from public.exam_marking m
+           where m.exam_id = pg_temp.k('e1')), 'f/Seeds not needed after all/t', 'seeded scripts are off again, with that reason');
 
 -- ---------------------------------------------------------------------------------------------
 -- percent_out_of_range_refused
@@ -338,6 +355,12 @@ update public.profiles set status = 'active' where id = pg_temp.uid('o2');
 select tests.as_user(pg_temp.uid('admin'));
 insert into res values ('openo', public.marking_open(pg_temp.k('eo')));
 select is(pg_temp.r('openo'), '{"ok": true, "already": false, "ready": 1}'::jsonb, 'with two active approved markers it opens');
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('eo'), pg_temp.s(pr => false), 'Seeds after all')), 'no_lead',
+  'once open, seeded scripts cannot be turned on without a lead marker');
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('eo'), pg_temp.s(se => false), 'Practice after all')), 'no_lead', 'nor can practice');
+select tests.as_postgres();
+select is(pg_temp.saved('eo'), 't/10/10/f/10/f', 'nothing was written');
+select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.marking_open(pg_temp.k('e0'))), 'structure_incomplete',
   'the structure is still checked first (e0 has no questions)');
 select tests.as_postgres();
@@ -361,7 +384,20 @@ update public.profiles set status = 'active' where id = pg_temp.uid('olead');
 select tests.as_user(pg_temp.uid('admin'));
 select is(array[pg_temp.code(public.marking_open(pg_temp.k('eo2'))), pg_temp.code(public.marking_open(pg_temp.k('eo3')))], array['ok', 'ok'],
   'with an active lead marker both open');
+select is(pg_temp.code(public.marking_checks_set(pg_temp.k('eo'), pg_temp.s(pr => false), 'Seeds after all')), 'ok',
+  'and seeded scripts may now be turned on for the open exam eo');
 select tests.as_postgres();
+
+-- ---------------------------------------------------------------------------------------------
+-- open_without_saved_checks_uses_the_defaults
+-- ---------------------------------------------------------------------------------------------
+select tests.as_user(pg_temp.uid('admin'));
+select is(pg_temp.code(public.marking_open(pg_temp.k('en1'))), 'needs_two_markers',
+  'open_without_saved_checks_uses_the_defaults: an exam never saved has double marking on, so one approved marker cannot open it');
+select is(pg_temp.code(public.marking_open(pg_temp.k('en2'))), 'no_lead',
+  'and seeds and practice on, so two approved markers without a lead marker cannot open it either');
+select tests.as_postgres();
+select is(pg_temp.saved('en1') || ' ' || pg_temp.saved('en2'), 'none none', 'neither refusal writes a row');
 
 -- ---------------------------------------------------------------------------------------------
 -- teacher_and_corrector_cannot_set
@@ -391,11 +427,13 @@ insert into res values ('admin_e1', public.marking_checks_get(pg_temp.k('e1')));
 select tests.as_postgres();
 select tests.as_user(pg_temp.uid('solo'));
 insert into res values ('solo_e1', public.marking_checks_get(pg_temp.k('e1')));
-select is(pg_temp.r('solo_e1'), pg_temp.r('admin_e1'), 'lead_reads_settings_of_own_subject_only: the lead reads what an admin reads');
+select is(pg_temp.r('solo_e1') - 'off', pg_temp.r('admin_e1') - 'off', 'lead_reads_settings_of_own_subject_only: the lead reads the checks an admin reads');
 select is(pg_temp.r('solo_e1') - 'off', '{"ok": true, "double_marking": false, "sample_percent": 20, "tolerance_percent": 10, "seeds": false,
   "seed_every": 10, "practice": false, "markers_approved": 1, "can_switch_off": true, "opened": true, "approved": false}'::jsonb,
   'e1: its checks, one approved marker who may switch them off, opened, not approved');
-select is(pg_temp.r('solo_e1') #>> '{off,reason}', 'One marker this time', 'with the reason they were turned off for (a later number change keeps it)');
+select is(pg_temp.r('solo_e1') -> 'off', jsonb_build_object('by_name', 'Ada Checker', 'at', now()),
+  'who turned them off and when, but never the reason (an audit reason may name someone)');
+select is(pg_temp.r('admin_e1') #>> '{off,reason}', 'Seeds not needed after all', 'an admin is given the reason');
 select is(pg_temp.code(public.marking_checks_get(pg_temp.k('e2'))), 'forbidden', 'not another subject''s exam');
 select is(pg_temp.code(public.marking_checks_get(gen_random_uuid())), 'forbidden', 'nor an unknown one');
 select tests.as_postgres();
@@ -424,10 +462,12 @@ select is((select string_agg(a.reason, ' | ' order by a.id) from public.audit_lo
   || ' | double marking off -> on'
   || ' | seeded scripts off -> on'
   || ' | double marking on -> off; seeded scripts on -> off; practice on -> off; reason: One marker this time'
-  || ' | second-mark 10% -> 20%; reason: A bigger sample, just in case',
+  || ' | second-mark 10% -> 20%; reason: A bigger sample, just in case'
+  || ' | seeded scripts off -> on; reason: Seeded scripts after all'
+  || ' | seeded scripts on -> off; reason: Seeds not needed after all',
   'set_writes_audit: one row per change, saying what changed and why');
 select is((select string_agg(coalesce(p.first_name, '?'), ',' order by a.id) from public.audit_log a join public.profiles p on p.id = a.actor_id
-           where a.action = 'marking_checks_set' and a.target_id = pg_temp.k('e1')), 'Ada,Bea,Ada,Ada,Ada,Ada', 'each with who made it');
+           where a.action = 'marking_checks_set' and a.target_id = pg_temp.k('e1')), 'Ada,Bea,Ada,Ada,Ada,Ada,Ada,Ada', 'each with who made it');
 select is((select string_agg(a.reason, ' | ' order by a.id) from public.audit_log a
            where a.action = 'marking_checks_set' and a.target_id = pg_temp.k('e2')),
   'second-mark 10% -> 20%; tolerance 10% -> 5%; seed every 10 -> 12'

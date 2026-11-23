@@ -94,8 +94,9 @@ export type CheckSettings = {
 
 /** marking_checks_get's answer. */
 export type ChecksView = CheckSettings & {
-  /** Why the checks were last turned off, by whom and when; null when nothing is turned off. */
-  off: { reason: string; byName: string | null; at: string } | null;
+  /** Who last turned the checks off and when, and why (admins only: a lead marker is never given the reason); null
+   * when nothing is turned off. */
+  off: { reason: string | null; byName: string | null; at: string } | null;
   /** Approved active markers of the exam's subject. */
   markersApproved: number;
   /** The checks may be turned off: the subject has at most one approved marker. */
@@ -123,7 +124,7 @@ export function parseChecksView(data: unknown): ChecksView | null {
     seeds: d.seeds === true,
     seedEvery,
     practice: d.practice === true,
-    off: off && at ? { reason: typeof off.reason === "string" ? off.reason : "", byName: typeof off.by_name === "string" ? off.by_name : null, at } : null,
+    off: off && at ? { reason: typeof off.reason === "string" ? off.reason : null, byName: typeof off.by_name === "string" ? off.by_name : null, at } : null,
     markersApproved: num(d.markers_approved),
     canSwitchOff: d.can_switch_off === true,
     opened: d.opened === true,
@@ -133,9 +134,9 @@ export function parseChecksView(data: unknown): ChecksView | null {
 
 /** Why these checks cannot be saved as they are (null: they can): each number whole and in range. */
 export function checksProblem(s: CheckSettings): string | null {
-  if (whole(s.samplePercent, 1, 100) === null) return "Second-mark a whole number from 1 to 100% of scripts.";
+  if (whole(s.samplePercent, 1, 100) === null) return "Enter a whole number from 1 to 100 for the scripts second-marked.";
   if (whole(s.tolerancePercent, 1, 50) === null) return "The difference that goes to the lead marker is a whole number from 1 to 50%.";
-  if (whole(s.seedEvery, 3, 50) === null) return "Seeded scripts come about one in every 3 to 50 scripts.";
+  if (whole(s.seedEvery, 3, 50) === null) return "Enter a whole number from 3 to 50 for how often a seeded script comes.";
   return null;
 }
 
@@ -163,9 +164,12 @@ export function checksNeedReason(saved: ChecksView, next: CheckSettings): boolea
 
 const UK_DATE = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", day: "numeric", month: "long", year: "numeric" });
 
-/** "Turned off by Ada Checker on 3 December 2026: Only one marker for this subject" (the date in UK time). */
+/** "Turned off by Ada Checker on 3 December 2026: Only one marker for this subject" (the date in UK time); without
+ * the reason (a lead marker's view), "Checks were turned off by Ada Checker on 3 December 2026." */
 export function checksOffLine(off: NonNullable<ChecksView["off"]>): string {
-  return `Turned off by ${off.byName ?? "a member of staff"} on ${UK_DATE.format(new Date(off.at))}: ${off.reason}`;
+  const who = off.byName ?? "a member of staff";
+  const day = UK_DATE.format(new Date(off.at));
+  return off.reason === null ? `Checks were turned off by ${who} on ${day}.` : `Turned off by ${who} on ${day}: ${off.reason}`;
 }
 
 /** "1 question", "3 questions", "10.5 marks". */
