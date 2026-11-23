@@ -12,11 +12,15 @@
 --
 -- A practice or seeded pass is one more pass of the piece (Task 3), with many markers at once: the one rule
 -- (marking_units_allowed) allows it on a standard of that use that is not retired and was not set by the marker, while
--- the script is being marked, marked or checked, once per marker (no attempt of theirs submitted), and with the rule's
--- common part (marking open, approved, not on hold, not taken back, no conflict or tutor link, no name seen, one pass
--- per piece). Practice is announced (marking.practice; the piece in the marker's list says practice). A seeded piece
--- looks like any live piece (Review Focus 1): opening it, the list, Next script, saving, submitting and the picture
--- check answer with the same keys and words, the same hold and no timing of their own, and giving it back says nothing.
+-- the script is being marked, marked or checked, once per marker (no attempt of theirs submitted), never to a marker who
+-- had a marking or a hold of another kind on the piece in any state (one who held the script live would know it
+-- again), and with the rule's common part (marking open, approved, not on hold, not taken back, no conflict or tutor
+-- link, no name seen, one pass per piece). Practice is announced (marking.practice; the piece in the marker's list says
+-- practice). A seeded piece looks like any live piece (Review Focus 1): opening it, the list, Next script, saving,
+-- submitting and the picture check answer with the same keys and words, the same hold and no timing of their own,
+-- giving it back says nothing, and the list's left counts it as any piece (it goes down by one when a seed is taken,
+-- and is 0 exactly when Next script says nothing_left). A hand back with changed pages leaves practice and seeded
+-- attempts alone: the lead's live marking reopens or is set aside, so the standard is retired.
 --
 -- Clearance (exam_markers.cleared_at; marking_marker_cleared): with practice on, a marker is handed live and second
 -- passes, and seeds, only once the lead or an admin clears them, with a reason (Builder's call 9); the lead needs no
@@ -24,7 +28,7 @@
 -- or practice_not_ready. Cleared, it gives a seed when the marker's count to the next seed has run out (exam_markers.
 -- until_seed: drawn 1 to seed_every on their first call, counted down by each live or second submit, and drawn again
 -- between half and one and a half times seed_every when a seed is handed out), otherwise live and second pieces as
--- before. Seeds come through Next script only (Builder's call 6).
+-- before, and a seed when no live or second piece is left. Seeds come through Next script only (Builder's call 6).
 --
 -- Misses (Builder's call 7): a seeded attempt outside tolerance (marking_compare_sets against the standard's marks) is
 -- a miss: the submit says feedback 'seed', the marker may see the lead's marks (marking_feedback) and the attempt is
@@ -33,9 +37,9 @@
 -- name). The minute job then applies the pause (Builder's call 8, marking_pause_apply): their holds on the exam end,
 -- their markings in progress are set aside, their submitted second markings that no review settled are set aside (the
 -- piece waits for another second marker), and every piece whose live marking they submitted and the lead has not settled
--- goes to the lead (a paused_marker review, Task 4's rule 4), also a checked one. Clearing a paused marker lets them
--- work again; the pieces with the lead stay there. The lead or an admin may also pause a marker by hand, with a reason
--- (applied at once, no email).
+-- goes to the lead (a paused_marker review, Task 4's rule 4), also a checked one. Clearing a paused marker applies a
+-- pause not applied yet first, then lets them work again; the pieces with the lead stay there. The lead or an admin may
+-- also pause a marker by hand, with a reason (applied at once, no email).
 --
 -- Added:
 --   marking_marker_cleared(p_exam, p_marker), marking_marker_paused(p_exam, p_marker) (internal).
@@ -50,26 +54,27 @@
 --   marking_units_allowed (20261123000004): kinds practice and seed (above); live and second also need the marker
 --     cleared and not paused; practice needs them not paused (the pause stops all their work on the exam, so Next
 --     script never resumes a practice piece it could not open). A practice or seeded piece is found from the exam's
---     standards, not by a scan of its pieces.
+--     standards, not by a scan of its pieces, and is never allowed to a marker who had any marking or hold of another
+--     kind on it.
 --   marking_unit_blocked (20261123000004): not_ready for a practice or seeded pass of a script that is not being
 --     marked, marked or checked; paused, then practice_first (not for practice), before not_eligible; name_seen for
 --     every kind but live.
 --   marking_units_offered (20261123000004): practice and seed pieces of the rule that the marker does not hold.
 --   marking_units_free (20261123000004): a marker not cleared is counted their practice pieces; a cleared one live and
---     second pieces as before, never a seed.
+--     second pieces as before, and the seeds they may be given when the exam's seeds are on.
 --   marking_units_pick (20261123000004): practice and seed pieces, held skip locked and read again under the locks.
 --   marking_unit_take (20261123000004): only a pass with one holder (live, second, re-mark) sets aside another marker's
 --     marking in progress: practice and seed passes have many.
 --   marking_next (20261123000004): the marker's exam_markers row; step 2 resumes a practice or seeded piece whose
 --     hold ran out (the caller holds it no more; others may); after steps 1 and 2: paused, practice (or practice_wait,
---     practice_not_ready), the seed, then step 3.
+--     practice_not_ready), the seed, then step 3, then (seeds on) a seed before nothing_left.
 --   marking_give_back (20261123000004): a practice or seeded piece whose hold ran out may be given back while others
 --     hold it.
 --   marking_assign, marking_assign_some (20261123000004): a marker paused (paused) or not cleared (practice_first) on
 --     the exam is refused.
 --   marking_my_work (20261123000004): each exam also says paused and practice ({needed, done, waiting} for a marker not
---     cleared, else null); left counts practice pieces for a marker not cleared and never a seed; a piece says
---     practice for a practice pass.
+--     cleared, else null); left counts practice pieces for a marker not cleared, and seeds as any piece for one
+--     cleared (marking_units_free); a piece says practice for a practice pass.
 --   marking_work_blocked (20261123000004): paused for a paused marker's pass that is not submitted.
 --   marking_unit_open (20261123000004): marking.practice is true for a practice pass.
 --   marking_save (20261123000005): a paused marker's change to a submitted marking is refused (paused); an attempt
@@ -78,6 +83,8 @@
 --     next seed. A practice or seed pass never evaluates the piece and never writes final marks.
 --   marking_tick (20261122000015): also applies each pause not applied yet, in the exam's own exception block, trying
 --     the marker's key only (a marker at work is left for the next minute).
+--   marking_units_refresh (20261123000004): a hand back with changed pages leaves practice and seeded attempts alone
+--     (a submitted one stands; no hold is made for it).
 --   script_notice_recipients, script_notice_content, script_notice_next, script_notice_given_up,
 --     script_family_notices_waiting, script_family_notices_skip (20261122000008): marker_paused goes to the subject's
 --     lead and the active owner and admin accounts, about its exam, handed out and given up as a staff alert is; it is
@@ -149,7 +156,8 @@ $$;
 --   else holds its second pass and no second marking of another marker is submitted on it; and they did not see a name
 --   on it, whoever hands it out.
 --   practice and seed: the script is being marked, marked or checked; the piece is a standard of that use, not retired
---   and not set by this marker; no attempt of theirs on it is submitted; they did not see a name on it.
+--   and not set by this marker; no attempt of theirs on it is submitted; they never had a marking or a hold of another
+--   kind on it, in any state (one who held the script live would know it again); they did not see a name on it.
 -- Other kinds allow nothing. One piece is found by its key, a practice or seeded one from the exam's standards: the
 -- exam's pieces are scanned only for a live or second pass with p_unit null.
 -- ---------------------------------------------------------------------------------------------
@@ -189,12 +197,17 @@ as $$
                                   where k.unit_id = u.id and k.kind = 'second' and k.marker_id <> p_marker
                                     and k.status = 'submitted')
              -- 3B Task 5: a practice or seeded pass: the piece is a standard of that use, not retired and not set by
-             -- this marker, and no attempt of theirs on it is submitted (each once per marker).
+             -- this marker, and no attempt of theirs on it is submitted (each once per marker); nor did they ever have
+             -- a marking or a hold of another kind on it, in any state (one who held the script live would know it).
              else s.state in ('marking', 'marked', 'checked')
                   and exists (select 1 from public.marking_standards st
                               where st.unit_id = u.id and st.use = p_kind::text and st.retired_at is null and st.set_by <> p_marker)
                   and not exists (select 1 from public.markings k
-                                  where k.unit_id = u.id and k.marker_id = p_marker and k.kind = p_kind and k.status = 'submitted') end
+                                  where k.unit_id = u.id and k.marker_id = p_marker and k.kind = p_kind and k.status = 'submitted')
+                  and not exists (select 1 from public.markings k
+                                  where k.unit_id = u.id and k.marker_id = p_marker and k.kind <> p_kind)
+                  and not exists (select 1 from public.marking_assignments x
+                                  where x.unit_id = u.id and x.marker_id = p_marker and x.kind <> p_kind) end
     -- Read once: the exam's marking is open and not closed, and the marker is approved for its subject; 3B Task 5: they
     -- are not paused on the exam and, for every kind but practice, are cleared for live marking on it.
     and exists (select 1 from public.exams e join public.exam_marking m on m.exam_id = e.id
@@ -324,8 +337,10 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- Internal: as 20261123000004, the free pieces of the exam (of the group, when given) that Next script may hand to
 -- p_marker at p_now, whose script nothing holds back, marking_script_blocked running once per script: for a marker
--- cleared for live marking on the exam, its live and second pieces (marking_units_offered), never a seed; for one not
--- cleared, its practice pieces. The pieces left on a marker's list.
+-- cleared for live marking on the exam, its live and second pieces (marking_units_offered) and, when the exam's seeds are
+-- on, the seeds they may be given, counted as any piece (Review Focus 1: taking a seed lowers the count by one, as
+-- taking a live piece does, and Next script hands one out before it says nothing_left); for one not cleared, its
+-- practice pieces. The pieces left on a marker's list.
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.marking_units_free(p_exam uuid, p_group uuid, p_marker uuid, p_now timestamptz)
 returns table (unit_id uuid, group_id uuid)
@@ -337,8 +352,10 @@ as $$
   with pieces as materialized (
     select distinct o.unit_id, o.group_id, o.script_id
     from public.marking_units_offered(p_exam, p_group, p_marker,
-      case when public.marking_marker_cleared(p_exam, p_marker) then '{live,second}'::public.marking_kind[]
-           else '{practice}'::public.marking_kind[] end) o
+      case when not public.marking_marker_cleared(p_exam, p_marker) then '{practice}'::public.marking_kind[]
+           when coalesce((select m.seeds from public.exam_marking m where m.exam_id = p_exam), true)
+             then '{live,second,seed}'::public.marking_kind[]
+           else '{live,second}'::public.marking_kind[] end) o
   ),
   scripts as materialized (
     select distinct p.script_id from pieces p
@@ -550,6 +567,76 @@ create trigger marking_standards_follow after update of status on public.marking
   for each row
   when (old.status = 'submitted' and new.status <> 'submitted' and new.kind = 'live')
   execute function public.marking_standards_follow();
+
+-- ---------------------------------------------------------------------------------------------
+-- Internal: as 20261123000004, and (3B Task 5) a practice or seeded attempt is left alone here: a submitted one stands
+-- (its miss, or the run it ended, is never counted again) and no hold is made for it. The piece's live marking is the
+-- lead's: it comes back to them or is set aside, so the standard is retired (marking_standards_follow), which ends the
+-- open attempts and sets aside those in progress. For the other kinds, the
+-- script's markings (not set aside) whose pages_key is not that of its pages now (marking_pages_key) are marked as
+-- changed (pages_key, pages_changed_at = now; their rev moves on). A submitted one goes back to its marker when they may
+-- still mark it (is_marker_for, not blocked for the candidate, no name_seen exclusion): in progress again, with an
+-- assigned hold of its kind (no time limit) unless that pass has an open one, and, for a live marking, its piece taken.
+-- Otherwise it is set aside (name_seen, conflict or unapproved) and nobody is given it; a live one's piece is open. A
+-- pages_changed alert when any changed. Returns how many went back to their markers. The caller holds the keys of those
+-- markers (shared, in uuid order: a piece going back to its marker is a hand-out, Ruling R10), then the script's locks.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_units_refresh(p_script uuid)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_key text := public.marking_pages_key(p_script);
+  v_subject bigint;
+  v_student uuid;
+  v_changed int := 0;
+  v_n int := 0;
+  r record;
+begin
+  select e.subject_id, b.student_id into v_subject, v_student
+  from public.scripts s join public.exams e on e.id = s.exam_id join public.bookings b on b.id = s.booking_id
+  where s.id = p_script;
+  for r in
+    select m.id, m.unit_id, m.kind, m.marker_id, m.status,
+      public.is_marker_for(m.marker_id, v_subject) as approved,
+      public.marking_marker_blocked(m.marker_id, v_student) as blocked,
+      exists (select 1 from public.marking_unit_exclusions x where x.unit_id = m.unit_id and x.marker_id = m.marker_id) as name_seen
+    from public.markings m join public.marking_units u on u.id = m.unit_id
+    where u.script_id = p_script and m.status <> 'set_aside' and m.pages_key is distinct from v_key
+      and m.kind not in ('practice', 'seed')
+    order by u.id, m.id
+  loop
+    v_changed := v_changed + 1;
+    update public.markings set pages_key = v_key, pages_changed_at = now(), rev = rev + 1 where id = r.id;
+    if r.status = 'submitted' then
+      if r.approved and not r.blocked and not r.name_seen then
+        update public.markings set status = 'in_progress', submitted_at = null where id = r.id;
+        if r.kind = 'live' then
+          update public.marking_units set state = 'taken' where id = r.unit_id;
+        end if;
+        insert into public.marking_assignments (unit_id, kind, marker_id, how, assigned_by)
+        select r.unit_id, r.kind, r.marker_id, 'assigned', auth.uid()
+        where not exists (select 1 from public.marking_assignments a where a.unit_id = r.unit_id and a.kind = r.kind and a.ended_at is null);
+        v_n := v_n + 1;
+      else
+        update public.markings
+        set status = 'set_aside', set_aside_at = now(),
+          set_aside_reason = case when r.name_seen then 'name_seen' when r.blocked then 'conflict' else 'unapproved' end
+        where id = r.id;
+        if r.kind = 'live' then
+          update public.marking_units set state = 'open' where id = r.unit_id and state = 'submitted';
+        end if;
+      end if;
+    end if;
+  end loop;
+  if v_changed > 0 then
+    perform public.marking_alert_raise(p_script, 'pages_changed', null, null);
+  end if;
+  return v_n;
+end;
+$$;
 
 -- ---------------------------------------------------------------------------------------------
 -- marking_standard_set: the subject's lead marker uses a piece they marked live themselves for practice or as a seeded
@@ -778,7 +865,8 @@ $$;
 -- (practice_wait when none is left and they did one, else practice_not_ready); cleared, a seeded piece at random when
 -- the exam's seeds are on and their count to the next seed has run out (the count is then drawn again, from half to
 -- one and a half times seed_every), otherwise (3) one free piece at random among the live and second passes they may be
--- given. Every hold is 2 hours. Returns {ok, unit_id, resumed} whatever the kind, or {ok: false, code} with
+-- given, and when none is left a seeded piece they may still be given (the count drawn again as well): nothing_left
+-- comes exactly when their list's left is 0. Every hold is 2 hours. Returns {ok, unit_id, resumed} whatever the kind, or {ok: false, code} with
 -- not_approved, marking_not_open, marking_closed, paused, practice_wait, practice_not_ready or nothing_left (and
 -- invalid_input, not_found).
 -- ---------------------------------------------------------------------------------------------
@@ -800,6 +888,7 @@ declare
   v_resumed boolean := true;
   v_every int;
   v_until int;
+  v_tried boolean := false;
 begin
   if p_exam is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
@@ -936,21 +1025,27 @@ begin
       end if;
     else
       -- Cleared: a seeded piece when their count has run out (Builder's call 6), and the gap is drawn again (half to
-      -- one and a half times seed_every); otherwise (3) as before.
+      -- one and a half times seed_every); otherwise (3) as before; and with no live or second piece left, a seeded
+      -- piece they may still be given (Review Focus 1: the list's left counts seeds as any piece, so Next script says
+      -- nothing_left exactly when left is 0).
       select x.until_seed into v_until from public.exam_markers x where x.exam_id = p_exam and x.marker_id = v_actor for update;
       if coalesce(v_m.seeds, true) and v_until <= 0 then
         select p.unit_id, p.kind into v_unit, v_kind from public.marking_units_pick(p_exam, p_group, v_actor, v_now, 1, '{seed}') p;
-        if v_unit is not null then
-          update public.exam_markers x set until_seed = ceil(v_every / 2.0)::int + floor(random() * v_every)::int
-          where x.exam_id = p_exam and x.marker_id = v_actor;
-        end if;
+        v_tried := true;
       end if;
       -- (3) One free piece at random, a live or a second pass.
       if v_unit is null then
         select p.unit_id, p.kind into v_unit, v_kind from public.marking_units_pick(p_exam, p_group, v_actor, v_now, 1, '{live,second}') p;
-        if v_unit is null then
-          return jsonb_build_object('ok', false, 'code', 'nothing_left');
-        end if;
+      end if;
+      if v_unit is null and coalesce(v_m.seeds, true) and not v_tried then
+        select p.unit_id, p.kind into v_unit, v_kind from public.marking_units_pick(p_exam, p_group, v_actor, v_now, 1, '{seed}') p;
+      end if;
+      if v_unit is null then
+        return jsonb_build_object('ok', false, 'code', 'nothing_left');
+      end if;
+      if v_kind = 'seed' then
+        update public.exam_markers x set until_seed = ceil(v_every / 2.0)::int + floor(random() * v_every)::int
+        where x.exam_id = p_exam and x.marker_id = v_actor;
       end if;
     end if;
   end if;
@@ -1585,8 +1680,8 @@ $$;
 -- marking_my_work: as 20261123000004, for the caller's passes of every kind (marking_pass). {ok, approved,
 -- lead_subjects: [subject ids], exams: [...], pieces: [...]}. exams: those of a subject they are approved for whose
 -- marking is open, and any exam where they hold a piece or have a marking in progress; per exam left counts the pieces
--- Next script could give them now (per group too, when marked by question: for a marker not cleared, their practice
--- pieces; never a seed), mine counts the pieces they hold and have submitted; 3B Task 5: paused, and practice
+-- Next script could give them now (marking_units_free; per group too, when marked by question: for a marker not
+-- cleared, their practice pieces; for one cleared, seeds counted as any piece), mine counts the pieces they hold and have submitted; 3B Task 5: paused, and practice
 -- ({needed: those done and those they may still do, done: submitted, waiting: done some and none left} while they are
 -- not cleared for live marking on the exam, else null). pieces: what they hold, have in progress and have submitted in
 -- those exams, with state (their pass: taken while they hold it, submitted once their marking is, else open), how they
@@ -1804,9 +1899,10 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- marking_marker_clear: the subject's lead (never for themselves) or an admin clears a marker for live marking on the
--- exam, with a reason (3 to 300 characters): cleared_at and cleared_by are set; a pause ends (paused_at and
--- pause_applied_at null) and the run of misses starts again (misses 0); the pieces held for the lead's review stay with
--- the lead. Refused: invalid_input; not_found (an admin; forbidden for anyone else); forbidden; reason_required;
+-- exam, with a reason (3 to 300 characters): a pause the minute job has not applied yet is applied first
+-- (marking_pause_apply: their submitted pieces go to the lead); cleared_at and cleared_by are set; the pause ends
+-- (paused_at and pause_applied_at null) and the run of misses starts again (misses 0); the pieces held for the lead's
+-- review stay with the lead. Refused: invalid_input; not_found (an admin; forbidden for anyone else); forbidden; reason_required;
 -- not_approved (not an approved active marker of the subject). Audited marker_cleared (with the exam). Returns {ok}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_marker_clear(p_exam uuid, p_marker uuid, p_reason text)
@@ -1843,6 +1939,12 @@ begin
   perform pg_advisory_xact_lock(hashtextextended('marker:' || p_marker::text, 0));
   select coalesce(m.seed_every, 10) into v_every from public.exam_marking m where m.exam_id = p_exam for share;
   v_every := coalesce(v_every, 10);
+  -- A pause the minute job has not applied yet is applied first: the scripts its email said wait for the lead marker
+  -- go to the lead before the marker works again.
+  if exists (select 1 from public.exam_markers x where x.exam_id = p_exam and x.marker_id = p_marker
+             and x.paused_at is not null and x.pause_applied_at is null) then
+    perform public.marking_pause_apply(p_exam, p_marker);
+  end if;
   insert into public.exam_markers as x (exam_id, marker_id, cleared_at, cleared_by, until_seed)
   values (p_exam, p_marker, now(), v_actor, 1 + floor(random() * v_every)::int)
   on conflict (exam_id, marker_id) do update set

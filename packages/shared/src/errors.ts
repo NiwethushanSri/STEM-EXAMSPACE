@@ -511,7 +511,7 @@ export function markingScreenMessageFor(code: string | null | undefined, reason?
  * or retired (it is no longer used). */
 const standardMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
-  invalid_input: "Check the details. A note can be 3 to 1,000 characters.",
+  invalid_input: "That request was not valid. Reload the page and try again.",
   not_found: "This could not be found. Refresh the page.",
   reason_required: "Give a reason of 3 to 300 characters.",
   not_approved: "This marker is not approved to mark this subject.",

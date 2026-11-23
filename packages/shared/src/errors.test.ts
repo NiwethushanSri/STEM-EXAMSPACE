@@ -347,6 +347,7 @@ describe("practice, seeded scripts and the pause (3B Task 5)", () => {
     expect(standardMessageFor("conflict", "already")).toBe("This script is already used for practice or as a seeded script.");
     expect(standardMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
     expect(standardMessageFor("not_approved")).toBe("This marker is not approved to mark this subject.");
+    expect(standardMessageFor("invalid_input")).toBe("That request was not valid. Reload the page and try again.");
     expect(standardMessageFor("conflict", "nope")).toBe("Something went wrong. Please try again.");
     expect(standardMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
   });

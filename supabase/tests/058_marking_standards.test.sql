@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(121);
+select plan(131);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -387,6 +387,20 @@ select is(array[pg_temp.ms('d2', 'm6'), pg_temp.ended('d2', 'm6'), pg_temp.block
   'the second marker''s hold ends and their marking is set aside; nobody may be given its second pass');
 
 -- ---------------------------------------------------------------------------------------------
+-- an_old_live_holder_never_gets_the_seed: m6 held d4 live and gave it back; the lead marks d4 and uses it as a seed.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script('d4', 'd');
+select pg_temp.take('d4', 'm6', 'live');
+insert into res values ('d4_open', pg_temp.as('m6', format('select public.marking_unit_open(%L)', pg_temp.u('d4'))));
+insert into res values ('d4_gb', pg_temp.as('m6', format('select public.marking_give_back(%L)', pg_temp.u('d4'))));
+select pg_temp.first('d4', 'lead', array[3, 2, 5]);
+insert into res values ('set_d4', pg_temp.as('lead', format($q$ select public.marking_standard_set(%L, 'seed') $q$, pg_temp.u('d4'))));
+select is(array[pg_temp.code(pg_temp.r('d4_gb')), pg_temp.code(pg_temp.r('set_d4')), pg_temp.ms('d4', 'm6'), pg_temp.blocked('d4', 'm6', 'seed'),
+    pg_temp.blocked('d2', 'm6', 'seed'), pg_temp.allowed('d', 'm6', 'seed'), pg_temp.allowed('d', 'm5', 'seed')],
+  array['ok', 'ok', 'live set_aside given_back', 'not_eligible', 'not_eligible', 'd1', 'd2,d4'],
+  'an_old_live_holder_never_gets_the_seed: a marker who had a marking or a hold of another kind on a piece, in any state, is never given it as a seed');
+
+-- ---------------------------------------------------------------------------------------------
 -- seed_is_never_offered_to_the_lead_who_set_it
 -- ---------------------------------------------------------------------------------------------
 select pg_temp.until0('d', 'lead');
@@ -402,11 +416,38 @@ select is(array[pg_temp.allowed('d', 'lead', 'seed'), pg_temp.blocked('d1', 'lea
 insert into public.marker_conflicts (marker_id, student_id, recorded_by, recorded_at) values (pg_temp.uid('m4'), pg_temp.student('d1'), pg_temp.uid('admin'), now());
 insert into public.marking_unit_exclusions (unit_id, marker_id, reason) values (pg_temp.u('d1'), pg_temp.uid('m3'), 'name_seen');
 select is(array[pg_temp.blocked('d1', 'm5', 'seed'), pg_temp.allowed('d', 'm5', 'seed'), pg_temp.blocked('d1', 'm6', 'seed')],
-  array['not_eligible', 'd2', 'null'],
+  array['not_eligible', 'd2,d4', 'null'],
   'seed_is_never_offered_to_a_marker_with_a_pass_on_that_piece: m5''s second marking stands on d1 (m6 may have it)');
 select is(array[pg_temp.blocked('d1', 'm4', 'seed'), pg_temp.allowed('d', 'm4', 'seed'), pg_temp.blocked('d1', 'm3', 'seed'), pg_temp.allowed('d', 'm3', 'seed')],
-  array['conflict_of_interest', 'd2', 'name_seen', 'd2'],
+  array['conflict_of_interest', 'd2,d4', 'name_seen', 'd2,d4'],
   'seed_skips_conflict_and_name_seen: a declared conflict, or a name seen on the piece, keeps the seed away');
+
+-- ---------------------------------------------------------------------------------------------
+-- left_counts_seeds_and_nothing_left_comes_last (Review Focus 1). Exam d has no free live piece (the lead holds d3).
+-- m6 may be given one seed (d1): with their count run out they see 1 left and get it; once it is marked they see 0
+-- left and Next script says nothing_left. m3 may be given two (d2, d4): with their count not run out, Next script
+-- still hands one out when nothing else is left, and draws their count again.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.until0('d', 'm6');
+insert into res values ('m6_d_w1', pg_temp.as('m6', 'select public.marking_my_work()'));
+insert into res values ('m6_d_n1', pg_temp.next('m6', 'd'));
+select pg_temp.mark('m6', (pg_temp.r('m6_d_n1') ->> 'unit_id')::uuid, array[3, 2, 5], 'm6d1');
+insert into res values ('m6_d_w2', pg_temp.as('m6', 'select public.marking_my_work()'));
+insert into res values ('m6_d_n2', pg_temp.next('m6', 'd'));
+select is(array[pg_temp.exam(pg_temp.r('m6_d_w1'), 'd') ->> 'left', pg_temp.code(pg_temp.r('m6_d_n1')), pg_temp.nm((pg_temp.r('m6_d_n1') ->> 'unit_id')::uuid),
+    pg_temp.r('m6d1:submit') ->> 'feedback'],
+  array['1', 'ok', 'd1', null], 'left_counts_seeds_and_nothing_left_comes_last: 1 left, and Next script gives the seed');
+select is(array[pg_temp.exam(pg_temp.r('m6_d_w2'), 'd') ->> 'left', pg_temp.code(pg_temp.r('m6_d_n2'))], array['0', 'nothing_left'],
+  'then 0 left, and Next script says nothing_left');
+select pg_temp.until0('d', 'm3', 9);
+insert into res values ('m3_d_w1', pg_temp.as('m3', 'select public.marking_my_work()'));
+insert into res values ('m3_d_n1', pg_temp.next('m3', 'd'));
+insert into res values ('m3_d_w2', pg_temp.as('m3', 'select public.marking_my_work()'));
+select is(array[pg_temp.exam(pg_temp.r('m3_d_w1'), 'd') ->> 'left', pg_temp.code(pg_temp.r('m3_d_n1')),
+    pg_temp.is_std((pg_temp.r('m3_d_n1') ->> 'unit_id')::uuid, 'seed')::text, ((pg_temp.xm('d', 'm3')).until_seed between 2 and 5)::text,
+    pg_temp.exam(pg_temp.r('m3_d_w2'), 'd') ->> 'left'],
+  array['2', 'ok', 'true', 'true', '1'], 'with nothing else left a seed comes before its count runs out, and the count is drawn again');
+select pg_temp.mark('m3', (pg_temp.r('m3_d_n1') ->> 'unit_id')::uuid, array[3, 2, 5], 'm3d1');
 
 -- ---------------------------------------------------------------------------------------------
 -- seed_piece_opens_with_the_same_keys_as_a_live_piece (Review Focus 1). m1 (cleared on e) takes a live piece, then a
@@ -414,6 +455,7 @@ select is(array[pg_temp.blocked('d1', 'm4', 'seed'), pg_temp.allowed('d', 'm4', 
 -- ---------------------------------------------------------------------------------------------
 select pg_temp.scripts('x', 'e', 8);
 select pg_temp.until0('e', 'm1', 3);
+insert into res values ('work0', pg_temp.as('m1', 'select public.marking_my_work()'));
 insert into res values ('next_live', pg_temp.next('m1', 'e'));
 insert into kv values ('a:live1', (pg_temp.r('next_live') ->> 'unit_id')::uuid);
 insert into res values ('open_live', pg_temp.as('m1', format('select public.marking_unit_open(%L)', pg_temp.a('live1'))));
@@ -423,6 +465,7 @@ select is(array[pg_temp.code(pg_temp.r('next_live')), (pg_temp.nm(pg_temp.a('liv
     (pg_temp.xm('e', 'm1')).until_seed::text],
   array['ok', 'true', 'ok', '2'], 'fixtures: m1''s Next script gives a live piece; its submit counts down to the next seed');
 select pg_temp.until0('e', 'm1');
+insert into res values ('work_pre_seed', pg_temp.as('m1', 'select public.marking_my_work()'));
 insert into res values ('next_seed', pg_temp.next('m1', 'e'));
 insert into kv values ('a:seedA', (pg_temp.r('next_seed') ->> 'unit_id')::uuid);
 select is(array[pg_temp.code(pg_temp.r('next_seed')), pg_temp.is_std(pg_temp.a('seedA'), 'seed')::text, ((pg_temp.xm('e', 'm1')).until_seed between 2 and 5)::text],
@@ -446,6 +489,9 @@ select is(pg_temp.piece(pg_temp.r('work_seed'), pg_temp.a('seedA')) - array['uni
 select is(array(select k from jsonb_object_keys(pg_temp.r('next_seed')) k order by 1), array(select k from jsonb_object_keys(pg_temp.r('next_live')) k order by 1),
   'marking_next answers with the same keys');
 select is(pg_temp.r('next_seed') -> 'resumed', pg_temp.r('next_live') -> 'resumed', 'and says resumed alike');
+select is(array[(pg_temp.exam(pg_temp.r('work0'), 'e') ->> 'left')::int - (pg_temp.exam(pg_temp.r('work_live'), 'e') ->> 'left')::int,
+                (pg_temp.exam(pg_temp.r('work_pre_seed'), 'e') ->> 'left')::int - (pg_temp.exam(pg_temp.r('work_seed'), 'e') ->> 'left')::int],
+  array[1, 1], 'the list''s left goes down by one when the seed is taken, as it does for a live piece');
 select is(array[position('seed' in lower(pg_temp.r('open_seed')::text)), position('seed' in lower(pg_temp.r('work_seed')::text)),
     position('seed' in lower(pg_temp.r('next_seed')::text))], array[0, 0, 0], 'none of the three texts holds "seed"');
 select is(pg_temp.code(pg_temp.as('m1', format('select public.marking_picture_paths(%L, %L::uuid[])', pg_temp.a('seedA'),
@@ -561,6 +607,17 @@ select is(pg_temp.keys(pg_temp.r('pr1_open')), pg_temp.keys(pg_temp.r('open_live
 select is(array[pg_temp.exam(pg_temp.r('pr1_work'), 'e') -> 'practice', pg_temp.exam(pg_temp.r('pr1_work'), 'e') -> 'left', pg_temp.exam(pg_temp.r('pr1_work'), 'e') -> 'paused'],
   array['{"done": 0, "needed": 2, "waiting": false}'::jsonb, '1'::jsonb, 'false'::jsonb],
   'their exam says practice: 0 of 2 done; left counts the other practice piece');
+-- two_markers_share_a_practice_piece: m4 (not cleared either) takes and opens the same piece while m3 works on it.
+select pg_temp.take(pg_temp.nm(pg_temp.a('pr1')), 'm4', 'practice');
+insert into res values ('m4_pr1', pg_temp.as('m4', format('select public.marking_unit_open(%L)', pg_temp.a('pr1'))));
+select is(array[pg_temp.code(pg_temp.r('m4_pr1')), pg_temp.ms(pg_temp.nm(pg_temp.a('pr1')), 'm3'), pg_temp.ms(pg_temp.nm(pg_temp.a('pr1')), 'm4'),
+    pg_temp.ended(pg_temp.nm(pg_temp.a('pr1')), 'm3'), pg_temp.ended(pg_temp.nm(pg_temp.a('pr1')), 'm4')],
+  array['ok', 'practice in_progress', 'practice in_progress', 'practice open', 'practice open'],
+  'two_markers_share_a_practice_piece: two markers hold and mark the same practice piece at once; neither is set aside');
+insert into res values ('m4_pr1_gb', pg_temp.as('m4', format('select public.marking_give_back(%L)', pg_temp.a('pr1'))));
+select is(array[pg_temp.code(pg_temp.r('m4_pr1_gb')), pg_temp.ms(pg_temp.nm(pg_temp.a('pr1')), 'm4'), pg_temp.ms(pg_temp.nm(pg_temp.a('pr1')), 'm3'),
+    pg_temp.ended(pg_temp.nm(pg_temp.a('pr1')), 'm3')],
+  array['ok', 'practice set_aside given_back', 'practice in_progress', 'practice open'], 'one giving it back leaves the other''s work alone');
 select is(pg_temp.code(pg_temp.as('m3', format('select public.marking_picture_paths(%L, %L::uuid[])', pg_temp.a('pr1'),
     array[(pg_temp.r('pr1_open') -> 'pages' -> 0 ->> 'page_id')::uuid]))), 'ok', 'the picture check lets them see a practice piece''s pages');
 select pg_temp.mark('m3', pg_temp.a('pr1'), array[3, 1, 1], 'pm1');
@@ -828,6 +885,38 @@ select is(array[public.marking_marker_cleared(pg_temp.k('f'), pg_temp.uid('m6'))
   'practice_and_seeds_off_change_nothing: with the checks off every marker is cleared and Next script gives a live piece as before');
 select is((select count(*)::int from public.marking_assignments a join public.marking_units u on u.id = a.unit_id
            where u.exam_id = pg_temp.k('f') and a.kind <> 'live'), 0, 'and nothing but live passes is handed out');
+
+-- ---------------------------------------------------------------------------------------------
+-- hand_back_with_changed_pages_leaves_practice_and_seed_attempts_alone: the seed m1 missed second (seed:m1:2) is taken
+-- back, its page 1 is turned, and an admin hands it back.
+-- ---------------------------------------------------------------------------------------------
+insert into kv values ('a:hb', pg_temp.k('seed:m1:2'));
+insert into res values ('hb_misses', to_jsonb((pg_temp.xm('e', 'm1')).misses));
+insert into res values ('hb_tb', pg_temp.as('admin', format($q$ select public.marking_script_take_back(%L, 'Turn page 1 the right way up.') $q$,
+  pg_temp.k(pg_temp.nm(pg_temp.a('hb'))))));
+update public.script_pages set rotation = 90 where id = pg_temp.k('p:' || pg_temp.nm(pg_temp.a('hb')) || ':1');
+insert into res values ('hb_hb', pg_temp.as('admin', format('select public.marking_script_hand_back(%L)', pg_temp.k(pg_temp.nm(pg_temp.a('hb'))))));
+select is(array[pg_temp.code(pg_temp.r('hb_tb')), pg_temp.code(pg_temp.r('hb_hb')), pg_temp.ms(pg_temp.nm(pg_temp.a('hb')), 'lead'),
+    ((pg_temp.std(pg_temp.nm(pg_temp.a('hb')))).retired_at is not null)::text],
+  array['ok', 'ok', 'live in_progress', 'true'],
+  'hand_back_with_changed_pages_leaves_practice_and_seed_attempts_alone: the lead''s live marking comes back to them, so the seed is retired');
+select is(array[pg_temp.ms(pg_temp.nm(pg_temp.a('hb')), 'm1'), pg_temp.ended(pg_temp.nm(pg_temp.a('hb')), 'm1'),
+    ((pg_temp.xm('e', 'm1')).misses = pg_temp.r('hb_misses')::int)::text,
+    ((select pages_changed_at from public.markings where id = pg_temp.k('sm:m1:2')) is null)::text],
+  array['seed submitted', 'seed submitted', 'true', 'true'],
+  'm1''s submitted miss stands, untouched, with no hold for them, and their misses are as they were');
+
+-- ---------------------------------------------------------------------------------------------
+-- clear_applies_a_pause_not_applied_yet: m1 is paused as three misses leave a marker (paused_at, not applied yet); the
+-- lead clears them before the minute job runs. Their submitted pieces still go to the lead.
+-- ---------------------------------------------------------------------------------------------
+update public.exam_markers set paused_at = now(), pause_applied_at = null, misses = 3
+where exam_id = pg_temp.k('e') and marker_id = pg_temp.uid('m1');
+insert into res values ('clear_m1b', pg_temp.as('lead', format($q$ select public.marking_marker_clear(%L, %L, 'Talked it through.') $q$, pg_temp.k('e'), pg_temp.uid('m1'))));
+select is(array[pg_temp.code(pg_temp.r('clear_m1b')), pg_temp.cs('x0'), pg_temp.reviews('x0'), pg_temp.st('x0'),
+    ((pg_temp.xm('e', 'm1')).paused_at is null)::text, ((pg_temp.xm('e', 'm1')).pause_applied_at is null)::text, (pg_temp.xm('e', 'm1')).misses::text],
+  array['ok', 'to_lead', 'paused_marker open', 'marked', 'true', 'true', '0'],
+  'clear_applies_a_pause_not_applied_yet: x0, which m1 marked, goes to the lead; then m1 is cleared and works again');
 
 -- ---------------------------------------------------------------------------------------------
 -- Privileges.
