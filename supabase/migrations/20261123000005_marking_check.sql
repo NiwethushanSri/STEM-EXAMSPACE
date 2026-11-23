@@ -5,13 +5,16 @@
 -- not in the second-marking sample, or its second marking is within tolerance, or the lead settled it. It waits for a
 -- second marking (waiting_second) or is with the lead marker (to_lead) otherwise, and has no check state while its first
 -- marking is not submitted. marking_check_evaluate works it out, in the order of the brief:
---   (1) the first marking is not submitted: no check state; its final marks are removed and an open difference or
---       paused-marker review is closed as withdrawn;
+--   (1) the first marking is not submitted, or the piece itself is not (a take-back opens the piece before it sets the
+--       marking aside): no check state; its final marks are removed and an open difference or paused-marker review is
+--       closed as withdrawn;
 --   (2) an open difference or paused-marker review: to_lead (an open difference whose second marking no longer stands
 --       is withdrawn first: there is nothing left to settle);
 --   (3) a closed difference or paused-marker review of this first marking with outcome first_stands, second_stands,
---       lead_marks or accepted: checked, the final marks left as the settle wrote them (accepted: the first marks
---       stand, and are written as in (6)); a routine sample review never settles a piece;
+--       lead_marks or accepted, closed after the marking's current submission (a settle covers only the submission it
+--       reviewed: a first marking that came back in progress and was submitted again goes through (4) to (6) again):
+--       checked, the final marks left as the settle wrote them (accepted: the first marks stand, and are written as in
+--       (6)); a routine sample review never settles a piece;
 --   (4) the first marker is paused on the exam: a paused_marker review is opened: to_lead;
 --   (5) whether a second marking is wanted is decided once (double marking on, and the piece's stored draw under the
 --       sample percentage) and then kept; wanted: no submitted second marking waits (waiting_second), a second marking
@@ -21,9 +24,10 @@
 -- marking (source first): only what differs is written. A piece that is not checked has no final marks: they are
 -- removed with their reason. Then the script's state follows (marking_script_state: checked when every piece is).
 --
--- Every write to final_marks leaves a final_mark_history row with who, when and why, by a trigger, so no later writer
--- can skip it: a final mark carries its reason (final_marks.reason, new), and a removal needs one too
--- (stem.final_marks_reason, set for the delete by marking_final_marks_remove).
+-- Every write to final_marks leaves a final_mark_history row with who (set_by, else the caller), when and why, by a
+-- trigger, so no later writer can skip it: a final mark carries its reason (final_marks.reason, new), and a removal
+-- needs one too (stem.final_marks_reason, set for the delete by marking_final_marks_remove, which puts an outer value
+-- back afterwards).
 --
 -- A piece leaves the checked state through two triggers, whatever function moves it: marking_units_recheck (a piece
 -- that leaves submitted: a take-back, a hand-back with changed pages, a question added after opening, "Name
@@ -37,11 +41,11 @@
 --   marking_final_marks_from(p_unit, p_marking, p_reason), marking_final_marks_remove(p_unit, p_reason) (internal).
 --   marking_tolerance(p_max, p_percent), marking_set_total(p_unit, p_set), marking_compare_sets(p_unit, p_a, p_b),
 --     marking_compare(p_first, p_second) (internal): Builder's call 3.
---   marking_unit_settled(p_unit) (internal): a review settled the piece's first marking.
+--   marking_unit_settled(p_unit) (internal): a review settled the piece's first marking as it is submitted now.
 --   marking_check_evaluate(p_unit) (internal), triggers marking_units_recheck and markings_recheck.
 --   marking_second_release(p_unit, p_reason) (internal), marking_second_add(p_units, p_reason) and
 --     marking_second_drop(p_units, p_reason): "Second-mark these" and its release.
---   marking_check_exam(p_exam) (internal): every piece of an exam checked again.
+--   marking_check_exam(p_exam) (internal): every piece of an exam checked again (withdrawn and void scripts left alone).
 --   marking_second_stuck(p_exam) (internal): the pieces waiting for a second marker whom nobody can be (Review Focus
 --     2; for Task 13's dashboard and Task 7's list).
 --   script_final_marks(p_script), script_final_total(p_script) (internal): what Phase 4 reads.
@@ -51,8 +55,8 @@
 --   marking_after_submit, marking_after_change (20261123000004): a live or second marking's piece is evaluated.
 --   marking_save (20261123000004): a submitted live or second marking of a piece the lead settled is refused
 --     (settled), before anything is written.
---   marking_checks_set (20261123000003): a change of double marking once marking has opened checks the exam's pieces
---     again (marking_check_exam).
+--   marking_checks_set (20261123000003): double marking turned off once marking has opened checks the exam's pieces
+--     again (marking_check_exam); turned on again, nothing changes.
 --   exam_structure_save (20261122000015): a question added after opening also reopens the submitted second markings
 --     of the pieces that hold it, as it reopens their first: back to the same marker when they may still mark it (an
 --     assigned second hold), otherwise set aside (unapproved, conflict or name_seen) and given to nobody. The keys of
@@ -104,7 +108,7 @@ begin
     return null;
   end if;
   insert into public.final_mark_history (unit_id, question_id, mark, not_attempted, source, removed, changed_by, changed_at, reason)
-  values (new.unit_id, new.question_id, new.mark, new.not_attempted, new.source, false, new.set_by, now(), new.reason);
+  values (new.unit_id, new.question_id, new.mark, new.not_attempted, new.source, false, coalesce(new.set_by, auth.uid()), now(), new.reason);
   return null;
 end;
 $$;
@@ -114,7 +118,8 @@ create trigger final_marks_history after insert or update or delete on public.fi
   execute function public.final_marks_history();
 
 -- ---------------------------------------------------------------------------------------------
--- Internal: every final mark of the piece is removed, each with its history row (by the caller, for p_reason).
+-- Internal: every final mark of the piece is removed, each with its history row (by the caller, for p_reason). The
+-- removal's reason is set for the delete only: a reason set around this call is put back afterwards.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_final_marks_remove(p_unit uuid, p_reason text)
 returns void
@@ -122,20 +127,23 @@ language plpgsql
 security definer
 set search_path = ''
 as $$
+declare
+  v_outer text := current_setting('stem.final_marks_reason', true);
 begin
   if not exists (select 1 from public.final_marks f where f.unit_id = p_unit) then
     return;
   end if;
   perform set_config('stem.final_marks_reason', p_reason, true);
   delete from public.final_marks f where f.unit_id = p_unit;
-  perform set_config('stem.final_marks_reason', '', true);
+  perform set_config('stem.final_marks_reason', coalesce(v_outer, ''), true);
 end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- Internal: the piece's final marks become p_marking's (source first for a live marking, second for a second one), for
 -- each leaf of the piece the marking has a mark or NR for; set by the caller, for p_reason. Only what differs is
--- written, each write with its history row; a final mark the marking does not give is removed.
+-- written, each write with its history row; a final mark the marking does not give is removed (a reason set around this
+-- call is put back afterwards).
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_final_marks_from(p_unit uuid, p_marking uuid, p_reason text)
 returns void
@@ -145,6 +153,7 @@ set search_path = ''
 as $$
 declare
   v_source text;
+  v_outer text := current_setting('stem.final_marks_reason', true);
 begin
   select case m.kind when 'live' then 'first' when 'second' then 'second' end into v_source
   from public.markings m where m.id = p_marking;
@@ -168,7 +177,7 @@ begin
       and not exists (select 1 from public.marking_unit_questions(p_unit) q
                       join public.question_marks m on m.marking_id = p_marking and m.question_id = q.question_id
                       where q.leaf and q.question_id = f.question_id);
-    perform set_config('stem.final_marks_reason', '', true);
+    perform set_config('stem.final_marks_reason', coalesce(v_outer, ''), true);
   end if;
 end;
 $$;
@@ -310,9 +319,11 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- Internal: whether the lead settled the piece's first marking (its live marking that is not set aside): a closed
--- difference or paused-marker review of it whose outcome stands (first_stands, second_stands, lead_marks, accepted).
--- A routine sample review never settles a piece.
+-- Internal: whether the lead settled the piece's first marking as it is submitted now (the 3B ledger's R9): a closed
+-- difference or paused-marker review of its live marking that is not set aside, whose outcome stands (first_stands,
+-- second_stands, lead_marks, accepted) and which was closed after that marking's current submission. A marking that
+-- came back in progress (taken back and given back, a question added, pages changed) and was submitted again is not
+-- settled by a review of its earlier submission. A routine sample review never settles a piece.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_unit_settled(p_unit uuid)
 returns boolean
@@ -326,7 +337,8 @@ as $$
     join public.markings m on m.id = r.marking_id
     where r.unit_id = p_unit and r.state = 'closed' and r.kind in ('difference', 'paused_marker')
       and r.outcome in ('first_stands', 'second_stands', 'lead_marks', 'accepted')
-      and m.unit_id = p_unit and m.kind = 'live' and m.status <> 'set_aside')
+      and m.unit_id = p_unit and m.kind = 'live' and m.status <> 'set_aside'
+      and r.closed_at >= m.submitted_at)
 $$;
 
 -- ---------------------------------------------------------------------------------------------
@@ -394,7 +406,9 @@ begin
   select * into v_second from public.markings m where m.unit_id = p_unit and m.kind = 'second' and m.status = 'submitted';
   v_wanted := v_u.second_wanted;
 
-  if v_first.id is null or v_first.status <> 'submitted' then
+  -- The piece's own state counts too: a take-back opens the piece before it sets its marking aside, and the check run
+  -- between the two must not see a submitted piece.
+  if v_first.id is null or v_first.status <> 'submitted' or v_u.state <> 'submitted' then
     -- (1) Nothing to check: what waited for the lead is withdrawn.
     update public.marking_reviews r set state = 'closed', outcome = 'withdrawn', closed_by = v_actor, closed_at = now()
     where r.unit_id = p_unit and r.state = 'open' and r.kind in ('difference', 'paused_marker');
@@ -404,9 +418,11 @@ begin
     update public.marking_reviews r set state = 'closed', outcome = 'withdrawn', closed_by = v_actor, closed_at = now()
     where r.unit_id = p_unit and r.state = 'open' and r.kind = 'difference'
       and (r.marking_id <> v_first.id or r.second_marking_id is distinct from v_second.id);
+    -- A settle covers only the submission it reviewed (as marking_unit_settled): one closed before this submission does not.
     select r.* into v_r from public.marking_reviews r
     where r.unit_id = p_unit and r.marking_id = v_first.id and r.state = 'closed' and r.kind in ('difference', 'paused_marker')
       and r.outcome in ('first_stands', 'second_stands', 'lead_marks', 'accepted')
+      and r.closed_at >= v_first.submitted_at
     order by r.closed_at desc, r.id
     limit 1;
     if exists (select 1 from public.marking_reviews r
@@ -809,8 +825,8 @@ $$;
 -- Internal: every piece of the exam whose first marking is submitted is evaluated again. With double marking off, every
 -- piece still waiting for a second marking that has not come (wanted, no check state or waiting_second, no second
 -- marking submitted) has it released first, as marking_second_drop does (reason: double marking was turned off).
--- Holds the exam's marking row, then the exam's scripts in id order, then its pieces in id order. Returns how many
--- pieces it evaluated.
+-- Withdrawn and void scripts are left as they are. Holds the exam's marking row, then the exam's scripts in id order,
+-- then its pieces in id order. Returns how many pieces it evaluated.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_check_exam(p_exam uuid)
 returns int
@@ -831,8 +847,9 @@ begin
   perform 1 from public.marking_units u where u.exam_id = p_exam order by u.id for update;
   if not coalesce(v_m.double_marking, true) then
     for r in
-      select u.id from public.marking_units u
-      where u.exam_id = p_exam and u.second_wanted and (u.check_state is null or u.check_state = 'waiting_second')
+      select u.id from public.marking_units u join public.scripts s on s.id = u.script_id
+      where u.exam_id = p_exam and s.state not in ('withdrawn', 'void')
+        and u.second_wanted and (u.check_state is null or u.check_state = 'waiting_second')
         and not exists (select 1 from public.markings k where k.unit_id = u.id and k.kind = 'second' and k.status = 'submitted')
       order by u.id
     loop
@@ -840,8 +857,8 @@ begin
     end loop;
   end if;
   for r in
-    select u.id from public.marking_units u
-    where u.exam_id = p_exam
+    select u.id from public.marking_units u join public.scripts s on s.id = u.script_id
+    where u.exam_id = p_exam and s.state not in ('withdrawn', 'void')
       and exists (select 1 from public.markings k where k.unit_id = u.id and k.kind = 'live' and k.status = 'submitted')
     order by u.id
   loop
@@ -853,9 +870,9 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- marking_checks_set: as 20261123000003, and when double marking is turned on or off once marking has opened, the
--- exam's pieces are checked again (marking_check_exam): off, the pieces waiting for a second marking are released and
--- checked; on again, nothing already checked is reached back to (the decisions are kept). p_settings has all six, in
+-- marking_checks_set: as 20261123000003, and when double marking is turned off once marking has opened, the exam's
+-- pieces are checked again (marking_check_exam): the pieces waiting for a second marking are released and checked.
+-- Turned on again, nothing is reached back to (the decisions are kept), so nothing is checked again. p_settings has all six, in
 -- range: {double_marking, sample_percent (1 to 100), tolerance_percent (1 to 50), seeds, seed_every (3 to 50),
 -- practice}, the numbers whole (invalid_input otherwise). Turning any of double marking, seeds and practice off needs at
 -- most one approved active marker of the subject (not_small_subject) and a reason (reason_required), and keeps the
@@ -996,8 +1013,9 @@ begin
     tolerance_percent = excluded.tolerance_percent, seeds = excluded.seeds, seed_every = excluded.seed_every,
     practice = excluded.practice, checks_off_reason = excluded.checks_off_reason, checks_off_by = excluded.checks_off_by,
     checks_off_at = excluded.checks_off_at, updated_at = now();
-  -- 3B Task 4: double marking turned on or off once marking has opened: the exam's pieces are checked again.
-  if v_m.opened_at is not null and v_dm <> v_was_dm then
+  -- 3B Task 4: double marking turned off once marking has opened: the exam's pieces are checked again. Turned on again,
+  -- nothing changes: every submitted piece's decision is kept, and the others are decided when they are submitted.
+  if v_m.opened_at is not null and v_was_dm and not v_dm then
     perform public.marking_check_exam(p_exam);
   end if;
   insert into public.audit_log (actor_id, action, target_type, target_id, reason)

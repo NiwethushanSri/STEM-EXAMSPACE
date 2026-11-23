@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(91);
+select plan(102);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -410,6 +410,33 @@ select public.marking_check_evaluate(pg_temp.u('a6'));
 select is(pg_temp.cs('a6'), 'checked', 'and a settled piece stays checked when it is looked at again');
 
 -- ---------------------------------------------------------------------------------------------
+-- settle_covers_only_the_submission_it_reviewed (the 3B ledger's R9): a9 is second-marked within tolerance and the
+-- lead settled it (first marks stand) an hour after its first marking came in. An admin then takes that marking back
+-- and gives it to m1 again (the same marking, in progress again); m1 changes a mark and submits it again.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script('a9', 'e'); select pg_temp.draw('a9', 0.05); select pg_temp.first('a9', 'm1', array[2, 1, 4]);
+select pg_temp.second('a9', 'm2', array[2, 1, 4]);
+insert into kv values ('f0:a9', pg_temp.k('f:a9'));
+update public.markings set submitted_at = now() - interval '2 hours' where id in (pg_temp.k('f:a9'), pg_temp.k('s:a9'));
+insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, second_marking_id, state, outcome, reason, opened_at, closed_by, closed_at)
+values (pg_temp.k('e'), pg_temp.u('a9'), 'difference', pg_temp.k('f:a9'), pg_temp.k('s:a9'), 'closed', 'first_stands', 'First marks stand',
+        now() - interval '90 minutes', pg_temp.uid('lead'), now() - interval '1 hour');
+insert into res values ('r9_settled', pg_temp.change('f:a9', 'm1', jsonb_build_array(pg_temp.op('a9', '1', 1)), 'A slip in question 1'));
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('r9_tb', public.marking_take_back(array[pg_temp.u('a9')], 'Marked against the wrong scheme'));
+insert into res values ('r9_assign', public.marking_assign(array[pg_temp.u('a9')], pg_temp.uid('m1'), 'Back to its marker'));
+select tests.as_postgres();
+select is(array[pg_temp.code(pg_temp.r('r9_settled')), pg_temp.code(pg_temp.r('r9_tb')), pg_temp.r('r9_assign') ->> 'assigned',
+                pg_temp.ms('a9', 'm1'), pg_temp.cs('a9'),
+                ((select m.id from public.markings m where m.unit_id = pg_temp.u('a9') and m.kind = 'live') = pg_temp.k('f0:a9'))::text],
+  array['settled', 'ok', '1', 'live in_progress', '-', 'true'],
+  'settle_covers_only_the_submission_it_reviewed: a9 is settled; an admin takes its first marking back and gives the same marking to m1 again');
+select pg_temp.first('a9', 'm1', array[0, 1, 4]);
+select is(array[pg_temp.cs('a9'), pg_temp.reviews('a9'), pg_temp.fm('a9'), (pg_temp.k('f:a9') = pg_temp.k('f0:a9'))::text],
+  array['to_lead', 'difference closed first_stands,difference open', '', 'true'],
+  'm1 submits it again with question 1 changed: the old settle does not cover it, so it is compared again and goes to the lead');
+
+-- ---------------------------------------------------------------------------------------------
 -- second_add_sends_a_checked_piece_for_second_marking: a5 is checked and was not sampled.
 -- ---------------------------------------------------------------------------------------------
 select tests.as_user(pg_temp.uid('lead'));
@@ -513,6 +540,9 @@ select tests.structure(pg_temp.k('f'));
 select tests.open_marking(pg_temp.k('f'), '{"double_marking": true, "sample_percent": 100}');
 select pg_temp.script('f1', 'f'); select pg_temp.first('f1', 'o1', array[2, 1, 4]);
 select pg_temp.script('f2', 'f'); select pg_temp.first('f2', 'o1', array[3, 2, 5]);
+-- f3 waits too, and is then withdrawn (its booking was cancelled, say).
+select pg_temp.script('f3', 'f'); select pg_temp.first('f3', 'o1', array[1, 1, 1]);
+update public.scripts set state = 'withdrawn' where id = pg_temp.k('f3');
 select public.marking_unit_take(pg_temp.u('f1'), pg_temp.uid('o2'), 'next', null, now() + interval '2 hours', 'second');
 select tests.as_user(pg_temp.uid('o2')); select public.marking_unit_open(pg_temp.u('f1')); select tests.as_postgres();
 select is(array[pg_temp.cs('f1'), pg_temp.cs('f2'), pg_temp.ms('f1', 'o2')], array['waiting_second', 'waiting_second', 'second in_progress'],
@@ -530,6 +560,8 @@ select is(array[pg_temp.ended('f1', 'o2'), pg_temp.ms('f1', 'o2'), pg_temp.fm('f
   'o2''s second hold ends and their marking is set aside');
 select is(array[pg_temp.audits('marking_second_dropped', pg_temp.u('f1')), pg_temp.audits('marking_second_dropped', pg_temp.u('f2'))], array[1, 1],
   'each piece''s second marking is recorded as dropped');
+select is(array[pg_temp.cs('f3'), pg_temp.wanted('f3'), pg_temp.audits('marking_second_dropped', pg_temp.u('f3'))::text],
+  array['waiting_second', 'true', '0'], 'the withdrawn script''s piece is left as it was');
 update public.profiles set status = 'active' where id = pg_temp.uid('o2');
 select tests.as_user(pg_temp.uid('admin'));
 insert into res values ('on', public.marking_checks_set(pg_temp.k('f'), '{"double_marking": true, "sample_percent": 100, "tolerance_percent": 10,
@@ -568,11 +600,42 @@ select is(array[pg_temp.code(pg_temp.r('d_paths')), pg_temp.code(pg_temp.r('d_tb
 select is((select array_agg(coalesce(s.taken_back_reason, '-') order by s.number) from public.scripts s
            where s.id in (pg_temp.k('d1'), pg_temp.k('d2'), pg_temp.k('d3'), pg_temp.k('d4'))),
   array['Hide the name on page 1', 'name_visible', 'A name shows on page 1', '-'], 'd1, d2 and d3 are taken back from the markers, as marked scripts are');
+select is(array[pg_temp.cs('d2'), pg_temp.fm('d2'), array_to_string(pg_temp.hist('d2', '1'), ';'), pg_temp.cs('d3'), pg_temp.fm('d3')],
+  array['-', '', '1 first;removed', 'checked', '1=1 first,2(a)=1 first,2(b)=1 first'],
+  'name_visible_on_a_checked_piece_clears_its_check: m1''s marking of d2 is set aside, so d2 is no longer checked and its final marks are removed; d3''s submitted marking stands');
 insert into public.script_exceptions (exam_id, kind, booking_id, script_id, details)
 select s.exam_id, 'not_expected'::public.exception_kind, s.booking_id, s.id, '{"reason": "script_locked"}'::jsonb
 from public.scripts s where s.id = pg_temp.k('d4');
 select is((select string_agg(a.kind || ' ' || a.state, ',') from public.marking_alerts a where a.script_id = pg_temp.k('d4')),
   'pages_set_aside open', 'a page set aside for d4 raises its alert');
+
+-- ---------------------------------------------------------------------------------------------
+-- hand_back_with_changed_pages_unchecks_the_piece: d1 is taken back, page 1 is turned, and an admin hands it back.
+-- ---------------------------------------------------------------------------------------------
+update public.script_pages set rotation = 90 where id = pg_temp.k('p:d1:1');
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('d_hb', public.marking_script_hand_back(pg_temp.k('d1')));
+select tests.as_postgres();
+select is(array[pg_temp.r('d_hb')::text, pg_temp.ms('d1', 'm1'), pg_temp.cs('d1'), pg_temp.fm('d1'), pg_temp.st('d1')],
+  array['{"ok": true, "state": "marking", "reopened": 1}', 'live in_progress', '-', '', 'marking'],
+  'hand_back_with_changed_pages_unchecks_the_piece: d1''s marking goes back to m1, and d1 is no longer checked and has no final marks');
+select pg_temp.first('d1', 'm1', array[3, 2, 4]);
+select is(array[pg_temp.cs('d1'), pg_temp.st('d1'), pg_temp.fm('d1'), array_to_string(pg_temp.hist('d1', '2(b)'), ';')],
+  array['checked', 'checked', '1=3 first,2(a)=2 first,2(b)=4 first', '5 first;removed;4 first'],
+  'm1 submits it again: d1 is checked again, on the marks as they are now');
+
+-- ---------------------------------------------------------------------------------------------
+-- take_back_opens_no_stray_review: m2, whose marking of d5 is checked, is paused on exam d (as Task 5 will pause
+-- markers); an admin takes d5's marking back.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script('d5', 'd'); select pg_temp.first('d5', 'm2', array[1, 1, 1]);
+insert into public.exam_markers (exam_id, marker_id, paused_at) values (pg_temp.k('d'), pg_temp.uid('m2'), now());
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('d5_tb', public.marking_take_back(array[pg_temp.u('d5')], 'Marked against the wrong scheme'));
+select tests.as_postgres();
+delete from public.exam_markers where exam_id = pg_temp.k('d') and marker_id = pg_temp.uid('m2');
+select is(array[pg_temp.code(pg_temp.r('d5_tb')), pg_temp.cs('d5'), pg_temp.reviews('d5')], array['ok', '-', '-'],
+  'take_back_opens_no_stray_review: the piece is opened before its marking is set aside, and no review is opened between the two');
 
 -- ---------------------------------------------------------------------------------------------
 -- script_total_comes_from_question_marks_not_piece_totals. Exam bq is marked by question with checks off: questions 5,
@@ -679,6 +742,29 @@ select is(array[pg_temp.cs('g1'), pg_temp.fm('g1')], array['checked', '1=2 first
   'm2 marks it too: compared on every question, g1 is checked again');
 
 -- ---------------------------------------------------------------------------------------------
+-- question_added_to_a_settled_piece_checks_it_again (the 3B ledger's R9): g3 is second-marked by m1 and m3 within
+-- tolerance and the lead settled it (first marks stand) after it came in; an admin then adds question 4.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script('g3', 'g'); select pg_temp.first('g3', 'm1', array[2, 1, 4, 1]); select pg_temp.second('g3', 'm3', array[2, 1, 4, 1]);
+update public.markings set submitted_at = now() - interval '2 hours' where id in (pg_temp.k('f:g3'), pg_temp.k('s:g3'));
+insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, second_marking_id, state, outcome, reason, opened_at, closed_by, closed_at)
+values (pg_temp.k('g'), pg_temp.u('g3'), 'difference', pg_temp.k('f:g3'), pg_temp.k('s:g3'), 'closed', 'first_stands', 'First marks stand',
+        now() - interval '90 minutes', pg_temp.uid('lead'), now() - interval '1 hour');
+select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('g_save4', public.exam_structure_save(pg_temp.k('g'),
+  pg_temp.plus(pg_temp.draft(public.exam_structure_get(pg_temp.k('g'))), 'new4', '4', 1), 'Question 4 was left out'));
+select tests.as_postgres();
+select is(array[pg_temp.code(pg_temp.r('g_save4')), pg_temp.ms('g3', 'm1'), pg_temp.ms('g3', 'm3'), pg_temp.cs('g3'), pg_temp.fm('g3')],
+  array['ok', 'live in_progress', 'second in_progress', '-', ''],
+  'question_added_to_a_settled_piece_checks_it_again: an admin adds question 4: both of g3''s markings are reopened and it is no longer checked');
+select pg_temp.first('g3', 'm1', array[2, 1, 4, 1, 1]);
+select is(pg_temp.cs('g3'), 'waiting_second',
+  'm1 marks question 4 and submits: the settle was of the earlier submission, so g3 waits for its second marking again');
+select pg_temp.second('g3', 'm3', array[2, 1, 4, 1, 1]);
+select is(array[pg_temp.cs('g3'), pg_temp.fm('g3')], array['checked', '1=2 first,2(a)=1 first,2(b)=4 first,3=1 first,4=1 first'],
+  'm3 marks it too: compared again, g3 is checked with a final mark for every question');
+
+-- ---------------------------------------------------------------------------------------------
 -- first_and_second_marks_are_never_changed_by_the_check: every marking of these exams, before and after the check runs
 -- again over exam e and each of their pieces is looked at again.
 -- ---------------------------------------------------------------------------------------------
@@ -713,6 +799,44 @@ select is(array[pg_temp.code(pg_temp.r('tb_s4')), pg_temp.reviews('a4'), pg_temp
 select is(array[pg_temp.code(pg_temp.r('tb_f2')), pg_temp.reviews('a2'), pg_temp.cs('a2'), pg_temp.fm('a2'), pg_temp.st('a2')],
   array['ok', 'difference closed withdrawn', '-', '', 'marking'],
   'an admin takes back a2''s first marking: its difference is withdrawn and it has no check state until it is marked again');
+
+-- ---------------------------------------------------------------------------------------------
+-- checks_set_in_time_at_1500_pieces (a timing guard, as 043 and 056, Phase 3A Ruling R25: the fixture tables are
+-- analysed first). Exam big of 'ZZ Check Big' (one approved marker) is marked by question in 5 groups and has 300
+-- scripts: each of the 1,500 pieces is first-marked (written as postgres) and waits for a second marking. An admin turns
+-- double marking off, under the 4-second limit of a list.
+-- ---------------------------------------------------------------------------------------------
+insert into public.subjects (name, kind) values ('ZZ Check Big', 'school');
+insert into c values ('mbig', tests.marker(pg_temp.subj('ZZ Check Big')));
+insert into kv values ('big', tests.marking_exam(pg_temp.subj('ZZ Check Big')));
+insert into public.question_groups (exam_id, label, position) select pg_temp.k('big'), 'B' || i, i from generate_series(1, 5) i;
+insert into public.exam_questions (exam_id, label, position, max_mark, pages, group_id)
+select g.exam_id, g.position::text, g.position, 5, '{1}', g.id from public.question_groups g where g.exam_id = pg_temp.k('big');
+do $$ begin for i in 1..300 loop perform tests.verified_script(pg_temp.k('big')); end loop; end $$;
+update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('big');
+select tests.open_marking(pg_temp.k('big'), '{"double_marking": true, "sample_percent": 100}');
+insert into public.markings (unit_id, kind, marker_id, status, total, last_saved_at, submitted_at)
+select u.id, 'live', pg_temp.uid('mbig'), 'submitted', 1, now(), now() from public.marking_units u where u.exam_id = pg_temp.k('big');
+insert into public.question_marks (marking_id, question_id, mark)
+select m.id, q.id, 1 from public.markings m join public.marking_units u on u.id = m.unit_id
+join public.exam_questions q on q.group_id = u.group_id where u.exam_id = pg_temp.k('big');
+update public.marking_units set state = 'submitted', second_wanted = true, check_state = 'waiting_second' where exam_id = pg_temp.k('big');
+update public.scripts set state = 'marked' where exam_id = pg_temp.k('big');
+analyze public.scripts, public.marking_units, public.markings, public.question_marks, public.final_marks, public.final_mark_history,
+        public.marking_reviews, public.marking_assignments, public.exam_questions, public.question_groups, public.exam_option_groups,
+        public.exam_markers, public.exam_marking, public.marker_approvals, public.profiles, public.audit_log;
+select tests.as_user(pg_temp.uid('admin'));
+set local statement_timeout = '4s';
+insert into res values ('big_off', public.marking_checks_set(pg_temp.k('big'), '{"double_marking": false, "sample_percent": 100,
+  "tolerance_percent": 10, "seeds": false, "seed_every": 10, "practice": false}', 'One marker for this subject'));
+reset statement_timeout;
+select tests.as_postgres();
+select is(array[pg_temp.code(pg_temp.r('big_off')),
+                (select count(*)::text from public.marking_units u where u.exam_id = pg_temp.k('big') and u.check_state = 'checked'),
+                (select count(*)::text from public.scripts s where s.exam_id = pg_temp.k('big') and s.state = 'checked'),
+                (select count(*)::text from public.final_marks f join public.marking_units u on u.id = f.unit_id where u.exam_id = pg_temp.k('big'))],
+  array['ok', '1500', '300', '1500'],
+  'checks_set_in_time_at_1500_pieces: turning double marking off checks the 1,500 waiting pieces, with their final marks, within 4 s');
 
 -- ---------------------------------------------------------------------------------------------
 -- new_functions_are_internal_but_add_and_drop

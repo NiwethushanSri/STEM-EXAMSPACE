@@ -8,8 +8,9 @@ select tests.assert_no_owner();
 -- corr is a corrector never approved. Exam e (tests.marking_exam: finished 2 days ago; the test structure; whole
 -- scripts) has the home scripts x1 to x6, opened (tests.open_marking). m1 marks every one of them (their live pass is
 -- submitted and, the checks being off, each piece and script is checked: Task 4); x1 by hand, with an annotation and a
--- note to the lead. A piece waits for a second marking when its check_state is set to waiting_second here, as postgres
--- (Task 4 decides it; with no second marking wanted, a second marking submitted still leaves the piece checked). Scripts made later
+-- note to the lead. A piece is sent for second marking as postgres through the check itself (pg_temp.wait_second: a
+-- second marking wanted, then marking_check_evaluate), so it waits as Task 4 leaves it and its script is marked; one
+-- that should wait no more is released with marking_second_drop. Scripts made later
 -- (y1, y2, z1, z2, h1) come in once marking is open; exam eb is the timing guard's. A unit is kept as 'u:<script>', a page as 'p:<script>:<copy page>', a
 -- question as 'q:<label>', a marking as 'mk<marker number>:<script>'.
 -- ---------------------------------------------------------------------------------------------
@@ -103,9 +104,23 @@ begin
   perform public.marking_exam_sync(pg_temp.k('e'), null);
   insert into kv select 'u:' || p_name, u.id from public.marking_units u where u.script_id = pg_temp.k(p_name) on conflict (name) do nothing;
 end $$;
--- A piece waits for a second marking (as Task 4 will decide it).
-create function pg_temp.wait_second(p text) returns void language sql as $$
-  update public.marking_units set check_state = 'waiting_second' where id = pg_temp.u(p) $$;
+-- A piece waits for a second marking: one is wanted and the check is worked out again (Task 4), as "Second-mark these"
+-- does. Its script is then marked.
+create function pg_temp.wait_second(p text) returns void language plpgsql as $$
+begin
+  update public.marking_units set second_wanted = true where id = pg_temp.u(p);
+  perform public.marking_check_evaluate(pg_temp.u(p));
+end $$;
+-- A piece waits no more: an admin releases its second marking (marking_second_drop), and it is checked.
+create function pg_temp.wait_no_more(p text[]) returns void language plpgsql as $$
+declare
+  v_units uuid[] := array(select pg_temp.u(x) from unnest(p) x);
+  v_admin uuid := pg_temp.uid('admin');
+begin
+  perform tests.as_user(v_admin);
+  perform public.marking_second_drop(v_units, 'Enough second marking for these tests');
+  perform tests.as_postgres();
+end $$;
 -- The marker's advisory lock this transaction holds ('-' for none).
 create function pg_temp.marker_lock(p text) returns text language sql stable as $$
   select coalesce(string_agg(l.mode, ',' order by l.mode), '-') from pg_locks l
@@ -351,8 +366,7 @@ select is(array[pg_temp.r('i_open') #>> '{marking,id}', pg_temp.r('i_sub')::text
   array[pg_temp.k('mk2:x1')::text, '{"ok": true, "rev": 3, "total": 10.0, "feedback": null, "max_total": 10.0}'],
   'second_submit_ends_only_the_second_hold: m2 opens their marking again and submits it');
 select is(array[pg_temp.ended('x1', 'm2'), pg_temp.ms('x1', 'm2'), pg_temp.holders('x1'), pg_temp.us('x1'), pg_temp.st('x1')],
-  array['expired,expired,submitted', 'submitted', '-', 'submitted', 'checked'],
-  'their hold ends; the piece is as it was, and its script is checked (Task 4: no second marking was wanted, the checks being off)');
+  array['expired,expired,submitted', 'submitted', '-', 'submitted', 'marked'], 'their hold ends; the piece and its script are as they were');
 select is(array[pg_temp.ms('x1', 'm1'), pg_temp.marks('mk1:x1'), pg_temp.rev('mk1:x1')::text, pg_temp.holders('x2')],
   array['submitted', '1=2,2(a)=1,2(b)=4', pg_temp.r('sub1') ->> 'rev', 'lead second next'],
   'the first marking stands as it was, and the lead still holds x2''s second pass');
@@ -408,8 +422,8 @@ select is(pg_temp.r('l_assign'), '{"ok": true, "assigned": 1, "skipped": []}'::j
 select is((select array[a.kind::text, a.how, (a.hold_until is null)::text, pg_temp.who(a.assigned_by)] from public.marking_assignments a
            where a.unit_id = pg_temp.u('x4') and a.marker_id = pg_temp.uid('m3') and a.ended_at is null),
   array['second', 'assigned', 'true', 'admin'], 'm3 holds it, with no time limit');
-select is(array[pg_temp.us('x4'), pg_temp.ms('x4', 'm1'), pg_temp.st('x4')], array['submitted', 'submitted', 'checked'],
-  'the piece, its first marking and its script are as they were (checked: the checks are off)');
+select is(array[pg_temp.us('x4'), pg_temp.ms('x4', 'm1'), pg_temp.st('x4')], array['submitted', 'submitted', 'marked'],
+  'the piece, its first marking and its script are as they were');
 select is((select a.reason from public.audit_log a where a.action = 'marking_second_assigned' and a.target_id = pg_temp.u('x4')),
   'Second marking for the sample', 'audited, with the reason');
 select tests.as_user(pg_temp.uid('m3'));
@@ -511,7 +525,7 @@ select is(array[pg_temp.ended('z2', 'm5'), pg_temp.ms('z2', 'm5'), pg_temp.us('z
   array['conflict', 'set_aside conflict', 'submitted', 'submitted', 'ok'],
   'm5 declares a conflict: the same, with conflict');
 -- z1 and z2 wait no more, for the tests below.
-update public.marking_units set check_state = null where id in (pg_temp.u('z1'), pg_temp.u('z2'));
+select pg_temp.wait_no_more(array['z1', 'z2']);
 
 -- ---------------------------------------------------------------------------------------------
 -- picture_paths_follow_the_pass (marking_picture_paths): m2 holds x3's second pass.
@@ -533,7 +547,7 @@ select is(pg_temp.r('o_after'), '{"ok": false, "code": "hold_expired"}'::jsonb, 
 -- ---------------------------------------------------------------------------------------------
 -- second_pass_waits_for_the_picture_check_and_a_busy_script: x3's second pass is free again; x4 no longer waits.
 -- ---------------------------------------------------------------------------------------------
-update public.marking_units set check_state = null where id = pg_temp.u('x4');
+select pg_temp.wait_no_more(array['x4']);
 insert into public.processing_jobs (upload_id, kind, state) values (pg_temp.upload('x3'), 'remask', 'queued');
 insert into public.processing_jobs (upload_id, kind, state) values (pg_temp.upload('x2'), 'remask', 'queued');
 select tests.as_user(pg_temp.uid('m4'));
