@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, standardMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -319,6 +319,36 @@ describe("markingWorkMessageFor", () => {
     expect(markingWorkMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("practice, seeded scripts and the pause (3B Task 5)", () => {
+  const paused = "Your marking on this exam is paused. The lead marker will be in touch.";
+  it("tells a marker why Next script gives nothing", () => {
+    expect(allocationMessageFor("paused", "marker")).toBe(paused);
+    expect(allocationMessageFor("practice_wait", "marker")).toBe("Your practice scripts are with the lead marker.");
+    expect(allocationMessageFor("practice_not_ready", "marker")).toBe("Practice scripts are not ready yet.");
+    expect(markingScreenMessageFor("practice_wait")).toBe("Your practice scripts are with the lead marker.");
+  });
+  it("tells an admin why a marker cannot be given live work", () => {
+    expect(allocationMessageFor("practice_first", "admin")).toBe("This marker has not been cleared for live marking on this exam.");
+    expect(allocationMessageFor("paused", "admin")).toBe("This marker is paused on this exam.");
+  });
+  it("says why the marking screen stops", () => {
+    expect(markingWorkMessageFor("paused")).toBe(paused);
+    expect(markingWorkMessageFor("locked")).toBe("This script can no longer be changed.");
+    expect(markingScreenMessageFor("paused")).toBe(paused);
+    expect(markingScreenMessageFor("locked")).toBe("This script can no longer be changed.");
+  });
+  it("says why a practice or seeded script cannot be made, and why a clearance is refused", () => {
+    expect(standardMessageFor("not_yours")).toBe("Choose a script you marked yourself.");
+    expect(standardMessageFor("too_many")).toBe("There are already 10 of these for this exam.");
+    expect(standardMessageFor("conflict", "switched_off")).toBe("This check is turned off for this exam.");
+    expect(standardMessageFor("conflict", "already")).toBe("This script is already used for practice or as a seeded script.");
+    expect(standardMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(standardMessageFor("not_approved")).toBe("This marker is not approved to mark this subject.");
+    expect(standardMessageFor("conflict", "nope")).toBe("Something went wrong. Please try again.");
+    expect(standardMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
   });
 });
 

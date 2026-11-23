@@ -1,5 +1,6 @@
 export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm" | "confirm_signup" | "paper_released" | "paper_corrected"
-  | "script_receipt" | "script_attention" | "script_rejected" | "script_staff_alert" | "script_marking_alert";
+  | "script_receipt" | "script_attention" | "script_rejected" | "script_staff_alert" | "script_marking_alert"
+  | "script_marker_paused";
 
 /** Templates that carry a one-time sign-in link. */
 const LINK_TEMPLATES: readonly EmailTemplate[] = ["invite", "child_confirm", "confirm_signup"];
@@ -17,6 +18,7 @@ const SUBJECTS: Record<EmailTemplate, string> = {
   script_rejected: "Your answers could not be accepted",
   script_staff_alert: "A script needs staff attention",
   script_marking_alert: "A script being marked needs attention",
+  script_marker_paused: "A marker has been paused",
 };
 
 /** One line, no markup characters that could break a header. */
@@ -121,6 +123,20 @@ export function markingAlertEmail(data: Record<string, string>): Mail {
     html: `<p>${esc(markingAlertLine(data.kind ?? "", count))}</p><ul><li>Exam: ${esc(plain(data.exam) || "unknown")}</li>${
       count > 1 ? "" : `<li>Script: ${number ? esc(number) : "unknown"}</li>`
     }</ul><p>Sign in to Stem Examspace to see the marking alerts.</p>`,
+  };
+}
+
+/** The one sentence of a paused marker's email (3B migration 006: three seeded scripts outside tolerance in a row). */
+export const MARKER_PAUSED_LINE =
+  "A marker on this exam has been paused after three seeded scripts outside tolerance. Their submitted scripts wait for the lead marker's review.";
+
+/** To the subject's lead marker and the owner and admin accounts. The exam and the sentence only: no marker name, no
+ * candidate name, no script. */
+export function markerPausedEmail(data: Record<string, string>): Mail {
+  const exam = plain(data.exam);
+  return {
+    subject: `${SUBJECTS.script_marker_paused}: ${exam || "exam"}`,
+    html: `<p>${esc(MARKER_PAUSED_LINE)}</p><ul><li>Exam: ${esc(exam || "unknown")}</li></ul><p>Sign in to Stem Examspace to review their scripts.</p>`,
   };
 }
 
@@ -229,6 +245,8 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
       return scriptStaffAlertEmail(data);
     case "script_marking_alert":
       return markingAlertEmail(data);
+    case "script_marker_paused":
+      return markerPausedEmail(data);
   }
   const exam = plain(data.exam);
   let subject = SUBJECTS[template];

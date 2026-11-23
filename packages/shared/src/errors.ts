@@ -426,6 +426,10 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     marking_closed: "Marking has closed for this exam.",
     nothing_left: "Nothing left to mark for now.",
     hold_expired: "Your hold on this script has ended. Press Next script to carry on.",
+    // 3B: Next script for a paused marker, and for one not cleared for live marking.
+    paused: "Your marking on this exam is paused. The lead marker will be in touch.",
+    practice_wait: "Your practice scripts are with the lead marker.",
+    practice_not_ready: "Practice scripts are not ready yet.",
   },
   admin: {
     forbidden: FORBIDDEN,
@@ -443,6 +447,9 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     not_eligible: "This script cannot be given to this marker.",
     // 3B: a second pass is never given to a marker who saw a name on the script, not even by an admin.
     name_seen: "This marker may have seen a name on this script, so they cannot mark it.",
+    // 3B: a marker not cleared after practice, or paused on the exam, is given no live work.
+    practice_first: "This marker has not been cleared for live marking on this exam.",
+    paused: "This marker is paused on this exam.",
   },
 };
 
@@ -470,6 +477,9 @@ const markingWorkMessages: Record<string, string> = {
   mark_out_of_range: "That mark is not allowed for this question.",
   // 3B: a change after submit to a piece the lead marker has settled (marking_save).
   settled: "The lead marker has settled this script. Ask them if a mark should change.",
+  // 3B: a paused marker's work (opening, saving, submitting), and an attempt whose feedback was shown (marking_save).
+  paused: "Your marking on this exam is paused. The lead marker will be in touch.",
+  locked: "This script can no longer be changed.",
 };
 const markingWorkConflicts: Record<string, string> = {
   rev: "This script was changed on another screen. Reload to carry on.",
@@ -493,6 +503,35 @@ export function markingWorkMessageFor(code: string | null | undefined, reason?: 
 export function markingScreenMessageFor(code: string | null | undefined, reason?: string | null): string {
   if (code === "conflict" || (code && Object.hasOwn(markingWorkMessages, code))) return markingWorkMessageFor(code, reason);
   return allocationMessageFor(code, "marker");
+}
+
+/** Failure codes of the lead's practice and seeded scripts and of clearing and pausing markers (marking_standard_set,
+ * marking_standard_retire, marking_standards_list, marking_marker_clear, marking_marker_pause, marking_exam_markers).
+ * A conflict says why in `reason`: switched_off (the check is off for the exam), already (the script is used already)
+ * or retired (it is no longer used). */
+const standardMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input: "Check the details. A note can be 3 to 1,000 characters.",
+  not_found: "This could not be found. Refresh the page.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  not_approved: "This marker is not approved to mark this subject.",
+  not_yours: "Choose a script you marked yourself.",
+  too_many: "There are already 10 of these for this exam.",
+  on_hold: "This script is on hold.",
+};
+const standardConflicts: Record<string, string> = {
+  switched_off: "This check is turned off for this exam.",
+  already: "This script is already used for practice or as a seeded script.",
+  retired: "This script is no longer used.",
+};
+
+/** Message for a practice, seeded script or clearance RPC failure code (and a conflict's reason); unknown codes get the
+ * generic message. */
+export function standardMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") {
+    return reason && Object.hasOwn(standardConflicts, reason) ? standardConflicts[reason] : messages.internal;
+  }
+  return code && Object.hasOwn(standardMessages, code) ? standardMessages[code] : messages.internal;
 }
 
 /** A lead marker with a declared conflict (or a tutor link) for the script's candidate. */

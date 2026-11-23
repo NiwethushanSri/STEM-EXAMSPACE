@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { _renderForTest, markingAlertLine, staffAlertLine } from "../_shared/email.ts";
+import { _renderForTest, MARKER_PAUSED_LINE, markingAlertLine, staffAlertLine } from "../_shared/email.ts";
 import { dataFor, type Deps, makeHandler, type Notice } from "./handler.ts";
 
 const quiet = async (fn: () => Promise<void>) => {
@@ -34,8 +34,9 @@ function fakeDb(notices: Notice[], clock: () => number = () => 0) {
   const svc = {
     rpc: (name: string, args: Record<string, unknown> = {}) => {
       if (name === "script_notice_next") {
-        // As the SQL hands them out (migrations 076 and 008): the families' notices first, then staff and marking alerts.
-        const staff = (n: Notice) => n.kind === "staff_alert" || n.kind === "marking_alert";
+        // As the SQL hands them out (migrations 076, 008 and 3B's 006): the families' notices first, then staff and
+        // marking alerts and paused markers.
+        const staff = (n: Notice) => n.kind === "staff_alert" || n.kind === "marking_alert" || n.kind === "marker_paused";
         const ordered = [...notices.filter((n) => !staff(n)), ...notices.filter(staff)];
         for (const n of ordered) {
           const s = state.get(n.id)!;
@@ -133,6 +134,25 @@ const markingAlert: Notice = {
   exception_kind: null,
   count: 1,
   alert_kind: "picture_changed",
+};
+
+const markerPaused: Notice = {
+  id: 9,
+  kind: "marker_paused",
+  recipients: [
+    { profile_id: "u-l", email: "lead@example.test", first_name: "Lena" },
+    { profile_id: "u-a", email: "admin@example.test", first_name: "Ada" },
+    { profile_id: "u-o", email: "owner@example.test", first_name: "Olga" },
+  ],
+  exam: "GCSE Maths Paper 1",
+  script_number: null,
+  submission_seq: null,
+  at: "2031-06-10T09:00:00Z",
+  page_count: 0,
+  pages: [],
+  exception_kind: null,
+  count: 1,
+  alert_kind: null,
 };
 
 Deno.test("handler_rejects_wrong_secret", async () => {
@@ -432,4 +452,50 @@ Deno.test("a grouped marking alert says how many scripts it is about and names n
     "The pages of 5 scripts changed while they were with staff. Their markers have been asked to check their marks.",
   );
   assertEquals(markingAlertLine("picture_changed", 0), markingAlertLine("picture_changed", 1)); // never "0 scripts"
+});
+
+Deno.test("marker_paused_notice_goes_to_lead_and_admins", async () => {
+  await quiet(async () => {
+    // The database lists the subject's lead marker and the active owner and admin accounts (3B migration 006).
+    const db = fakeDb([markerPaused, receipt]);
+    const sent: { to: string; template: string; data: Record<string, string> }[] = [];
+    const h = makeHandler(deps({
+      svc: () => db.svc,
+      send: (to, template, data) => (sent.push({ to, template, data }), Promise.resolve(true)),
+    }));
+    const body = await (await h(req())).json();
+    assertEquals(body, { notices: 2, sent: 5, failed: 0, given_up: 0 });
+    // The family's receipt still goes first; then the paused marker's email, to each of its people once.
+    assertEquals(sent.map((s) => s.template), [
+      "script_receipt",
+      "script_receipt",
+      "script_marker_paused",
+      "script_marker_paused",
+      "script_marker_paused",
+    ]);
+    assertEquals(sent.slice(2).map((s) => s.to), ["lead@example.test", "admin@example.test", "owner@example.test"]);
+    assertEquals(db.marks, [{ id: 1, ok: true }, { id: 9, ok: true }]);
+    assertEquals(sent[2].data, { exam: "GCSE Maths Paper 1" });
+  });
+});
+
+Deno.test("marker_paused_email_has_no_marker_or_candidate_name", () => {
+  const data = dataFor(markerPaused, "Lena");
+  assertEquals(Object.keys(data), ["exam"]); // no name of anyone, not even the recipient's
+  assertEquals(
+    MARKER_PAUSED_LINE,
+    "A marker on this exam has been paused after three seeded scripts outside tolerance. Their submitted scripts wait for the lead marker's review.",
+  );
+  // Even when it is handed names (or a script number) by mistake, the email shows none of them.
+  const mail = _renderForTest("script_marker_paused", {
+    ...data,
+    name: "Zanzibar Smith",
+    student_name: "Zanzibar Smith",
+    marker_name: "Mara One",
+    first_name: "Lena",
+    script_number: "S-ABC-0002",
+  });
+  for (const n of ["Zanzibar", "Smith", "Mara", "Lena", "S-ABC-0002"]) assert(!mail.html.includes(n) && !mail.subject.includes(n), n);
+  assert(mail.html.includes("GCSE Maths Paper 1") && mail.subject.includes("GCSE Maths Paper 1"), mail.subject);
+  assert(mail.html.includes(MARKER_PAUSED_LINE.replace("'", "&#39;")), mail.html);
 });

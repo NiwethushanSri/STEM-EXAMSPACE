@@ -1963,11 +1963,17 @@ isOneToOne: false
 "marking_exam_get":
 { Args: { "p_exam": string,"p_now"?: string }; Returns: Json
                            },
+"marking_exam_markers":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
 "marking_exam_overdue":
 { Args: { "p_exam": string,"p_now": string }; Returns: boolean
                            },
 "marking_exam_sync":
 { Args: { "p_exam": string,"p_now": string }; Returns: number
+                           },
+"marking_feedback":
+{ Args: { "p_marking": string }; Returns: Json
                            },
 "marking_final_marks_from":
 { Args: { "p_marking": string,"p_reason": string,"p_unit": string }; Returns: undefined
@@ -1983,6 +1989,18 @@ isOneToOne: false
                            },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
+                           },
+"marking_marker_clear":
+{ Args: { "p_exam": string,"p_marker": string,"p_reason": string }; Returns: Json
+                           },
+"marking_marker_cleared":
+{ Args: { "p_exam": string,"p_marker": string }; Returns: boolean
+                           },
+"marking_marker_pause":
+{ Args: { "p_exam": string,"p_marker": string,"p_reason": string }; Returns: Json
+                           },
+"marking_marker_paused":
+{ Args: { "p_exam": string,"p_marker": string }; Returns: boolean
                            },
 "marking_mask_key":
 { Args: { "p_copy": string,"p_copy_page": number,"p_page": string,"p_rotation": number }; Returns: string
@@ -2012,6 +2030,9 @@ isOneToOne: false
 { Args: { "p_marker": string,"p_unit": string }; Returns: {
               "assignment_id": string,"hold_until": string,"how": string,"kind": Database["public"]['Enums']["marking_kind"],"marking_id": string,"status": string
             }[]
+                           },
+"marking_pause_apply":
+{ Args: { "p_exam": string,"p_marker": string }; Returns: number
                            },
 "marking_picture_paths":
 { Args: { "p_now"?: string,"p_pages": (string)[],"p_unit": string }; Returns: Json
@@ -2084,6 +2105,21 @@ isOneToOne: false
                            },
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
+                           },
+"marking_standard_compare":
+{ Args: { "p_marking": string }; Returns: Json
+                           },
+"marking_standard_end":
+{ Args: { "p_actor": string,"p_reason": string,"p_standard": string }; Returns: boolean
+                           },
+"marking_standard_retire":
+{ Args: { "p_reason": string,"p_standard": string }; Returns: Json
+                           },
+"marking_standard_set":
+{ Args: { "p_note"?: string,"p_unit": string,"p_use": string }; Returns: Json
+                           },
+"marking_standards_list":
+{ Args: { "p_exam": string }; Returns: Json
                            },
 "marking_subject_has_lead":
 { Args: { "p_subject": number }; Returns: boolean
