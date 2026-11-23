@@ -342,6 +342,8 @@ describe("alertMessageFor and releaseBlockedMessage", () => {
     expect(releaseBlockedMessage("picture_missing")).toBe("Release waits until every page has a marking picture.");
     expect(releaseBlockedMessage("taken_back")).toBe("Release waits until staff hand the script back to the markers.");
     expect(releaseBlockedMessage("pictures_updating")).toBe("Release waits until the new marking pictures are made.");
+    expect(releaseBlockedMessage("conflict_of_interest")).toBe("You cannot release this script because of a declared conflict. Ask an admin.");
+    expect(alertMessageFor("conflict_of_interest")).toBe("You cannot release this script because of a declared conflict. Ask an admin.");
     expect(releaseBlockedMessage("__proto__")).toBe("This cannot be released yet.");
     expect(releaseBlockedMessage(null)).toBe("This cannot be released yet.");
   });

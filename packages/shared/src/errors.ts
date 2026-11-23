@@ -486,9 +486,14 @@ export function markingScreenMessageFor(code: string | null | undefined, reason?
   return allocationMessageFor(code, "marker");
 }
 
+/** A lead marker with a declared conflict (or a tutor link) for the script's candidate. */
+const CONFLICTED_LEAD = "You cannot release this script because of a declared conflict. Ask an admin.";
+
 /** Why an open picture_changed alert cannot be released yet: the reason marking_alert_can_release gives, which
- * marking_alerts_list returns as release_blocked and marking_alert_release answers as a conflict's reason. */
+ * marking_alerts_list returns as release_blocked and marking_alert_release answers as a conflict's reason; and, in the
+ * list only, conflict_of_interest for a lead blocked for the candidate. */
 const releaseBlocked: Record<string, string> = {
+  conflict_of_interest: CONFLICTED_LEAD,
   taken_back: "Release waits until staff hand the script back to the markers.",
   pictures_updating: "Release waits until the new marking pictures are made.",
   picture_missing: "Release waits until every page has a marking picture.",
@@ -501,13 +506,15 @@ export function releaseBlockedMessage(reason: string | null | undefined): string
 }
 
 /** Failure codes of releasing and noting marking alerts (marking_alert_release, marking_alerts_release_all,
- * marking_alert_note, marking_alerts_list). A conflict says why in `reason`: closed, or what holds a release back. */
+ * marking_alert_note, marking_alerts_list) and of viewing an alert's pages (marking_alert_pages). A conflict says why
+ * in `reason`: closed, or what holds a release back. */
 const alertMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   reason_required: "Give a reason of 3 to 300 characters.",
   invalid_input: "Check the details and try again.",
   not_found: "This alert could not be found. Refresh the page.",
   wrong_kind: "That action does not fit this kind of alert.",
+  conflict_of_interest: CONFLICTED_LEAD,
 };
 
 /** Message for a marking alert RPC failure code (and a conflict's reason); unknown codes get the generic message. */

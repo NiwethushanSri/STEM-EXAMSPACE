@@ -1765,6 +1765,9 @@ isOneToOne: false
 "marking_alert_note":
 { Args: { "p_alert": string,"p_reason": string }; Returns: Json
                            },
+"marking_alert_pages":
+{ Args: { "p_alert": string }; Returns: Json
+                           },
 "marking_alert_raise":
 { Args: { "p_kind": string,"p_page": string,"p_script": string,"p_unit": string }; Returns: string
                            },
@@ -1831,8 +1834,8 @@ isOneToOne: false
 "marking_pages_key":
 { Args: { "p_script": string }; Returns: string
                            },
-"marking_picture_allowed":
-{ Args: { "p_name": string }; Returns: boolean
+"marking_picture_paths":
+{ Args: { "p_now"?: string,"p_pages": (string)[],"p_unit": string }; Returns: Json
                            },
 "marking_progress":
 { Args: { "p_exam"?: string,"p_now"?: string }; Returns: Json
@@ -1917,6 +1920,11 @@ isOneToOne: false
                            },
 "marking_unit_take_back":
 { Args: { "p_unit": string }; Returns: boolean
+                           },
+"marking_units_allowed":
+{ Args: { "p_exam": string,"p_kind": Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_next": boolean,"p_unit"?: string }; Returns: {
+              "group_id": string,"script_id": string,"unit_id": string
+            }[]
                            },
 "marking_units_candidates":
 { Args: { "p_exam": string,"p_group": string,"p_marker": string }; Returns: {

@@ -28,7 +28,9 @@ export type ScreenQuestion = {
   alternatives: string;
   points: ScreenPoint[];
 };
-export type ScreenPage = { n: number; pageId: string; copyPage: number | null; extra: boolean; markingPath: string | null; rotation: number };
+/** A page of the piece. Its picture's path is never sent (3B): hasPicture says it has a marking picture, whose link the
+ * screen asks the marking-pictures function for by the page's id. */
+export type ScreenPage = { n: number; pageId: string; copyPage: number | null; extra: boolean; hasPicture: boolean; rotation: number };
 export type MarkingStatus = "in_progress" | "submitted" | "set_aside";
 export type OpenedPiece = {
   unit: {
@@ -117,7 +119,7 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
     const pageId = str(p.page_id);
     const n = num(p.n);
     if (!pageId || n === null) return [];
-    return [{ n, pageId, copyPage: num(p.copy_page), extra: p.extra === true, markingPath: str(p.marking_path), rotation: num(p.rotation) ?? 0 }];
+    return [{ n, pageId, copyPage: num(p.copy_page), extra: p.extra === true, hasPicture: p.has_picture === true, rotation: num(p.rotation) ?? 0 }];
   });
 
   const saved: OpenedMarking = {
@@ -240,19 +242,20 @@ export const ACCESS_CHECK_MS = 55_000;
  * most 70 seconds after the last (Ruling R23). */
 export const ACCESS_TICK_MS = 15_000;
 
-/** Whether the check runs now: only while the screen is in view, with a page's picture on it, and once 55 seconds
- * have gone by since the last (a tab coming back into view checks at once if they have). */
-export function accessCheckDue(s: { visible: boolean; covered: boolean; path: string | null; lastAt: number; now: number }): boolean {
-  return s.visible && !s.covered && s.path !== null && s.now - s.lastAt >= ACCESS_CHECK_MS;
+/** Whether the check runs now: only while the screen is in view, with a page's picture on it (pageId: the shown
+ * page, when it has one), and once 55 seconds have gone by since the last (a tab coming back into view checks at once
+ * if they have). */
+export function accessCheckDue(s: { visible: boolean; covered: boolean; pageId: string | null; lastAt: number; now: number }): boolean {
+  return s.visible && !s.covered && s.pageId !== null && s.now - s.lastAt >= ACCESS_CHECK_MS;
 }
 
-/** What asking for the shown picture's link again says. The storage rule answers for the piece as it is now: a link
- * given means the marker may still see the page ("ok"); a refusal (4xx) means they may not, or the picture is no
- * longer this one ("gone"); anything else (no connection, a server error) says nothing, and the next check asks
- * again ("unknown"). */
-export function accessCheckOutcome(r: { signed: boolean; status: number | null }): "ok" | "gone" | "unknown" {
-  if (r.signed) return "ok";
-  return r.status !== null && r.status >= 400 && r.status < 500 ? "gone" : "unknown";
+/** What asking for the shown picture's link again says (fetchPictureLinks). The database answers for the piece as it
+ * is now: a link given means the marker may still see the page ("ok"); a refusal (4xx) means they may not, or the
+ * page is no longer the piece's ("gone"); anything else (no connection, a server error) says nothing, and the next
+ * check asks again ("unknown"). */
+export function accessCheckOutcome(r: { ok: boolean; status?: number | null }): "ok" | "gone" | "unknown" {
+  if (r.ok) return "ok";
+  return typeof r.status === "number" && r.status >= 400 && r.status < 500 ? "gone" : "unknown";
 }
 
 /** At most `max` labels, then "and N more". */

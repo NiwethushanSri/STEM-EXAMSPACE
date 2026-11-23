@@ -15,6 +15,7 @@ import { holdText, nextScriptTarget, parseMyWork } from "@/lib/marking-lists";
 import { nextQuestionId, unitTotal, validMark } from "@/lib/marking-marks";
 import { act, applyOps, fromServer, redo, undo, type MarkingState, type Op, type SavedAnnotation } from "@/lib/marking-model";
 import { ZOOM_MAX, ZOOM_MIN, isPhone } from "@/lib/marking-pointer";
+import { fetchPictureLinks } from "@/lib/marking-pictures";
 import { createSaveQueue, restorePending, type SaveQueue, type SaveResult, type SaveStatus } from "@/lib/marking-save";
 import {
   ACCESS_TICK_MS,
@@ -27,11 +28,13 @@ import {
   zoomStepIn,
   zoomStepOut,
   type OpenedPiece,
+  type ScreenPage,
   type ScreenQuestion,
 } from "@/lib/marking-screen";
 import { createClient } from "@/lib/supabase/client";
 
-/** Marking pictures and the mark scheme PDF are shown through signed links that last this long (seconds). */
+/** Marking pictures (signed by the marking-pictures function) and the mark scheme PDF are shown through signed links
+ * that last this long (seconds). */
 export const MARKING_URL_SECONDS = 120;
 
 const BUTTON = `inline-flex min-h-11 items-center justify-center rounded px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`;
@@ -60,6 +63,8 @@ const NEXT_FAILED = "Could not find a script. Check your connection and try agai
 const LINK_FRESH_MS = (MARKING_URL_SECONDS - 30) * 1000;
 const NO_ANNOTATIONS: SavedAnnotation[] = [];
 const NO_URLS: Record<string, string> = {};
+/** The page whose picture the screen shows or asks for: the page's id when it has a marking picture. */
+const pictureOf = (p: ScreenPage | null | undefined): string | null => (p?.hasPicture ? p.pageId : null);
 
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : null);
@@ -82,7 +87,7 @@ export function MarkingScreen({ unitId }: { unitId: string }) {
   const [opened, setOpened] = useState(false);
   if (width !== null && !isPhone(width) && !opened) setOpened(true);
   const [visit, setVisit] = useState(0);
-  const refusedPaths = useRef(new Set<string>());
+  const refusedPages = useRef(new Set<string>());
   // Next.js keeps a page it leaves, hidden (Activity, with Cache Components), and can show it again (Back). The piece
   // is then opened afresh, with the server's marks and rev and what is stored unsent, never the copy kept from before.
   useLayoutEffect(() => () => setVisit((v) => v + 1), []);
@@ -98,13 +103,13 @@ export function MarkingScreen({ unitId }: { unitId: string }) {
           </Link>
         </main>
       )}
-      {opened && <Workspace key={visit} unitId={unitId} active={!phone} onReload={() => setVisit((v) => v + 1)} refusedPaths={refusedPaths} />}
+      {opened && <Workspace key={visit} unitId={unitId} active={!phone} onReload={() => setVisit((v) => v + 1)} refusedPages={refusedPages} />}
     </>
   );
 }
 
 /** Opens the piece, then hands it to the desk; a refusal (or a failure) is said in plain words. */
-function Workspace({ unitId, active, onReload, refusedPaths }: { unitId: string; active: boolean; onReload: () => void; refusedPaths: RefObject<Set<string>> }) {
+function Workspace({ unitId, active, onReload, refusedPages }: { unitId: string; active: boolean; onReload: () => void; refusedPages: RefObject<Set<string>> }) {
   const [result, setResult] = useState<ReturnType<typeof parseOpened> | null>(null);
   useEffect(() => {
     let live = true;
@@ -145,7 +150,7 @@ function Workspace({ unitId, active, onReload, refusedPaths }: { unitId: string;
       </>,
     );
   }
-  return <Desk piece={result.piece} active={active} onReload={onReload} refusedPaths={refusedPaths} />;
+  return <Desk piece={result.piece} active={active} onReload={onReload} refusedPages={refusedPages} />;
 }
 
 type QueueHooks = {
@@ -203,7 +208,7 @@ function queueAt(atRev: number, h: QueueHooks): SaveQueue {
 
 type DialogKind = "name" | "give_back" | "reason" | null;
 
-function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; active: boolean; onReload: () => void; refusedPaths: RefObject<Set<string>> }) {
+function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; active: boolean; onReload: () => void; refusedPages: RefObject<Set<string>> }) {
   const router = useRouter();
   const markingId = piece.marking.id;
   const readOnly = piece.unit.closed;
@@ -241,10 +246,11 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const [stop, setStop] = useState<{ code: string; reason?: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [schemeMessage, setSchemeMessage] = useState<string | null>(null);
+  /** The pictures' links, whether each failed and how often it was tried: all by page id. */
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const tries = useRef<Record<string, number>>({});
-  /** When each picture's link was signed, and the pictures whose link is being asked for. */
+  /** When each page's link was signed, and the pages whose link is being asked for. */
   const signedAt = useRef<Record<string, number>>({});
   const asking = useRef(new Set<string>());
   const queue = useRef<SaveQueue | null>(null);
@@ -306,38 +312,40 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const questionPages = pagesFor(current, questions, pages);
 
   // ---------------------------------------------------------------------------------------------
-  // Pictures: signed links for the marking pictures marking_unit_open returned, and no other, asked for when the page
-  // is shown and when its thumbnail appears (a link older than LINK_FRESH_MS is asked for again, and the old one is
-  // not shown). A refused link means the picture may have changed: the piece is opened again (once per picture).
-  // Under a cover, and read only after marking closed (Ruling R11): none.
+  // Pictures: links for the pages of the piece that have a marking picture, by page id, from the marking-pictures
+  // function (the database checks the piece as the marker; the screen never holds a picture's path). They are asked
+  // for when the page is shown and when its thumbnail appears (a link older than LINK_FRESH_MS is asked for again, and
+  // the old one is not shown). A refused link means the piece or the page may have changed: the piece is opened again
+  // (once per page). Under a cover, and read only after marking closed (Ruling R11): none.
   // ---------------------------------------------------------------------------------------------
-  const sign = (path: string) => {
-    if (asking.current.has(path)) return;
-    asking.current.add(path);
+  const sign = (pageId: string) => {
+    if (asking.current.has(pageId)) return;
+    asking.current.add(pageId);
     const onSigned = () => {
-      signedAt.current[path] = Date.now();
+      signedAt.current[pageId] = Date.now();
     };
-    void signPicture(path, { setUrls, setFailed, refusedPaths, onReload, onSigned }).finally(() => asking.current.delete(path));
+    void signPicture(piece.unit.id, pageId, { setUrls, setFailed, refusedPages, onReload, onSigned }).finally(() => asking.current.delete(pageId));
   };
-  const showPicture = (path: string | null) => {
-    if (!path || covered) return;
-    const at = signedAt.current[path];
+  const showPicture = (pageId: string | null) => {
+    if (!pageId || covered) return;
+    const at = signedAt.current[pageId];
     if (at !== undefined && Date.now() - at < LINK_FRESH_MS) return;
     if (at !== undefined) {
-      delete signedAt.current[path];
-      setUrls((m) => withoutKey(m, path));
+      delete signedAt.current[pageId];
+      setUrls((m) => withoutKey(m, pageId));
     }
-    sign(path);
+    sign(pageId);
   };
-  const showShownPicture = useEffectEvent(() => showPicture(page?.markingPath ?? null));
+  const shownPicture = pictureOf(page);
+  const showShownPicture = useEffectEvent(() => showPicture(shownPicture));
   useEffect(() => {
     showShownPicture();
-  }, [page?.markingPath, covered]);
+  }, [shownPicture, covered]);
 
   // A page withdrawn while the marker only reads (another marker reported a name, staff pressed "A name still shows",
   // the hold ended) must not stay on screen until their next save. About every minute while the screen is in view (due
   // 55 seconds after the last check, looked at every 15 seconds: at most 70 seconds apart), the link of the shown
-  // picture is asked for again: the storage rule answers for the piece as it is now. Given, nothing
+  // picture is asked for again (fetchPictureLinks): the database answers for the piece as it is now. Given, nothing
   // changes on screen. Refused, the picture is taken off at once and the piece is asked for again (marking_unit_open):
   // its refusal becomes the cover, in its own words; if the piece is still the marker's (the picture itself changed),
   // it is opened afresh.
@@ -345,19 +353,17 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const lastAccessCheck = useRef<number | null>(null);
   const checkingAccess = useRef(false);
   const checkAccess = useEffectEvent(async () => {
-    const path = page?.markingPath ?? null;
+    const pageId = pictureOf(page);
     const now = Date.now();
     if (checkingAccess.current || !active) return;
-    if (!path || !accessCheckDue({ visible: document.visibilityState === "visible", covered, path, lastAt: lastAccessCheck.current ?? now, now })) return;
+    if (!pageId || !accessCheckDue({ visible: document.visibilityState === "visible", covered, pageId, lastAt: lastAccessCheck.current ?? now, now })) return;
     checkingAccess.current = true;
     lastAccessCheck.current = now;
     try {
-      const signed = await createClient().storage.from("script-pages").createSignedUrl(path, MARKING_URL_SECONDS);
-      const status = typeof signed.error?.status === "number" ? signed.error.status : null;
-      if (accessCheckOutcome({ signed: !signed.error && !!signed.data?.signedUrl, status }) !== "gone") return;
-      delete signedAt.current[path];
-      setUrls((m) => withoutKey(m, path));
-      setFailed((m) => ({ ...m, [path]: true }));
+      if (accessCheckOutcome(await fetchPictureLinks(piece.unit.id, [pageId])) !== "gone") return;
+      delete signedAt.current[pageId];
+      setUrls((m) => withoutKey(m, pageId));
+      setFailed((m) => ({ ...m, [pageId]: true }));
       const again = await createClient().rpc("marking_unit_open", { p_unit: piece.unit.id });
       const answer = again.error ? null : parseOpened(again.data);
       if (answer && !answer.ok) setStop({ code: answer.code });
@@ -414,7 +420,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     const next = Math.max(0, Math.min(pages.length - 1, i));
     if (next !== pageIndex) setSelectedId(null);
     // Its link is asked for now, before the page is drawn, so one that has run out is never shown.
-    showPicture(pages[next]?.markingPath ?? null);
+    showPicture(pictureOf(pages[next]));
     setPageIndex(next);
   };
   const openList = () => {
@@ -534,20 +540,20 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   // Pictures.
   // ---------------------------------------------------------------------------------------------
   // A picture that fails to load is asked for once more; a load counts as a fresh start.
-  const pictureError = (path: string) => {
-    const n = (tries.current[path] ?? 0) + 1;
-    tries.current[path] = n;
-    if (n === 1) sign(path);
-    else setFailed((m) => ({ ...m, [path]: true }));
+  const pictureError = (pageId: string) => {
+    const n = (tries.current[pageId] ?? 0) + 1;
+    tries.current[pageId] = n;
+    if (n === 1) sign(pageId);
+    else setFailed((m) => ({ ...m, [pageId]: true }));
   };
-  const pictureLoaded = (path: string) => {
-    tries.current[path] = 0;
+  const pictureLoaded = (pageId: string) => {
+    tries.current[pageId] = 0;
   };
-  const retryPicture = (path: string) => {
-    tries.current[path] = 0;
-    setFailed((m) => ({ ...m, [path]: false }));
-    setUrls((m) => withoutKey(m, path));
-    sign(path);
+  const retryPicture = (pageId: string) => {
+    tries.current[pageId] = 0;
+    setFailed((m) => ({ ...m, [pageId]: false }));
+    setUrls((m) => withoutKey(m, pageId));
+    sign(pageId);
   };
 
   const openScheme = async () => {
@@ -791,11 +797,11 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
             pageIndex={pageIndex}
             pageCount={pages.length}
             onPage={showPage}
-            url={!covered && page?.markingPath && !failed[page.markingPath] ? (urls[page.markingPath] ?? null) : null}
-            pictureFailed={!!(page?.markingPath && failed[page.markingPath])}
-            onPictureError={() => page?.markingPath && pictureError(page.markingPath)}
-            onPictureLoad={() => page?.markingPath && pictureLoaded(page.markingPath)}
-            onRetryPicture={() => page?.markingPath && retryPicture(page.markingPath)}
+            url={!covered && shownPicture && !failed[shownPicture] ? (urls[shownPicture] ?? null) : null}
+            pictureFailed={!!(shownPicture && failed[shownPicture])}
+            onPictureError={() => shownPicture && pictureError(shownPicture)}
+            onPictureLoad={() => shownPicture && pictureLoaded(shownPicture)}
+            onRetryPicture={() => shownPicture && retryPicture(shownPicture)}
             annotations={pageAnnotations}
             selectedId={selectedId}
             onSelect={setSelectedId}
@@ -869,32 +875,33 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   );
 }
 
-/** Asks for a picture's 120-second signed link. A link refused by storage (the picture may have changed, or the
- * piece is no longer the marker's to see) opens the piece again, once per picture; any other failure is shown. */
+/** Asks the marking-pictures function for a page's 120-second link. A refusal (the piece may no longer be the marker's
+ * to see, or the page no longer its) opens the piece again, once per page; any other failure is shown. */
 async function signPicture(
-  path: string,
+  unitId: string,
+  pageId: string,
   h: {
     setUrls: Dispatch<SetStateAction<Record<string, string>>>;
     setFailed: Dispatch<SetStateAction<Record<string, boolean>>>;
-    refusedPaths: RefObject<Set<string>>;
+    refusedPages: RefObject<Set<string>>;
     onReload: () => void;
     onSigned: () => void;
   },
 ): Promise<void> {
-  const { data, error } = await createClient().storage.from("script-pages").createSignedUrl(path, MARKING_URL_SECONDS);
-  if (!error && data?.signedUrl) {
+  const links = await fetchPictureLinks(unitId, [pageId]);
+  const url = links.ok ? links.urls[pageId] : undefined;
+  if (url) {
     h.onSigned();
-    h.setUrls((m) => ({ ...m, [path]: data.signedUrl }));
-    h.setFailed((m) => ({ ...m, [path]: false }));
+    h.setUrls((m) => ({ ...m, [pageId]: url }));
+    h.setFailed((m) => ({ ...m, [pageId]: false }));
     return;
   }
-  const refused = typeof error?.status === "number" && error.status >= 400 && error.status < 500;
-  if (refused && !h.refusedPaths.current.has(path)) {
-    h.refusedPaths.current.add(path);
+  if (accessCheckOutcome(links) === "gone" && !h.refusedPages.current.has(pageId)) {
+    h.refusedPages.current.add(pageId);
     h.onReload();
     return;
   }
-  h.setFailed((m) => ({ ...m, [path]: true }));
+  h.setFailed((m) => ({ ...m, [pageId]: true }));
 }
 
 function withoutKey<T>(m: Record<string, T>, key: string): Record<string, T> {

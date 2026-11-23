@@ -39,10 +39,10 @@ const opened = {
     mark_scheme_file: { id: U(70), storage_path: `${U(60)}/${U(70)}.pdf` },
   },
   pages: [
-    { n: 1, page_id: U(20), copy_page: 1, extra: false, marking_path: "e/u/1-1/0-marking.jpg", rotation: 0 },
-    { n: 2, page_id: U(21), copy_page: 2, extra: false, marking_path: "e/u/1-1/1-marking.jpg", rotation: 0 },
-    { n: 3, page_id: U(22), copy_page: null, extra: true, marking_path: null, rotation: 90 },
-    { n: 4, page_id: U(23), copy_page: 3, extra: false, marking_path: "e/u/1-1/2-marking.jpg", rotation: 0 },
+    { n: 1, page_id: U(20), copy_page: 1, extra: false, has_picture: true, rotation: 0 },
+    { n: 2, page_id: U(21), copy_page: 2, extra: false, has_picture: true, rotation: 0, marking_path: "e/u/1-1/1-marking.jpg" },
+    { n: 3, page_id: U(22), copy_page: null, extra: true, has_picture: false, rotation: 90 },
+    { n: 4, page_id: U(23), copy_page: 3, extra: false, has_picture: true, rotation: 0 },
   ],
   marks: [{ question_id: U(10), mark: 3, na: false }, { question_id: U(12), mark: null, na: true }],
   annotations: [
@@ -65,12 +65,14 @@ describe("parseOpened", () => {
     expect(p.marking).toEqual({ id: U(2), rev: 4, status: "in_progress", pagesChanged: false });
     expect(p.markSchemePath).toBe(`${U(60)}/${U(70)}.pdf`);
     expect(p.optionGroups).toEqual([{ id: U(80), label: "Answer 1 of these", choose: 1 }]);
-    expect(p.pages.map((x) => [x.n, x.copyPage, x.extra, x.markingPath])).toEqual([
-      [1, 1, false, "e/u/1-1/0-marking.jpg"],
-      [2, 2, false, "e/u/1-1/1-marking.jpg"],
-      [3, null, true, null],
-      [4, 3, false, "e/u/1-1/2-marking.jpg"],
+    expect(p.pages.map((x) => [x.n, x.copyPage, x.extra, x.hasPicture])).toEqual([
+      [1, 1, false, true],
+      [2, 2, false, true],
+      [3, null, true, false],
+      [4, 3, false, true],
     ]);
+    // A picture's path is never kept, even if one were sent (3B: links come from the marking-pictures function).
+    expect(JSON.stringify(p)).not.toContain("-marking.jpg");
   });
 
   it("labels questions as printed and knows which carry marks", () => {
@@ -158,7 +160,7 @@ describe("zoom steps and lists", () => {
 });
 
 describe("the minute check of a shown page", () => {
-  const base = { visible: true, covered: false, path: "e/u/1-1/0-marking.jpg", lastAt: 0, now: ACCESS_CHECK_MS };
+  const base = { visible: true, covered: false, pageId: U(20), lastAt: 0, now: ACCESS_CHECK_MS };
   it("access_check_is_due_at_55_seconds", () => {
     expect(ACCESS_CHECK_MS).toBe(55_000);
     expect(accessCheckDue({ ...base, lastAt: 0, now: 54_999 })).toBe(false);
@@ -177,19 +179,19 @@ describe("the minute check of a shown page", () => {
   it("does not run while the tab is hidden, under a cover, or with no picture on the page", () => {
     expect(accessCheckDue({ ...base, visible: false })).toBe(false);
     expect(accessCheckDue({ ...base, covered: true })).toBe(false);
-    expect(accessCheckDue({ ...base, path: null })).toBe(false);
+    expect(accessCheckDue({ ...base, pageId: null })).toBe(false);
   });
   it("a tab back in view checks at once when a minute has gone by", () => {
     expect(accessCheckDue({ ...base, lastAt: 10_000, now: 10 * 60_000 })).toBe(true);
     expect(accessCheckDue({ ...base, lastAt: 10 * 60_000 - 5_000, now: 10 * 60_000 })).toBe(false);
   });
   it("a refused link means the page is withdrawn; a failure to ask says nothing", () => {
-    expect(accessCheckOutcome({ signed: true, status: null })).toBe("ok");
-    expect(accessCheckOutcome({ signed: false, status: 400 })).toBe("gone");
-    expect(accessCheckOutcome({ signed: false, status: 403 })).toBe("gone");
-    expect(accessCheckOutcome({ signed: false, status: 404 })).toBe("gone");
-    expect(accessCheckOutcome({ signed: false, status: 500 })).toBe("unknown");
-    expect(accessCheckOutcome({ signed: false, status: null })).toBe("unknown");
+    expect(accessCheckOutcome({ ok: true, status: null })).toBe("ok");
+    expect(accessCheckOutcome({ ok: false, status: 400 })).toBe("gone");
+    expect(accessCheckOutcome({ ok: false, status: 403 })).toBe("gone");
+    expect(accessCheckOutcome({ ok: false, status: 409 })).toBe("gone");
+    expect(accessCheckOutcome({ ok: false, status: 500 })).toBe("unknown");
+    expect(accessCheckOutcome({ ok: false, status: null })).toBe("unknown");
   });
 });
 

@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { chromium, type Page } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
 import { ANON_KEY, SUPABASE_URL, createAccount, svc, type TestAccount } from "./admin";
@@ -242,6 +242,58 @@ export async function takeBackPieces(admin: Login, unitIds: string[], reason: st
   } finally {
     await client.auth.signOut();
   }
+}
+
+/** supabase-js as one browser script (window.supabase), for a test to act in a page with the user's own session. */
+export const SUPABASE_BROWSER_SCRIPT = join(dirname(require.resolve("@supabase/supabase-js")), "umd", "supabase.js");
+
+/** A piece's pages with their pictures' paths, in copy page order (the service key reads them; no marker ever does). */
+export async function piecePictures(unitId: string): Promise<{ pageId: string; copyPage: number; markingPath: string; fullPath: string }[]> {
+  const u = must(await svc().from("marking_units").select("script_id").eq("id", unitId).single(), "unit read");
+  const links = must(await svc().from("script_page_links").select("page_id, copy_page").eq("script_id", u.script_id), "links read");
+  const pages = must(await svc().from("script_pages").select("id, marking_path, full_path").in("id", links.map((l) => l.page_id)), "pages read");
+  return links
+    .map((l) => {
+      const p = pages.find((x) => x.id === l.page_id)!;
+      return { pageId: l.page_id as string, copyPage: l.copy_page as number, markingPath: p.marking_path as string, fullPath: p.full_path as string };
+    })
+    .sort((a, b) => a.copyPage - b.copyPage);
+}
+
+/** A new corrector, approved for the exam's subject as its lead marker. */
+export async function makeLead(examId: string): Promise<Login> {
+  const exam = seeded.get(examId);
+  if (!exam) throw new Error("not a seeded exam");
+  const lead = await createAccount({ role: "corrector", firstName: "Lead" });
+  must(
+    await svc().from("marker_approvals").insert({ marker_id: lead.id, subject_id: exam.subjectId, lead: true, approved_at: new Date().toISOString() }).select("marker_id").single(),
+    "lead approval insert",
+  );
+  return lead;
+}
+
+/**
+ * A page's marking picture made again to hide something else, as a remask after a change of hidden areas records it:
+ * the inputs its picture was made from are marked as different, and a new picture (the old one's bytes) is stored at a
+ * new path and recorded. The database then holds the script's pieces and raises a picture_changed alert. Returns the
+ * new path.
+ */
+export async function changePicture(pageId: string): Promise<string> {
+  const p = must(await svc().from("script_pages").select("marking_path").eq("id", pageId).single(), "page read");
+  const old = p.marking_path as string;
+  const bytes = must(await svc().storage.from("script-pages").download(old), "picture download");
+  const next = old.replace(/-marking\.jpg$/, "-remask-marking.jpg");
+  const up = await svc().storage.from("script-pages").upload(next, Buffer.from(await bytes.arrayBuffer()), { contentType: "image/jpeg", upsert: true });
+  if (up.error) throw new Error(`picture upload failed: ${up.error.message}`);
+  must(await svc().from("script_pages").update({ marking_inputs: "made before the change" }).eq("id", pageId).select("id").single(), "inputs update");
+  must(await svc().from("script_pages").update({ marking_path: next }).eq("id", pageId).select("id").single(), "picture update");
+  return next;
+}
+
+/** A piece's hold: "on_hold hold_reason", as the database holds it. */
+export async function unitHold(unitId: string): Promise<string> {
+  const u = must(await svc().from("marking_units").select("on_hold, hold_reason").eq("id", unitId).single(), "unit read");
+  return `${u.on_hold} ${u.hold_reason}`;
 }
 
 /** Who holds each piece of an exam now (an open live assignment), by piece. */

@@ -1,6 +1,7 @@
 /** The marker home (/marking) and the admin marking page (/admin/marking): what they read from marking_my_work,
- * marking_progress, marking_units_list and marking_alerts_list, and the hold, deadline and alert lines in plain words,
- * in UK time. Each parser keeps only the fields it knows, so nothing else reaches a page. No candidate name is read:
+ * marking_progress, marking_units_list, marking_alerts_list and marking_alert_pages, and the hold, deadline and alert
+ * lines in plain words, in UK time. Each parser keeps only the fields it knows, so nothing else reaches a page. No
+ * candidate name is read:
  * the functions give the script number and the index number only. The database checks every rule again. */
 import { markingWorkMessageFor, releaseBlockedMessage, type AppRole } from "@stem/shared";
 import { utcToLondonParts } from "@/lib/london-time";
@@ -341,6 +342,38 @@ export function alertKindText(kind: AlertKind): string {
 /** Why Release is not offered for an alert, in one plain sentence. */
 export function releaseBlockedText(reason: string | null): string {
   return releaseBlockedMessage(reason);
+}
+
+/** Whether "View pages" is offered for an alert: a changed picture, to anyone the list shows it to except a lead with a
+ * declared conflict for the candidate (the database refuses them the pages too). */
+export function alertPagesViewable(a: Pick<AlertRow, "kind" | "releaseBlocked">): boolean {
+  return a.kind === "picture_changed" && a.releaseBlocked !== "conflict_of_interest";
+}
+
+export type AlertPage = { n: number; pageId: string; copyPage: number | null; changed: boolean };
+export type AlertPages = { unitId: string; scriptNumber: string; indexNumber: string | null; pages: AlertPage[] };
+
+/** marking_alert_pages's answer: the script's pages for the lead's viewer (the changed one marked) and the piece to ask
+ * for their links with; or the code it was refused with ("internal" when the answer makes no sense). It carries no
+ * name and no path. */
+export function parseAlertPages(data: unknown): ({ ok: true } & AlertPages) | { ok: false; code: string } {
+  const d = obj(data);
+  if (!d) return { ok: false, code: "internal" };
+  if (d.ok !== true) return { ok: false, code: typeof d.code === "string" ? d.code : "internal" };
+  const unitId = str(d.unit_id);
+  if (!unitId) return { ok: false, code: "internal" };
+  return {
+    ok: true,
+    unitId,
+    scriptNumber: str(d.script_number) ?? "",
+    indexNumber: str(d.index_number),
+    pages: list(d.pages).flatMap((p) => {
+      const pageId = str(p.page_id);
+      return pageId && typeof p.n === "number"
+        ? [{ n: p.n, pageId, copyPage: typeof p.copy_page === "number" ? p.copy_page : null, changed: p.changed === true }]
+        : [];
+    }),
+  };
 }
 
 const HOLD_REASON: Record<string, string> = {

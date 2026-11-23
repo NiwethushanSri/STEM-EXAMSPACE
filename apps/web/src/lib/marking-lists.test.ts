@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   alertKindText,
+  alertPagesViewable,
   deadlineText,
   holdText,
   nextScriptTarget,
   firstShownText,
   listHasMore,
+  parseAlertPages,
   parseAlerts,
   parseMyWork,
   parseProgress,
@@ -282,7 +284,44 @@ describe("parseAlerts and their words", () => {
     expect(releaseBlockedText("picture_missing")).toBe("Release waits until every page has a marking picture.");
     expect(releaseBlockedText("taken_back")).toBe("Release waits until staff hand the script back to the markers.");
     expect(releaseBlockedText("pictures_updating")).toBe("Release waits until the new marking pictures are made.");
+    expect(releaseBlockedText("conflict_of_interest")).toBe("You cannot release this script because of a declared conflict. Ask an admin.");
     expect(releaseBlockedText("something_new")).toBe("This cannot be released yet.");
+  });
+  it("offers the pages of a changed picture, except to a lead with a conflict", () => {
+    const row = parseAlerts({ ok: true, alerts: [alert] })![0];
+    expect(alertPagesViewable(row)).toBe(true);
+    expect(alertPagesViewable({ ...row, releaseBlocked: null })).toBe(true);
+    expect(alertPagesViewable({ ...row, releaseBlocked: "conflict_of_interest" })).toBe(false);
+    expect(alertPagesViewable({ ...row, kind: "name_visible", releaseBlocked: null })).toBe(false);
+  });
+  it("reads an alert's pages for the viewer, the changed one marked, and no path", () => {
+    const pages = {
+      ok: true,
+      unit_id: "u1",
+      script_number: "P1-0007",
+      index_number: "SE-2026-0001",
+      pages: [
+        { n: 1, page_id: "p1", copy_page: 1, changed: false },
+        { n: 2, page_id: "p2", copy_page: 2, changed: true, marking_path: "e/u/1-1/1-marking.jpg" },
+        { n: 3, page_id: "p3", copy_page: null, changed: false },
+        { n: "4", page_id: "p4" },
+      ],
+    };
+    const r = parseAlertPages(pages);
+    expect(r).toEqual({
+      ok: true,
+      unitId: "u1",
+      scriptNumber: "P1-0007",
+      indexNumber: "SE-2026-0001",
+      pages: [
+        { n: 1, pageId: "p1", copyPage: 1, changed: false },
+        { n: 2, pageId: "p2", copyPage: 2, changed: true },
+        { n: 3, pageId: "p3", copyPage: null, changed: false },
+      ],
+    });
+    expect(parseAlertPages({ ok: false, code: "conflict_of_interest" })).toEqual({ ok: false, code: "conflict_of_interest" });
+    expect(parseAlertPages({ ...pages, unit_id: null })).toEqual({ ok: false, code: "internal" });
+    expect(parseAlertPages(null)).toEqual({ ok: false, code: "internal" });
   });
   it("says what each kind of alert is about", () => {
     for (const k of ["picture_changed", "picture_missing", "name_visible", "pages_set_aside", "pages_changed"] as const) {

@@ -38,8 +38,8 @@ export function QuestionList({
   questionPages: number[];
   onPage: (index: number) => void;
   urls: Record<string, string>;
-  /** A thumbnail of this picture appeared: the screen asks for its link unless a recent one is still good. */
-  onThumb: (path: string) => void;
+  /** The thumbnail of this page's picture appeared: the screen asks for its link unless a recent one is still good. */
+  onThumb: (pageId: string) => void;
 }) {
   const current = questions.find((q) => q.id === currentId);
   const outlined = new Set(questionPages);
@@ -84,7 +84,7 @@ export function QuestionList({
         <h2 className="mb-2 text-sm font-semibold text-slate-900">Pages</h2>
         <ul className="grid grid-cols-2 gap-2">
           {pages.map((p, i) => {
-            const url = p.markingPath ? urls[p.markingPath] : undefined;
+            const url = p.hasPicture ? urls[p.pageId] : undefined;
             return (
               <li key={p.pageId}>
                 <button
@@ -96,7 +96,7 @@ export function QuestionList({
                     outlined.has(i) ? "border-blue-600 ring-2 ring-blue-600" : "border-slate-300"
                   } ${i === pageIndex ? "bg-blue-50" : ""}`}
                 >
-                  <Thumb path={p.markingPath} url={url} onThumb={onThumb} />
+                  <Thumb pageId={p.hasPicture ? p.pageId : null} url={url} onThumb={onThumb} />
                   <span className="mt-1 block text-center text-sm text-slate-700">
                     {i + 1}
                     {p.extra ? " (extra)" : ""}
@@ -112,12 +112,12 @@ export function QuestionList({
 }
 
 /** A page's small picture; it asks for its link before it is first drawn. */
-function Thumb({ path, url, onThumb }: { path: string | null; url: string | undefined; onThumb: (path: string) => void }) {
+function Thumb({ pageId, url, onThumb }: { pageId: string | null; url: string | undefined; onThumb: (pageId: string) => void }) {
   const ask = useEffectEvent((p: string) => onThumb(p));
   // Before paint, so a link that has run out is dropped before its picture could show broken.
   useLayoutEffect(() => {
-    if (path) ask(path);
-  }, [path]);
+    if (pageId) ask(pageId);
+  }, [pageId]);
   return (
     <span className="block overflow-hidden bg-slate-100" style={{ aspectRatio: `${PAGE_ASPECT}` }}>
       {url && (

@@ -382,7 +382,7 @@ export function PageCanvas(p: PageCanvasProps) {
                 />
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center text-sm text-slate-700">
-                  {!p.page.markingPath ? (
+                  {!p.page.hasPicture ? (
                     "This page has no marking picture yet."
                   ) : p.pictureFailed ? (
                     <>
