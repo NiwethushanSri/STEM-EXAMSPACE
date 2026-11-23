@@ -5,7 +5,7 @@ import { requireStaff } from "@/lib/staff-gate";
 import { isUuid } from "@/lib/uuid";
 import { centresOf } from "@/lib/exams-staff";
 import { parseScanStatus, type ScanBatchStatus } from "@/lib/scan-batch";
-import { homeWindowEnds, parseMarkingView, type MarkingGroup, type MarkingView } from "@/lib/exam-marking";
+import { homeWindowEnds, parseChecksView, parseMarkingView, type ChecksView, type MarkingGroup, type MarkingView } from "@/lib/exam-marking";
 
 type Embedded<T> = T | T[] | null;
 const one = <T,>(v: Embedded<T>): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
@@ -246,20 +246,23 @@ export async function loadExamAdmin(examId: string): Promise<ExamAdminView> {
 export type ExamMarkingData = {
   /** Null when marking_exam_get gave no answer. */
   view: MarkingView | null;
+  /** The checks on the marking; null when marking_checks_get gave no answer. */
+  checks: ChecksView | null;
   groups: MarkingGroup[];
   /** When the exam finishes, and when its home scripts may be handed out (the finish + 24 hours). */
   finishesAt: string;
   homeUntil: string;
 };
 
-/** The exam's marking settings and checks (marking_exam_get), and its question groups with their questions. Staff
- * admins only. */
+/** The exam's marking settings and what opening waits for (marking_exam_get), the checks on its marking
+ * (marking_checks_get), and its question groups with their questions. Staff admins only. */
 export async function loadExamMarking(examId: string): Promise<ExamMarkingData> {
   await requireStaff(["admin", "owner"]);
   if (!isUuid(examId)) notFound();
   const supabase = await createClient();
-  const [getRes, examRes, groupsRes, questionsRes] = await Promise.all([
+  const [getRes, checksRes, examRes, groupsRes, questionsRes] = await Promise.all([
     supabase.rpc("marking_exam_get", { p_exam: examId }),
+    supabase.rpc("marking_checks_get", { p_exam: examId }),
     supabase.from("exams").select("starts_at, duration_minutes").eq("id", examId).maybeSingle(),
     supabase.from("question_groups").select("id, label").eq("exam_id", examId).order("position"),
     supabase.from("exam_questions").select("label, group_id").eq("exam_id", examId).is("parent_id", null).order("position"),
@@ -270,6 +273,7 @@ export async function loadExamMarking(examId: string): Promise<ExamMarkingData> 
   const questions = questionsRes.data ?? [];
   return {
     view: getRes.error ? null : parseMarkingView(getRes.data),
+    checks: checksRes.error ? null : parseChecksView(checksRes.data),
     groups: (groupsRes.data ?? []).map((g) => ({ id: g.id, label: g.label, questions: questions.filter((q) => q.group_id === g.id).map((q) => q.label) })),
     finishesAt: new Date(Date.parse(starts_at) + duration_minutes * 60000).toISOString(),
     homeUntil: homeWindowEnds(starts_at, duration_minutes),

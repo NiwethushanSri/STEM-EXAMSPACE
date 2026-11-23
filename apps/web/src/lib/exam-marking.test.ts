@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { dayAndTime, homeWindowEnds, markingChecks, parseMarkingView, type MarkingView } from "./exam-marking";
+import {
+  checksChanged,
+  checksNeedReason,
+  checksOffLine,
+  checksProblem,
+  checksTurnOff,
+  dayAndTime,
+  homeWindowEnds,
+  markingChecks,
+  parseChecksView,
+  parseMarkingView,
+  type ChecksView,
+  type MarkingView,
+} from "./exam-marking";
 
 const answer = {
   ok: true,
@@ -88,5 +101,84 @@ describe("markingChecks", () => {
   it("says when there are no questions or markers", () => {
     const empty: MarkingView = { ...v, mode: "whole", structure: { version: 0, leaves: 0, maxTotal: 0, ungrouped: 2 }, markers: 0 };
     expect(markingChecks(empty, "2026-12-03T12:30:00.000Z").slice(0, 2)).toEqual(["No questions yet", "No markers approved for this subject"]);
+  });
+});
+
+const checksAnswer = {
+  ok: true,
+  double_marking: false,
+  sample_percent: 20,
+  tolerance_percent: 10,
+  seeds: true,
+  seed_every: 12,
+  practice: false,
+  off: { reason: "Only one marker for this subject", by_name: "Ada Checker", at: "2026-12-03T00:30:00+00:00" },
+  markers_approved: 1,
+  can_switch_off: true,
+  opened: false,
+  approved: false,
+};
+
+describe("parseChecksView", () => {
+  it("reads the answer of marking_checks_get", () => {
+    expect(parseChecksView(checksAnswer)).toEqual({
+      doubleMarking: false,
+      samplePercent: 20,
+      tolerancePercent: 10,
+      seeds: true,
+      seedEvery: 12,
+      practice: false,
+      off: { reason: "Only one marker for this subject", byName: "Ada Checker", at: "2026-12-03T00:30:00+00:00" },
+      markersApproved: 1,
+      canSwitchOff: true,
+      opened: false,
+      approved: false,
+    });
+  });
+  it("reads nothing turned off, and a name nobody gave", () => {
+    expect(parseChecksView({ ...checksAnswer, off: null })?.off).toBeNull();
+    expect(parseChecksView({ ...checksAnswer, off: { ...checksAnswer.off, by_name: null } })?.off?.byName).toBeNull();
+  });
+  it("refuses a failed or odd answer", () => {
+    expect(parseChecksView({ ok: false, code: "forbidden" })).toBeNull();
+    expect(parseChecksView({ ...checksAnswer, sample_percent: 0 })).toBeNull();
+    expect(parseChecksView({ ...checksAnswer, seed_every: "10" })).toBeNull();
+    expect(parseChecksView(null)).toBeNull();
+  });
+});
+
+describe("the rules for saving the checks", () => {
+  const saved = parseChecksView({ ...checksAnswer, double_marking: true, seeds: true, practice: true, off: null }) as ChecksView;
+  it("checks each number is whole and in range", () => {
+    expect(checksProblem(saved)).toBeNull();
+    expect(checksProblem({ ...saved, samplePercent: 1 })).toBeNull();
+    expect(checksProblem({ ...saved, samplePercent: 101 })).toBe("Second-mark a whole number from 1 to 100% of scripts.");
+    expect(checksProblem({ ...saved, samplePercent: 12.5 })).toBe("Second-mark a whole number from 1 to 100% of scripts.");
+    expect(checksProblem({ ...saved, tolerancePercent: 0 })).toBe("The difference that goes to the lead marker is a whole number from 1 to 50%.");
+    expect(checksProblem({ ...saved, tolerancePercent: 50 })).toBeNull();
+    expect(checksProblem({ ...saved, seedEvery: 2 })).toBe("Seeded scripts come about one in every 3 to 50 scripts.");
+    expect(checksProblem({ ...saved, seedEvery: Number.NaN })).toBe("Seeded scripts come about one in every 3 to 50 scripts.");
+  });
+  it("asks for a reason to turn a check off", () => {
+    expect(checksTurnOff(saved, { ...saved, seeds: false })).toBe(true);
+    expect(checksNeedReason(saved, { ...saved, practice: false })).toBe(true);
+    expect(checksNeedReason(saved, { ...saved, samplePercent: 30 })).toBe(false);
+    const off = { ...saved, doubleMarking: false };
+    expect(checksTurnOff(off, { ...off, doubleMarking: true })).toBe(false);
+    expect(checksNeedReason(off, { ...off, doubleMarking: true })).toBe(false);
+  });
+  it("asks for a reason for any change once marking has opened, and none for no change", () => {
+    const opened = { ...saved, opened: true };
+    expect(checksNeedReason(opened, { ...opened, seedEvery: 11 })).toBe(true);
+    expect(checksChanged(opened, { ...opened })).toBe(false);
+    expect(checksNeedReason(opened, { ...opened })).toBe(false);
+  });
+  it("says who turned the checks off, when (UK date) and why", () => {
+    expect(checksOffLine({ reason: "Only one marker", byName: "Ada Checker", at: "2026-12-03T00:30:00+00:00" })).toBe(
+      "Turned off by Ada Checker on 3 December 2026: Only one marker",
+    );
+    expect(checksOffLine({ reason: "Only one marker", byName: null, at: "2026-06-30T23:30:00Z" })).toBe(
+      "Turned off by a member of staff on 1 July 2026: Only one marker",
+    );
   });
 });

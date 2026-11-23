@@ -63,7 +63,9 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 
 -- A published exam (both sittings, 90 minutes) that finished 2 days ago, with its exam code, its release notice
--- sent, and a current 3-page question paper (every page an answer page) whose pages are reviewed.
+-- sent, and a current 3-page question paper (every page an answer page) whose pages are reviewed. Its exam_marking row
+-- is written with double marking, seeds and practice off (Phase 3B): the Phase 3A tests run as they did before the
+-- checks existed, and a Phase 3B test switches on what it tests (tests.open_marking, or the row directly).
 create or replace function tests.marking_exam(p_subject bigint default 1)
 returns uuid
 language plpgsql
@@ -79,6 +81,7 @@ begin
   returning id into v_exam;
   insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size, pages_reviewed_at)
   values (v_exam, 'paper', 'Question paper', 1, v_exam::text || '/' || gen_random_uuid()::text || '.pdf', 3, 1000, now());
+  insert into public.exam_marking (exam_id, double_marking, seeds, practice) values (v_exam, false, false, false);
   return v_exam;
 end;
 $$;
@@ -201,6 +204,91 @@ begin
   insert into public.exam_questions (exam_id, label, position, pages) values (p_exam, '2', 2, '{2,3}') returning id into v_two;
   insert into public.exam_questions (exam_id, parent_id, label, position, max_mark, pages)
   values (p_exam, v_two, 'a', 1, 2, '{2}'), (p_exam, v_two, 'b', 2, 5, '{3}');
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- Marking fixtures (Phase 3B). Call them as postgres.
+-- ---------------------------------------------------------------------------------------------
+
+-- A new active corrector approved to mark the subject; its lead marker when p_lead.
+create or replace function tests.marker(p_subject bigint default 1, p_lead boolean default false)
+returns uuid
+language plpgsql
+as $$
+declare
+  v_id uuid := tests.create_user('corrector', 'active');
+begin
+  insert into public.marker_approvals (marker_id, subject_id, lead, approved_at) values (v_id, p_subject, p_lead, now());
+  return v_id;
+end;
+$$;
+
+-- Opens the exam's marking as postgres, without marking_open's rules (nobody is recorded as opening it): the checks
+-- p_checks names are written first (any of double_marking, sample_percent, tolerance_percent, seeds, seed_every and
+-- practice; the others stay as they are), then the verified scripts that may be handed out are made ready
+-- (marking_exam_sync). By default the three checks are off.
+create or replace function tests.open_marking(p_exam uuid,
+  p_checks jsonb default '{"double_marking": false, "seeds": false, "practice": false}')
+returns void
+language plpgsql
+as $$
+begin
+  insert into public.exam_marking (exam_id) values (p_exam) on conflict (exam_id) do nothing;
+  update public.exam_marking m set
+    double_marking = coalesce((p_checks ->> 'double_marking')::boolean, m.double_marking),
+    sample_percent = coalesce((p_checks ->> 'sample_percent')::int, m.sample_percent),
+    tolerance_percent = coalesce((p_checks ->> 'tolerance_percent')::int, m.tolerance_percent),
+    seeds = coalesce((p_checks ->> 'seeds')::boolean, m.seeds),
+    seed_every = coalesce((p_checks ->> 'seed_every')::int, m.seed_every),
+    practice = coalesce((p_checks ->> 'practice')::boolean, m.practice),
+    opened_at = coalesce(m.opened_at, now()), closed_at = null, closed_by = null, updated_at = now()
+  where m.exam_id = p_exam;
+  perform public.marking_exam_sync(p_exam, null);
+end;
+$$;
+
+-- The marker marks the piece: they take it as Next script does once its rules pass (a 2-hour hold; nothing is taken
+-- when they hold it already), then, signed in as them, open it, save a mark for each of its questions in paper order
+-- (p_marks[i], 0 when not given) and submit it. Returns the marking's id, as postgres. Any refusal raises.
+create or replace function tests.mark_piece(p_unit uuid, p_marker uuid, p_marks numeric[] default null)
+returns uuid
+language plpgsql
+as $$
+declare
+  v_why text;
+  v_ops jsonb;
+  v_r jsonb;
+  v_marking uuid;
+begin
+  if not exists (select 1 from public.marking_assignments a where a.unit_id = p_unit and a.marker_id = p_marker and a.ended_at is null) then
+    v_why := coalesce(public.marking_unit_blocked(p_unit, p_marker, null, true),
+                      (select 'not_open' from public.marking_units u where u.id = p_unit and u.state <> 'open'));
+    if v_why is not null then
+      raise exception 'tests.mark_piece: the piece cannot be handed to this marker (%)', v_why;
+    end if;
+    perform public.marking_unit_take(p_unit, p_marker, 'next', null, now() + interval '2 hours');
+  end if;
+  select jsonb_agg(jsonb_build_object('op', 'mark', 'question_id', q.question_id, 'mark', coalesce(p_marks[q.n], 0), 'na', false) order by q.n)
+  into v_ops
+  from (select t.question_id, row_number() over (order by t.path) as n from public.marking_unit_questions(p_unit) t where t.leaf) q;
+
+  perform tests.as_user(p_marker);
+  v_r := public.marking_unit_open(p_unit);
+  if not coalesce((v_r ->> 'ok')::boolean, false) then
+    raise exception 'tests.mark_piece: opening was refused (%)', v_r ->> 'code';
+  end if;
+  v_marking := (v_r #>> '{marking,id}')::uuid;
+  v_r := public.marking_save(v_marking, (v_r #>> '{marking,rev}')::int, v_ops);
+  if not coalesce((v_r ->> 'ok')::boolean, false) then
+    raise exception 'tests.mark_piece: saving was refused (%)', v_r ->> 'code';
+  end if;
+  v_r := public.marking_submit(v_marking, (v_r ->> 'rev')::int);
+  if not coalesce((v_r ->> 'ok')::boolean, false) then
+    raise exception 'tests.mark_piece: submitting was refused (%)', v_r ->> 'code';
+  end if;
+  perform tests.as_postgres();
+  return v_marking;
 end;
 $$;
 

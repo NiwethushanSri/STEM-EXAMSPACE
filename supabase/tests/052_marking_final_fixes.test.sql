@@ -89,7 +89,8 @@ insert into kv select 'g:' || g.label, g.id from public.question_groups g where 
 update public.exam_questions q set group_id = pg_temp.k('g:G' || q.label) where q.exam_id = pg_temp.k('eq') and q.parent_id is null;
 insert into kv select 'q:' || coalesce(p.label || '(' || q.label || ')', q.label), q.id
 from public.exam_questions q left join public.exam_questions p on p.id = q.parent_id where q.exam_id = pg_temp.k('eq');
-insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('eq'), 'by_question', now(), pg_temp.uid('admin'));
+insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('eq'), 'by_question', now(), pg_temp.uid('admin'))
+on conflict (exam_id) do update set mode = excluded.mode, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
 insert into kv select x, tests.verified_script(pg_temp.k('eq')) from unnest(array['a', 'b', 'c', 'd']) x;
 select public.marking_exam_sync(pg_temp.k('eq'), null);
 
@@ -178,7 +179,8 @@ select is((select array[a.actor_id::text, a.target_type] from public.audit_log a
 insert into kv values ('em', tests.marking_exam(pg_temp.subj()));
 insert into public.exam_questions (exam_id, label, position, max_mark, pages)
 select pg_temp.k('em'), i::text, i, 3, '{1}' from generate_series(1, 8) i;
-insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('em'), 'whole', now(), pg_temp.uid('admin'));
+insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('em'), 'whole', now(), pg_temp.uid('admin'))
+on conflict (exam_id) do update set mode = excluded.mode, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.exam_structure_save(pg_temp.k('em'),
     (select jsonb_set(d, '{questions}', (select jsonb_agg(x || '{"max_mark": 4}' order by o) from jsonb_array_elements(d -> 'questions') with ordinality t(x, o)))
@@ -195,7 +197,8 @@ select is(pg_temp.after_lock('em'), array[btrim(repeat('Every question is out of
 -- ---------------------------------------------------------------------------------------------
 insert into kv values ('e', tests.marking_exam(pg_temp.subj()));
 select tests.structure(pg_temp.k('e'));
-insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('e'), 'whole', now(), pg_temp.uid('admin'));
+insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('e'), 'whole', now(), pg_temp.uid('admin'))
+on conflict (exam_id) do update set mode = excluded.mode, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
 insert into kv select x, tests.verified_script(pg_temp.k('e')) from unnest(array['h_free', 'h_gone', 'h_taken', 'h_done', 'h_trig']) x;
 select public.marking_exam_sync(pg_temp.k('e'), null);
 update public.marking_units set state = 'taken' where id = pg_temp.unit('h_taken');
@@ -261,7 +264,8 @@ select is((select array_agg(k order by k) from jsonb_object_keys(pg_temp.r('get'
 -- ---------------------------------------------------------------------------------------------
 insert into kv values ('eb', tests.marking_exam(pg_temp.subj()));
 insert into public.question_groups (exam_id, label, position) select pg_temp.k('eb'), 'B' || i, i from generate_series(1, 100) i;
-insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('eb'), 'by_question', now(), pg_temp.uid('admin'));
+insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('eb'), 'by_question', now(), pg_temp.uid('admin'))
+on conflict (exam_id) do update set mode = excluded.mode, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
 create temp table bs as select tests.verified_script(pg_temp.k('eb')) as id from generate_series(1, 20);
 select public.marking_exam_sync(pg_temp.k('eb'), null);
 select tests.as_user(pg_temp.uid('admin'));
@@ -293,7 +297,8 @@ select is((select array_agg(k order by k) from jsonb_object_keys(pg_temp.r('u_sm
 -- ---------------------------------------------------------------------------------------------
 insert into kv values ('t_bad', tests.marking_exam(pg_temp.subj())), ('t_ok', tests.marking_exam(pg_temp.subj())), ('t_ok2', tests.marking_exam(pg_temp.subj()));
 insert into public.exam_marking (exam_id, mode, opened_at, opened_by)
-select pg_temp.k(x), 'whole', now(), pg_temp.uid('admin') from unnest(array['t_bad', 't_ok', 't_ok2']) x;
+select pg_temp.k(x), 'whole', now(), pg_temp.uid('admin') from unnest(array['t_bad', 't_ok', 't_ok2']) x
+on conflict (exam_id) do update set mode = excluded.mode, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
 insert into kv values ('s_bad', tests.verified_script(pg_temp.k('t_bad'))), ('s_ok', tests.verified_script(pg_temp.k('t_ok'))),
                       ('s_ok2', tests.verified_script(pg_temp.k('t_ok2')));
 create function pg_temp.fail_bad() returns trigger language plpgsql as $$

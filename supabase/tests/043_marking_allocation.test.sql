@@ -332,6 +332,8 @@ select tests.as_postgres();
 -- next_refused_when_not_approved_not_open_or_closed
 -- ---------------------------------------------------------------------------------------------
 insert into kv values ('e0', tests.marking_exam(pg_temp.s1()));
+-- e0's marking is never set up: no exam_marking row (tests.marking_exam writes one).
+delete from public.exam_marking where exam_id = pg_temp.k('e0');
 select pg_temp.script('z0', 'e0');
 with g as (insert into public.question_groups (exam_id, label, position) values (pg_temp.k('e0'), 'G1', 1) returning id)
 insert into kv select 'g0', id from g;
@@ -829,7 +831,7 @@ with g as (insert into public.question_groups (exam_id, label, position) values 
 insert into kv select 'eq' || label, id from g;
 select pg_temp.script('q1', 'eq');
 select pg_temp.script('q2', 'eq');
-insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eq'), 'by_question');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eq'), 'by_question') on conflict (exam_id) do update set mode = excluded.mode;
 select pg_temp.open('eq');
 select is((select count(*)::int from public.marking_units where exam_id = pg_temp.k('eq') and state = 'open'), 4,
   'by_question_next_keeps_to_the_group: two scripts marked by question in two groups: 4 pieces');
@@ -891,7 +893,7 @@ insert into public.marker_approvals (marker_id, subject_id, approved_at) select 
 insert into kv values ('ebig', tests.marking_exam(pg_temp.s1()));
 insert into public.question_groups (exam_id, label, position) select pg_temp.k('ebig'), 'B' || i, i from generate_series(1, 5) i;
 do $$ begin for i in 1..300 loop perform pg_temp.script('bs' || i, 'ebig'); end loop; end $$;
-insert into public.exam_marking (exam_id, mode) values (pg_temp.k('ebig'), 'by_question');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('ebig'), 'by_question') on conflict (exam_id) do update set mode = excluded.mode;
 select pg_temp.open('ebig');
 select is((select count(*)::int from public.marking_units where exam_id = pg_temp.k('ebig') and state = 'open'), 1500,
   'next_and_assign_some_in_time_at_1500_pieces: 300 candidates x 5 groups: 1500 open pieces');

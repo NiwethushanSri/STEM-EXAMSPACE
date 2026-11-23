@@ -1,5 +1,6 @@
-/** Opening marking for an exam: what the admin exam page reads from marking_exam_get and says about it in plain
- * words. The database re-checks every rule (marking_settings_set, marking_open, marking_close, marking_reopen). */
+/** Opening marking for an exam: what the admin exam page reads from marking_exam_get and marking_checks_get and says
+ * about it in plain words. The database re-checks every rule (marking_settings_set, marking_checks_set, marking_open,
+ * marking_close, marking_reopen). */
 
 export type MarkingMode = "whole" | "by_question";
 
@@ -76,6 +77,95 @@ export function dayAndTime(iso: string): string {
 /** When home scripts may be handed out: the exam's finish + 24 hours. */
 export function homeWindowEnds(startsAt: string, durationMinutes: number): string {
   return new Date(Date.parse(startsAt) + (durationMinutes + 24 * 60) * 60000).toISOString();
+}
+
+/** The checks on an exam's marking, as marking_checks_set takes them. */
+export type CheckSettings = {
+  doubleMarking: boolean;
+  /** Second-mark this % of scripts (1 to 100). */
+  samplePercent: number;
+  /** Send to the lead marker when marks differ by more than this % of the maximum (1 to 50). */
+  tolerancePercent: number;
+  seeds: boolean;
+  /** About one seeded script in every this many (3 to 50). */
+  seedEvery: number;
+  practice: boolean;
+};
+
+/** marking_checks_get's answer. */
+export type ChecksView = CheckSettings & {
+  /** Why the checks were last turned off, by whom and when; null when nothing is turned off. */
+  off: { reason: string; byName: string | null; at: string } | null;
+  /** Approved active markers of the exam's subject. */
+  markersApproved: number;
+  /** The checks may be turned off: the subject has at most one approved marker. */
+  canSwitchOff: boolean;
+  opened: boolean;
+  approved: boolean;
+};
+
+const whole = (v: unknown, lo: number, hi: number): number | null => (typeof v === "number" && Number.isInteger(v) && v >= lo && v <= hi ? v : null);
+
+/** marking_checks_get's answer, or null when it is not one. */
+export function parseChecksView(data: unknown): ChecksView | null {
+  const d = obj(data);
+  if (!d || d.ok !== true) return null;
+  const samplePercent = whole(d.sample_percent, 1, 100);
+  const tolerancePercent = whole(d.tolerance_percent, 1, 50);
+  const seedEvery = whole(d.seed_every, 3, 50);
+  if (samplePercent === null || tolerancePercent === null || seedEvery === null) return null;
+  const off = obj(d.off);
+  const at = off ? time(off.at) : null;
+  return {
+    doubleMarking: d.double_marking === true,
+    samplePercent,
+    tolerancePercent,
+    seeds: d.seeds === true,
+    seedEvery,
+    practice: d.practice === true,
+    off: off && at ? { reason: typeof off.reason === "string" ? off.reason : "", byName: typeof off.by_name === "string" ? off.by_name : null, at } : null,
+    markersApproved: num(d.markers_approved),
+    canSwitchOff: d.can_switch_off === true,
+    opened: d.opened === true,
+    approved: d.approved === true,
+  };
+}
+
+/** Why these checks cannot be saved as they are (null: they can): each number whole and in range. */
+export function checksProblem(s: CheckSettings): string | null {
+  if (whole(s.samplePercent, 1, 100) === null) return "Second-mark a whole number from 1 to 100% of scripts.";
+  if (whole(s.tolerancePercent, 1, 50) === null) return "The difference that goes to the lead marker is a whole number from 1 to 50%.";
+  if (whole(s.seedEvery, 3, 50) === null) return "Seeded scripts come about one in every 3 to 50 scripts.";
+  return null;
+}
+
+/** Whether saving `next` over what is saved changes anything. */
+export function checksChanged(saved: CheckSettings, next: CheckSettings): boolean {
+  return (
+    saved.doubleMarking !== next.doubleMarking ||
+    saved.samplePercent !== next.samplePercent ||
+    saved.tolerancePercent !== next.tolerancePercent ||
+    saved.seeds !== next.seeds ||
+    saved.seedEvery !== next.seedEvery ||
+    saved.practice !== next.practice
+  );
+}
+
+/** Whether saving `next` turns one of the three checks off. */
+export function checksTurnOff(saved: CheckSettings, next: CheckSettings): boolean {
+  return (saved.doubleMarking && !next.doubleMarking) || (saved.seeds && !next.seeds) || (saved.practice && !next.practice);
+}
+
+/** Whether the database will ask for a reason: a check turned off, or any change once marking has opened. */
+export function checksNeedReason(saved: ChecksView, next: CheckSettings): boolean {
+  return checksTurnOff(saved, next) || (saved.opened && checksChanged(saved, next));
+}
+
+const UK_DATE = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", day: "numeric", month: "long", year: "numeric" });
+
+/** "Turned off by Ada Checker on 3 December 2026: Only one marker for this subject" (the date in UK time). */
+export function checksOffLine(off: NonNullable<ChecksView["off"]>): string {
+  return `Turned off by ${off.byName ?? "a member of staff"} on ${UK_DATE.format(new Date(off.at))}: ${off.reason}`;
 }
 
 /** "1 question", "3 questions", "10.5 marks". */

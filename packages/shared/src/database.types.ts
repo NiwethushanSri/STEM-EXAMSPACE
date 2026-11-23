@@ -285,16 +285,48 @@ isOneToOne: false
                   Relationships: [
                     
                   ]
-                },"exam_marking": {
+                },"exam_markers": {
                   Row: {
-                    "closed_at": string | null,"closed_by": string | null,"deadline": string | null,"exam_id": string,"mode": Database["public"]['Enums']["marking_mode"],"opened_at": string | null,"opened_by": string | null,"structure_version": number,"updated_at": string
+                    "cleared_at": string | null,"cleared_by": string | null,"exam_id": string,"marker_id": string,"misses": number,"pause_applied_at": string | null,"paused_at": string | null,"until_seed": number | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"exam_id": string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"structure_version"?: number,"updated_at"?: string
+                    "cleared_at"?: string | null,"cleared_by"?: string | null,"exam_id": string,"marker_id": string,"misses"?: number,"pause_applied_at"?: string | null,"paused_at"?: string | null,"until_seed"?: number | null
                   }
                   Update: {
-                    "closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"exam_id"?: string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"structure_version"?: number,"updated_at"?: string
+                    "cleared_at"?: string | null,"cleared_by"?: string | null,"exam_id"?: string,"marker_id"?: string,"misses"?: number,"pause_applied_at"?: string | null,"paused_at"?: string | null,"until_seed"?: number | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "exam_markers_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_markers_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_markers_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"exam_marking": {
+                  Row: {
+                    "approved_at": string | null,"approved_by": string | null,"checks_off_at": string | null,"checks_off_by": string | null,"checks_off_reason": string | null,"closed_at": string | null,"closed_by": string | null,"deadline": string | null,"double_marking": boolean,"exam_id": string,"mode": Database["public"]['Enums']["marking_mode"],"opened_at": string | null,"opened_by": string | null,"practice": boolean,"sample_percent": number,"seed_every": number,"seeds": boolean,"structure_version": number,"tolerance_percent": number,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "approved_at"?: string | null,"approved_by"?: string | null,"checks_off_at"?: string | null,"checks_off_by"?: string | null,"checks_off_reason"?: string | null,"closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"double_marking"?: boolean,"exam_id": string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"practice"?: boolean,"sample_percent"?: number,"seed_every"?: number,"seeds"?: boolean,"structure_version"?: number,"tolerance_percent"?: number,"updated_at"?: string
+                  }
+                  Update: {
+                    "approved_at"?: string | null,"approved_by"?: string | null,"checks_off_at"?: string | null,"checks_off_by"?: string | null,"checks_off_reason"?: string | null,"closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"double_marking"?: boolean,"exam_id"?: string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"practice"?: boolean,"sample_percent"?: number,"seed_every"?: number,"seeds"?: boolean,"structure_version"?: number,"tolerance_percent"?: number,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -424,6 +456,40 @@ isOneToOne: false
       columns: ["subject_id"]
 isOneToOne: false
       referencedRelation: "subjects"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"final_mark_history": {
+                  Row: {
+                    "changed_at": string,"changed_by": string | null,"id": number,"mark": number | null,"not_attempted": boolean,"question_id": string,"reason": string | null,"removed": boolean,"source": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "changed_at"?: string,"changed_by"?: string | null,"id"?: never,"mark"?: number | null,"not_attempted": boolean,"question_id": string,"reason"?: string | null,"removed"?: boolean,"source": string,"unit_id": string
+                  }
+                  Update: {
+                    "changed_at"?: string,"changed_by"?: string | null,"id"?: never,"mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"reason"?: string | null,"removed"?: boolean,"source"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"final_marks": {
+                  Row: {
+                    "mark": number | null,"not_attempted": boolean,"question_id": string,"set_at": string,"set_by": string | null,"source": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id": string,"set_at"?: string,"set_by"?: string | null,"source": string,"unit_id": string
+                  }
+                  Update: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"set_at"?: string,"set_by"?: string | null,"source"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "final_marks_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: false
+      referencedRelation: "marking_units"
       referencedColumns: ["id"]
     }
                   ]
@@ -587,6 +653,78 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"marking_reviews": {
+                  Row: {
+                    "closed_at": string | null,"closed_by": string | null,"exam_id": string,"id": string,"kind": string,"marking_id": string,"opened_at": string,"outcome": string | null,"reason": string | null,"second_marking_id": string | null,"state": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"exam_id": string,"id"?: string,"kind": string,"marking_id": string,"opened_at"?: string,"outcome"?: string | null,"reason"?: string | null,"second_marking_id"?: string | null,"state"?: string,"unit_id": string
+                  }
+                  Update: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"exam_id"?: string,"id"?: string,"kind"?: string,"marking_id"?: string,"opened_at"?: string,"outcome"?: string | null,"reason"?: string | null,"second_marking_id"?: string | null,"state"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_reviews_marking_id_fkey"
+      columns: ["marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marking_reviews_second_marking_id_fkey"
+      columns: ["second_marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marking_reviews_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: false
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marking_standard_marks": {
+                  Row: {
+                    "mark": number | null,"not_attempted": boolean,"question_id": string,"standard_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id": string,"standard_id": string
+                  }
+                  Update: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"standard_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_standard_marks_standard_id_fkey"
+      columns: ["standard_id"]
+isOneToOne: false
+      referencedRelation: "marking_standards"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marking_standards": {
+                  Row: {
+                    "created_at": string,"exam_id": string,"id": string,"note": string | null,"retired_at": string | null,"retired_by": string | null,"set_by": string,"unit_id": string,"use": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"exam_id": string,"id"?: string,"note"?: string | null,"retired_at"?: string | null,"retired_by"?: string | null,"set_by": string,"unit_id": string,"use": string
+                  }
+                  Update: {
+                    "created_at"?: string,"exam_id"?: string,"id"?: string,"note"?: string | null,"retired_at"?: string | null,"retired_by"?: string | null,"set_by"?: string,"unit_id"?: string,"use"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_standards_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: true
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"marking_unit_exclusions": {
                   Row: {
                     "created_at": string,"marker_id": string,"reason": string,"unit_id": string
@@ -609,17 +747,23 @@ isOneToOne: false
                   ]
                 },"marking_units": {
                   Row: {
-                    "created_at": string,"exam_id": string,"group_id": string | null,"hold_reason": string | null,"id": string,"on_hold": boolean,"script_id": string,"state": string
+                    "check_state": string | null,"checked_at": string | null,"created_at": string,"exam_id": string,"final_marking_id": string | null,"group_id": string | null,"hold_reason": string | null,"id": string,"on_hold": boolean,"sample_draw": number,"script_id": string,"second_wanted": boolean | null,"state": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"exam_id": string,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"script_id": string,"state"?: string
+                    "check_state"?: string | null,"checked_at"?: string | null,"created_at"?: string,"exam_id": string,"final_marking_id"?: string | null,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"sample_draw"?: number,"script_id": string,"second_wanted"?: boolean | null,"state"?: string
                   }
                   Update: {
-                    "created_at"?: string,"exam_id"?: string,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"script_id"?: string,"state"?: string
+                    "check_state"?: string | null,"checked_at"?: string | null,"created_at"?: string,"exam_id"?: string,"final_marking_id"?: string | null,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"sample_draw"?: number,"script_id"?: string,"second_wanted"?: boolean | null,"state"?: string
                   }
                   Relationships: [
                     {
+      foreignKeyName: "marking_units_final_marking_id_fkey"
+      columns: ["final_marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
       foreignKeyName: "marking_units_group_id_fkey"
       columns: ["group_id"]
 isOneToOne: false
@@ -635,14 +779,14 @@ isOneToOne: false
                   ]
                 },"markings": {
                   Row: {
-                    "active_seconds": number,"id": string,"kind": Database["public"]['Enums']["marking_kind"],"last_saved_at": string | null,"lead_note": string | null,"marker_id": string,"pages_changed_at": string | null,"pages_key": string | null,"rev": number,"set_aside_at": string | null,"set_aside_reason": string | null,"started_at": string,"status": string,"structure_version": number | null,"submitted_at": string | null,"total": number | null,"unit_id": string
+                    "active_seconds": number,"feedback_at": string | null,"id": string,"kind": Database["public"]['Enums']["marking_kind"],"last_saved_at": string | null,"lead_note": string | null,"marker_id": string,"pages_changed_at": string | null,"pages_key": string | null,"rev": number,"sent_back_note": string | null,"set_aside_at": string | null,"set_aside_reason": string | null,"started_at": string,"status": string,"structure_version": number | null,"submitted_at": string | null,"total": number | null,"unit_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "active_seconds"?: number,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id": string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id": string
+                    "active_seconds"?: number,"feedback_at"?: string | null,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id": string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"sent_back_note"?: string | null,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id": string
                   }
                   Update: {
-                    "active_seconds"?: number,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id"?: string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id"?: string
+                    "active_seconds"?: number,"feedback_at"?: string | null,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id"?: string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"sent_back_note"?: string | null,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id"?: string
                   }
                   Relationships: [
                     {
@@ -1786,6 +1930,12 @@ isOneToOne: false
 "marking_assign_some":
 { Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_reason": string }; Returns: Json
                            },
+"marking_checks_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_checks_set":
+{ Args: { "p_exam": string,"p_reason"?: string,"p_settings": Json }; Returns: Json
+                           },
 "marking_close":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
@@ -1888,6 +2038,9 @@ isOneToOne: false
                            },
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
+                           },
+"marking_subject_markers":
+{ Args: { "p_subject": number }; Returns: number
                            },
 "marking_submit":
 { Args: { "p_marking": string,"p_now"?: string,"p_rev": number }; Returns: Json

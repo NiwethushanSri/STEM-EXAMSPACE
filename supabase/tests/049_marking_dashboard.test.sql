@@ -59,7 +59,8 @@ create function pg_temp.scripts(p_exam text, p_names text[]) returns void langua
 -- Opens exam p's marking with that deadline (as marking_open would) and makes its verified scripts ready.
 create function pg_temp.open(p text, p_deadline timestamptz) returns void language plpgsql as $$
 begin
-  insert into public.exam_marking (exam_id, deadline, opened_at, opened_by) values (pg_temp.k(p), p_deadline, now(), pg_temp.uid('admin'));
+  insert into public.exam_marking (exam_id, deadline, opened_at, opened_by) values (pg_temp.k(p), p_deadline, now(), pg_temp.uid('admin'))
+  on conflict (exam_id) do update set deadline = excluded.deadline, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
   perform public.marking_exam_sync(pg_temp.k(p), null);
 end $$;
 -- Sets a script's piece to a state, on hold (picture_changed) or not.
@@ -98,7 +99,7 @@ select pg_temp.open('b', now() + interval '3 hours');
 select pg_temp.open('c', now() - interval '1 day');
 select pg_temp.open('d', null);
 select pg_temp.open('s', null);
-insert into public.exam_marking (exam_id) values (pg_temp.k('f'));
+insert into public.exam_marking (exam_id) values (pg_temp.k('f')) on conflict (exam_id) do nothing;
 update public.exam_marking set closed_at = now() - interval '3 days', closed_by = pg_temp.uid('admin') where exam_id = pg_temp.k('c');
 update public.exam_marking set closed_at = now() - interval '20 days', closed_by = pg_temp.uid('admin') where exam_id = pg_temp.k('d');
 

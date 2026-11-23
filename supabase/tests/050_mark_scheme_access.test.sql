@@ -71,7 +71,7 @@ select pg_temp.scheme('f_next', 'e_next');
 -- ---------------------------------------------------------------------------------------------
 select is(pg_temp.sees('f'), 'admin teacher',
   'marker_refused_before_marking_opens: with no marking settings, only the editors read the PDF; an approved corrector and the lead do not');
-insert into public.exam_marking (exam_id, mode) values (pg_temp.k('e'), 'whole');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('e'), 'whole') on conflict (exam_id) do update set mode = excluded.mode;
 select is(pg_temp.sees('f'), 'admin teacher', 'nor with settings saved and marking not yet open');
 select tests.as_user(pg_temp.uid('m1'));
 select is((select count(*)::int from storage.objects where bucket_id = 'mark-schemes'), 0, 'a storage list shows the corrector no mark scheme at all');

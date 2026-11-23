@@ -398,7 +398,8 @@ select pg_temp.sim(pg_temp.upload('t1'));
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.script_page_marking_checked(pg_temp.k('p:t1:2'), pg_temp.path('p:t1:2'))), 'ok', 'its marking picture is checked');
 select tests.as_postgres();
-insert into public.exam_marking (exam_id, opened_at, opened_by) values (pg_temp.k('f'), now(), pg_temp.uid('admin'));
+insert into public.exam_marking (exam_id, opened_at, opened_by) values (pg_temp.k('f'), now(), pg_temp.uid('admin'))
+on conflict (exam_id) do update set opened_at = excluded.opened_at, opened_by = excluded.opened_by;
 select public.marking_exam_sync(pg_temp.k('f'), null);
 select is(pg_temp.st('t1'), 'ready_to_mark', 'marking opens and t1 is ready to mark');
 select tests.as_user(pg_temp.uid('admin'));
@@ -443,7 +444,7 @@ select tests.structure(pg_temp.k('q'));
 insert into public.question_groups (exam_id, label, position) values (pg_temp.k('q'), 'G1', 1), (pg_temp.k('q'), 'G2', 2);
 update public.exam_questions q set group_id = g.id from public.question_groups g
 where q.exam_id = pg_temp.k('q') and q.parent_id is null and g.exam_id = q.exam_id and g.label = 'G' || q.label;
-insert into public.exam_marking (exam_id, mode) values (pg_temp.k('q'), 'by_question');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('q'), 'by_question') on conflict (exam_id) do update set mode = excluded.mode;
 select pg_temp.script('s1', 'q');
 select pg_temp.unproved('s1', 2);
 select tests.as_user(pg_temp.uid('admin'));

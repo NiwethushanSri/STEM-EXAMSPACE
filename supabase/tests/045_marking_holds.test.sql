@@ -217,7 +217,7 @@ select pg_temp.structure('eq');
 insert into public.question_groups (exam_id, label, position) values (pg_temp.k('eq'), 'G1', 1), (pg_temp.k('eq'), 'G2', 2);
 update public.exam_questions q set group_id = g.id from public.question_groups g
 where q.exam_id = pg_temp.k('eq') and q.parent_id is null and g.exam_id = q.exam_id and g.label = 'G' || q.label;
-insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eq'), 'by_question');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eq'), 'by_question') on conflict (exam_id) do update set mode = excluded.mode;
 select pg_temp.script('g1', 'eq');
 select pg_temp.open('eq');
 -- Exam en: never opened.

@@ -153,7 +153,8 @@ async function seedScript(exam: SeededExam, i: number, tag: string, code: string
  * structure above, an approved corrector, an admin, and `scripts` verified home scripts of new active students with
  * names and index numbers, each with its 3 matched pages and their marking pictures. The exam finished 3 days ago, so
  * the hand-in time is over; the admin opens marking, which makes every script ready to mark. `markers` (1 by default)
- * approved correctors are made: `marker` is the first, `markers` all of them.
+ * approved correctors are made: `marker` is the first, `markers` all of them. Double marking, seeds and practice are
+ * off (written with the service key, as tests.marking_exam does in supabase/tests/helpers.sql).
  */
 export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | "by_question"; markers?: number }): Promise<{
   examId: string;
@@ -216,6 +217,9 @@ export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | 
     const { firstName, lastName, indexNumber } = await seedScript(exam, i, tag, code, pictures.map((marking) => ({ marking })));
     students.push({ firstName, lastName, indexNumber });
   }
+
+  // The checks on the marking are off, so one approved marker and no lead marker may open it.
+  must(await svc().from("exam_marking").insert({ exam_id: exam.examId, double_marking: false, seeds: false, practice: false }).select("exam_id").single(), "checks insert");
 
   // The admin opens marking, as on the exam's marking panel.
   const client = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });

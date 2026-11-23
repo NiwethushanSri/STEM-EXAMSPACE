@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
 import { ReasonDialog } from "@/components/papers/ReasonDialog";
+import { ChecksSettings } from "@/components/marking/ChecksSettings";
 import {
   closeMarkingAction,
   openMarkingAction,
@@ -12,7 +13,7 @@ import {
   saveMarkingSettingsAction,
   type MarkingActionResult,
 } from "@/app/admin/exams/[id]/actions";
-import { markingChecks, type MarkingGroup, type MarkingMode, type MarkingView } from "@/lib/exam-marking";
+import { markingChecks, type ChecksView, type MarkingGroup, type MarkingMode, type MarkingView } from "@/lib/exam-marking";
 import { utcToLondonParts } from "@/lib/london-time";
 import { formatLondon } from "@/lib/money";
 
@@ -21,16 +22,20 @@ const FIELD = "mt-1 rounded border border-slate-300 px-3 py-2 text-sm disabled:b
 
 type Dialog = "open" | "close" | "reopen" | "deadline";
 
-/** How the exam is marked, its marking deadline, the checks before marking opens, and Open, Close and Reopen. */
+/** How the exam is marked, its marking deadline, the checks on the marking, what opening waits for, and Open, Close
+ * and Reopen. */
 export function ExamMarkingPanel({
   examId,
   view,
+  checks,
   groups,
   finishesAt,
   homeUntil,
 }: {
   examId: string;
   view: MarkingView | null;
+  /** Null when the checks could not be loaded. */
+  checks: ChecksView | null;
   groups: MarkingGroup[];
   /** When the exam finishes: the deadline must be after it. */
   finishesAt: string;
@@ -46,10 +51,24 @@ export function ExamMarkingPanel({
       </Card>
     );
   }
-  return <Panel examId={examId} view={view} groups={groups} finishesAt={finishesAt} homeUntil={homeUntil} />;
+  return <Panel examId={examId} view={view} checks={checks} groups={groups} finishesAt={finishesAt} homeUntil={homeUntil} />;
 }
 
-function Panel({ examId, view, groups, finishesAt, homeUntil }: { examId: string; view: MarkingView; groups: MarkingGroup[]; finishesAt: string; homeUntil: string }) {
+function Panel({
+  examId,
+  view,
+  checks,
+  groups,
+  finishesAt,
+  homeUntil,
+}: {
+  examId: string;
+  view: MarkingView;
+  checks: ChecksView | null;
+  groups: MarkingGroup[];
+  finishesAt: string;
+  homeUntil: string;
+}) {
   const router = useRouter();
   const saved = view.deadline ? utcToLondonParts(view.deadline) : { date: "", time: "" };
   const [mode, setMode] = useState<MarkingMode>(view.mode);
@@ -184,6 +203,8 @@ function Panel({ examId, view, groups, finishesAt, homeUntil }: { examId: string
           Save settings
         </button>
       </form>
+
+      <ChecksSettings examId={examId} checks={checks} />
 
       <div className="mt-6 border-t border-slate-100 pt-4">
         <h3 className="text-sm font-semibold text-slate-800">{opened ? "Progress" : "Before marking opens"}</h3>

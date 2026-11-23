@@ -252,6 +252,12 @@ describe("markingMessageFor", () => {
     expect(markingMessageFor("structure_incomplete")).toContain("every question must be in a group");
     expect(markingMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
   });
+  it("maps the codes of the checks on the marking", () => {
+    expect(markingMessageFor("not_small_subject")).toBe("These checks can only be turned off when the subject has one approved marker.");
+    expect(markingMessageFor("needs_two_markers")).toBe("Double marking needs two approved markers. Approve another, or turn it off with a reason.");
+    expect(markingMessageFor("no_lead")).toBe("Choose a lead marker for this subject first.");
+    expect(markingMessageFor("marking_approved")).toBe("This exam's marking has been approved. An admin must withdraw the approval first.");
+  });
   it("falls back to the generic message", () => {
     expect(markingMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingMessageFor("__proto__")).toBe("Something went wrong. Please try again.");

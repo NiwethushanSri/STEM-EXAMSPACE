@@ -40,7 +40,8 @@ insert into kv values ('e', tests.marking_exam((select id from public.subjects w
 with g as (insert into public.question_groups (exam_id, label, position) values (pg_temp.k('e'), 'G1', 1), (pg_temp.k('e'), 'G2', 2) returning id, label)
 insert into kv select label, id from g;
 do $$ begin for i in 1..10 loop insert into kv values ('x' || i, tests.verified_script(pg_temp.k('e'))); end loop; end $$;
-insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('e'), 'by_question', now(), pg_temp.uid('admin'));
+insert into public.exam_marking (exam_id, mode, opened_at, opened_by) values (pg_temp.k('e'), 'by_question', now(), pg_temp.uid('admin'))
+on conflict (exam_id) do update set mode = excluded.mode, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
 select public.marking_exam_sync(pg_temp.k('e'), null);
 insert into kv select x.name || '/' || g.label, u.id
 from kv x join public.marking_units u on u.script_id = x.id join public.question_groups g on g.id = u.group_id;

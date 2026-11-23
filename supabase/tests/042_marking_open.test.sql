@@ -104,7 +104,8 @@ update public.profiles set status = 'suspended' where id = pg_temp.uid('m2');
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.marking_open(pg_temp.k('e'))), 'no_markers', 'a suspended marker does not count');
 select tests.as_postgres();
-select is((select count(*)::int from public.exam_marking where exam_id in (pg_temp.k('e0'), pg_temp.k('e'))), 0,
+select is((select count(*)::int from public.exam_marking where exam_id in (pg_temp.k('e0'), pg_temp.k('e')) and (opened_at is not null or opened_by is not null))
+           + pg_temp.audits('marking_opened', pg_temp.k('e0')) + pg_temp.audits('marking_opened', pg_temp.k('e')), 0,
   'a refused opening leaves nothing behind');
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.marker_approve(pg_temp.uid('m1'), pg_temp.subj(), 'Marked this paper last year')), 'ok', 'm1 is approved');

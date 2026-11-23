@@ -387,7 +387,8 @@ export function markerMessageFor(code: string | null | undefined): string {
 }
 
 /** Failure codes of opening and closing marking for an exam (marking_settings_set, marking_exam_get, marking_open,
- * marking_close, marking_reopen); marking_not_open and marking_closed are also what hand-out answers. */
+ * marking_close, marking_reopen) and of its checks (marking_checks_get, marking_checks_set); marking_not_open and
+ * marking_closed are also what hand-out answers. */
 const markingMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   reason_required: "Give a reason of 3 to 300 characters.",
@@ -399,6 +400,10 @@ const markingMessages: Record<string, string> = {
   no_markers: "Approve at least one marker for this subject first.",
   marking_not_open: "Marking has not opened for this exam.",
   marking_closed: "Marking has closed for this exam.",
+  not_small_subject: "These checks can only be turned off when the subject has one approved marker.",
+  needs_two_markers: "Double marking needs two approved markers. Approve another, or turn it off with a reason.",
+  no_lead: "Choose a lead marker for this subject first.",
+  marking_approved: "This exam's marking has been approved. An admin must withdraw the approval first.",
 };
 
 /** Message for a marking open or close RPC failure code; unknown codes get the generic message. */
