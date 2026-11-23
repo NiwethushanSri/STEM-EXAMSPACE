@@ -441,6 +441,8 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     on_hold: "This script is on hold.",
     not_ready: "This script cannot be handed out yet.",
     not_eligible: "This script cannot be given to this marker.",
+    // 3B: a second pass is never given to a marker who saw a name on the script, not even by an admin.
+    name_seen: "This marker may have seen a name on this script, so they cannot mark it.",
   },
 };
 

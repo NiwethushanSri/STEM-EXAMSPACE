@@ -1903,6 +1903,12 @@ isOneToOne: false
 "markers_list":
 { Args: Record<PropertyKey, never>; Returns: Json
                            },
+"marking_after_change":
+{ Args: { "p_marking": string }; Returns: undefined
+                           },
+"marking_after_submit":
+{ Args: { "p_marking": string }; Returns: string
+                           },
 "marking_alert_can_release":
 { Args: { "p_script": string }; Returns: string
                            },
@@ -1925,7 +1931,7 @@ isOneToOne: false
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
 "marking_assign":
-{ Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
 "marking_assign_some":
 { Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_reason": string }; Returns: Json
@@ -1983,6 +1989,11 @@ isOneToOne: false
                            },
 "marking_pages_key":
 { Args: { "p_script": string }; Returns: string
+                           },
+"marking_pass":
+{ Args: { "p_marker": string,"p_unit": string }; Returns: {
+              "assignment_id": string,"hold_until": string,"how": string,"kind": Database["public"]['Enums']["marking_kind"],"marking_id": string,"status": string
+            }[]
                            },
 "marking_picture_paths":
 { Args: { "p_now"?: string,"p_pages": (string)[],"p_unit": string }; Returns: Json
@@ -2049,7 +2060,7 @@ isOneToOne: false
 { Args: { "p_marking": string,"p_now"?: string,"p_rev": number }; Returns: Json
                            },
 "marking_take_back":
-{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
 "marking_tick":
 { Args: Record<PropertyKey, never>; Returns: undefined
@@ -2058,7 +2069,7 @@ isOneToOne: false
 { Args: { "p_marking": string }; Returns: number
                            },
 "marking_unit_blocked":
-{ Args: { "p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
                            },
 "marking_unit_max_total":
 { Args: { "p_unit": string }; Returns: number
@@ -2072,10 +2083,10 @@ isOneToOne: false
             }[]
                            },
 "marking_unit_take":
-{ Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_marker": string,"p_unit": string }; Returns: undefined
+{ Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_unit": string }; Returns: undefined
                            },
 "marking_unit_take_back":
-{ Args: { "p_unit": string }; Returns: boolean
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_unit": string }; Returns: boolean
                            },
 "marking_units_allowed":
 { Args: { "p_exam": string,"p_kind": Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_next": boolean,"p_unit"?: string }; Returns: {
@@ -2098,8 +2109,15 @@ isOneToOne: false
 "marking_units_lock":
 { Args: { "p_units": (string)[] }; Returns: undefined
                            },
+"marking_units_offered":
+{ Args: { "p_exam": string,"p_group": string,"p_kinds": (Database["public"]['Enums']["marking_kind"])[],"p_marker": string }; Returns: {
+              "group_id": string,"kind": Database["public"]['Enums']["marking_kind"],"script_id": string,"unit_id": string
+            }[]
+                           },
 "marking_units_pick":
-{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: (string)[]
+{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_kinds"?: (Database["public"]['Enums']["marking_kind"])[],"p_marker": string,"p_now": string }; Returns: {
+              "kind": Database["public"]['Enums']["marking_kind"],"unit_id": string
+            }[]
                            },
 "marking_units_refresh":
 { Args: { "p_script": string }; Returns: number

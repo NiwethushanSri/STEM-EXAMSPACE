@@ -24,6 +24,7 @@ import {
   firstLeaf,
   labelList,
   parseOpened,
+  parseSubmitted,
   questionPageIndexes,
   zoomStepIn,
   zoomStepOut,
@@ -598,9 +599,8 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
     if (q && !(await q.flush())) return;
     const atRev = rev.current;
     const { data, error } = await createClient().rpc("marking_submit", { p_marking: markingId, p_rev: atRev });
-    const d = obj(data);
-    if (error || !d) return setNotice(markingScreenMessageFor("internal"));
-    if (d.ok === true && typeof d.rev === "number") {
+    const d = parseSubmitted(error ? null : data);
+    if (d.ok) {
       // Submit moves the rev on: the queue starts again from it, with no reason yet for this visit. Anything still
       // waiting in the old queue (input stops while Submit runs, so normally nothing) moves to the new one, and the
       // server asks for its reason. Its stored copy is how it moves; if that cannot be read, the piece is opened again
@@ -617,12 +617,10 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
       if (moved.length > 0) next.push(moved);
       return;
     }
-    const code = typeof d.code === "string" ? d.code : "internal";
-    const reason = typeof d.reason === "string" ? d.reason : undefined;
+    const { code, reason, missing: labels } = d;
     if (code === "conflict" && (reason === "rev" || reason === undefined)) return setStatus("stale");
     if (code === "conflict" && reason === "submitted") return setNotice(markingScreenMessageFor(code, reason));
     if (code === "incomplete") {
-      const labels = Array.isArray(d.missing) ? d.missing.filter((x): x is string => typeof x === "string") : [];
       return setNotice(`${markingScreenMessageFor(code)}${labels.length ? ` Still to mark: ${labelList(labels)}.` : ""}`);
     }
     if (["on_hold", "pictures_updating", "hold_expired", "marking_closed", "forbidden", "not_found"].includes(code) || code === "conflict") {

@@ -193,8 +193,8 @@ select is(array[pg_temp.r('open_a1') -> 'marking' ->> 'id', pg_temp.r('open_a1b'
 select is(pg_temp.st('a1'), 'marking', 'the script is being marked');
 select is(pg_temp.r('open_a1') -> 'marking',
   jsonb_build_object('id', pg_temp.k('mk:a1'), 'rev', 0, 'status', 'in_progress', 'lead_note', null, 'total', null, 'max_total', 10,
-                     'pages_changed', false),
-  'the marking: rev 0, no total yet, out of 10');
+                     'pages_changed', false, 'practice', false, 'sent_back_note', null),
+  'the marking: rev 0, no total yet, out of 10 (3B: not practice, no note sent back)');
 select is(pg_temp.r('open_a1') -> 'unit',
   (select jsonb_build_object('id', pg_temp.u('a1'), 'exam_title', 'ZZ Marking exam', 'paper', 'Paper 1', 'subject', 'ZZ Marking work',
      'script_number', s.number, 'index_number', d.index_number, 'group_label', null, 'deadline', null,
@@ -708,8 +708,8 @@ insert into res values ('b_after_submit_reason', public.marking_save(pg_temp.k('
 insert into res values ('sub_again', public.marking_submit(pg_temp.k('mk:a1'), 16));
 select tests.as_postgres();
 select is(pg_temp.r('sub_stale'), '{"ok": false, "code": "conflict", "reason": "rev", "rev": 15}'::jsonb, 'a submit from a stale screen is refused');
-select is(pg_temp.r('sub_a1'), '{"ok": true, "rev": 16, "total": 4, "max_total": 10, "script_state": "marked"}'::jsonb,
-  'the piece is submitted: 4 out of 10, and its script (one piece) is marked; the rev moves on');
+select is(pg_temp.r('sub_a1'), '{"ok": true, "rev": 16, "total": 4, "max_total": 10, "feedback": null}'::jsonb,
+  'the piece is submitted: 4 out of 10; the rev moves on (3B: the answer says feedback, not the script''s state)');
 select is(array[pg_temp.r('b_after_submit'), pg_temp.r('b_after_submit_reason')],
   array['{"ok": false, "code": "conflict", "reason": "rev", "rev": 16}', '{"ok": false, "code": "conflict", "reason": "rev", "rev": 16}']::jsonb[],
   'a second screen still at the old rev is told to reload, with or without a reason, and changes nothing');
@@ -726,14 +726,16 @@ select is(pg_temp.r('sub_again'), '{"ok": false, "code": "conflict", "reason": "
 select tests.as_user(pg_temp.uid('m2'));
 select is(pg_temp.code(public.marking_save(pg_temp.k('mk:g1/G1'), 0, jsonb_build_array(pg_temp.mk(pg_temp.k('q:eq:1'), 2)))), 'ok', 'm2 marks G1');
 insert into res values ('sub_g1', public.marking_submit(pg_temp.k('mk:g1/G1'), 1));
-select tests.as_postgres(); select tests.as_user(pg_temp.uid('m1'));
+select tests.as_postgres();
+insert into res values ('st_g1', to_jsonb(pg_temp.st('g1')));
+select tests.as_user(pg_temp.uid('m1'));
 select is(pg_temp.code(public.marking_save(pg_temp.k('mk:g1/G2'), 0, jsonb_build_array(pg_temp.mk(pg_temp.k('q:eq:2(a)'), 1),
                                                                                          pg_temp.mk(pg_temp.k('q:eq:2(b)'), 4)))), 'ok', 'm1 marks G2');
 insert into res values ('sub_g2', public.marking_submit(pg_temp.k('mk:g1/G2'), 1));
 select tests.as_postgres();
-select is(pg_temp.r('sub_g1'), '{"ok": true, "rev": 2, "total": 2, "max_total": 3, "script_state": "marking"}'::jsonb,
+select is(array[pg_temp.r('sub_g1'), pg_temp.r('st_g1')], array['{"ok": true, "rev": 2, "total": 2, "max_total": 3, "feedback": null}', '"marking"']::jsonb[],
   'by question, the script is still being marked after the first group is submitted');
-select is(pg_temp.r('sub_g2'), '{"ok": true, "rev": 2, "total": 5, "max_total": 7, "script_state": "marked"}'::jsonb, 'and marked after the last');
+select is(pg_temp.r('sub_g2'), '{"ok": true, "rev": 2, "total": 5, "max_total": 7, "feedback": null}'::jsonb, 'and marked after the last');
 select is(pg_temp.st('g1'), 'marked', 'the script is marked');
 
 -- ---------------------------------------------------------------------------------------------

@@ -282,6 +282,9 @@ describe("allocationMessageFor", () => {
     expect(allocationMessageFor("not_eligible", "admin")).toBe("This script cannot be given to this marker.");
     expect(allocationMessageFor("reason_required", "admin")).toBe("Give a reason of 3 to 300 characters.");
   });
+  it("says why a second marking cannot go to a marker who saw a name on the script", () => {
+    expect(allocationMessageFor("name_seen", "admin")).toBe("This marker may have seen a name on this script, so they cannot mark it.");
+  });
   it("falls back to the generic message", () => {
     expect(allocationMessageFor("nothing_left", "admin")).toBe("Something went wrong. Please try again.");
     expect(allocationMessageFor("__proto__", "marker")).toBe("Something went wrong. Please try again.");

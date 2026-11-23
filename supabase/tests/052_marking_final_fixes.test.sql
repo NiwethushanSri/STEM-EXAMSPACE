@@ -288,8 +288,9 @@ select is((select count(*)::int from jsonb_array_elements(pg_temp.r('u2100') -> 
 select is(array[jsonb_array_length(pg_temp.r('u_taken') -> 'units')::text, pg_temp.r('u_taken') ->> 'more'], array['0', 'false'],
   'a filter that matches fewer says more is false');
 select is((select array_agg(k order by k) from jsonb_object_keys(pg_temp.r('u_small') -> 'units' -> 0) k),
-  array['group_label', 'hold_reason', 'hold_until', 'how', 'index_number', 'last_saved_at', 'marker_id', 'marker_name', 'on_hold', 'script_number',
-        'source', 'state', 'submitted_at', 'total', 'unit_id', 'waiting'], 'each piece has the fields it had');
+  array['check_state', 'group_label', 'hold_reason', 'hold_until', 'how', 'index_number', 'last_saved_at', 'marker_id', 'marker_name', 'on_hold',
+        'script_number', 'second', 'source', 'state', 'submitted_at', 'total', 'unit_id', 'waiting'],
+  'each piece has the fields it had (3B adds check_state and second)');
 
 -- ---------------------------------------------------------------------------------------------
 -- tick_goes_on_after_one_exam_fails. Exams t_bad and t_ok are open, each with a verified script waiting to be made

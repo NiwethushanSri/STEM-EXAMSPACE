@@ -43,7 +43,9 @@ export type OpenedPiece = {
     holdUntil: string | null;
     closed: boolean;
   };
-  marking: { id: string; rev: number; status: MarkingStatus; pagesChanged: boolean };
+  /** practice: a practice piece (always false until 3B Task 5). sentBackNote: the lead marker's note when the piece
+   * was sent back to this marker. Every kind of pass is read the same way. */
+  marking: { id: string; rev: number; status: MarkingStatus; pagesChanged: boolean; practice: boolean; sentBackNote: string | null };
   questions: ScreenQuestion[];
   optionGroups: { id: string; label: string; choose: number }[];
   markSchemePath: string | null;
@@ -162,7 +164,9 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
         holdUntil: str(u.hold_until),
         closed: u.closed === true,
       },
-      marking: { id: markingId, rev, status, pagesChanged: m.pages_changed === true },
+      marking: {
+        id: markingId, rev, status, pagesChanged: m.pages_changed === true, practice: m.practice === true, sentBackNote: str(m.sent_back_note),
+      },
       questions,
       optionGroups: list(s.option_groups).flatMap((o) => {
         const id = str(o.id);
@@ -174,6 +178,26 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
       saved,
     },
   };
+}
+
+/** What marking_submit answers, in the screen's shape: the new rev and the feedback to show (null: none; Task 5 sends
+ * "practice" or "seed"), or the refusal's code, its reason (a conflict's) and the labels of the questions still to
+ * mark (incomplete). "internal" when the answer makes no sense. The script's state is no longer sent (3B). */
+export type SubmitAnswer =
+  | { ok: true; rev: number; feedback: string | null }
+  | { ok: false; code: string; reason?: string; missing: string[] };
+
+export function parseSubmitted(data: unknown): SubmitAnswer {
+  const d = obj(data);
+  if (d?.ok === true) {
+    const rev = num(d.rev);
+    return rev === null ? { ok: false, code: "internal", missing: [] } : { ok: true, rev, feedback: str(d.feedback) };
+  }
+  const code = str(d?.code);
+  if (!d || !code) return { ok: false, code: "internal", missing: [] };
+  const reason = str(d.reason);
+  const missing = Array.isArray(d.missing) ? d.missing.filter((x): x is string => typeof x === "string") : [];
+  return reason === null ? { ok: false, code, missing } : { ok: false, code, reason, missing };
 }
 
 /** A mark as the marker reads it: "3", "2.5", "NR", or a dash for none yet. */

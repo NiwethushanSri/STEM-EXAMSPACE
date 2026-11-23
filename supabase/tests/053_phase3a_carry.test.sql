@@ -92,7 +92,7 @@ select is(coalesce(public.marking_unit_blocked(pg_temp.k('x4/G1'), pg_temp.uid('
   'once that marking is set aside, they are');
 select is((select count(*)::int from unnest(array['second', 'seed', 'practice', 'remark']::public.marking_kind[]) k
            cross join lateral public.marking_units_allowed(pg_temp.k('e'), pg_temp.uid('m5'), k, true)), 0,
-  'no other kind of pass is allowed yet');
+  'no other kind of pass is allowed (no piece waits for a second marking; seeds and practice come with Task 5)');
 select is((select count(*)::int from public.marking_units_candidates(pg_temp.k('e'), pg_temp.k('G1'), pg_temp.uid('m5'))), 7,
   'marking_units_candidates: m5 may be offered 7 open G1 pieces (not x5, taken; x6, on hold; x7, taken back)');
 select is(array(select c.unit_id from public.marking_units_candidates(pg_temp.k('e'), pg_temp.k('G1'), pg_temp.uid('m5')) c order by 1),

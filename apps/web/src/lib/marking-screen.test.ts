@@ -10,6 +10,7 @@ import {
   markControls,
   markText,
   parseOpened,
+  parseSubmitted,
   questionMarkText,
   questionPageIndexes,
   zoomStepIn,
@@ -25,7 +26,10 @@ const opened = {
     group_label: null, deadline: null, hold_until: "2026-11-22T12:00:00Z", closed: false,
     first_name: "Wilhelmina",
   },
-  marking: { id: U(2), rev: 4, status: "in_progress", lead_note: "See 2(b)", total: 3, max_total: 10, pages_changed: false },
+  marking: {
+    id: U(2), rev: 4, status: "in_progress", lead_note: "See 2(b)", total: 3, max_total: 10, pages_changed: false,
+    practice: false, sent_back_note: "Look again at 2(b)",
+  },
   structure: {
     version: 1,
     questions: [
@@ -62,7 +66,7 @@ describe("parseOpened", () => {
       groupLabel: null, holdUntil: "2026-11-22T12:00:00Z", closed: false,
     });
     expect(JSON.stringify(p)).not.toContain("Wilhelmina");
-    expect(p.marking).toEqual({ id: U(2), rev: 4, status: "in_progress", pagesChanged: false });
+    expect(p.marking).toEqual({ id: U(2), rev: 4, status: "in_progress", pagesChanged: false, practice: false, sentBackNote: "Look again at 2(b)" });
     expect(p.markSchemePath).toBe(`${U(60)}/${U(70)}.pdf`);
     expect(p.optionGroups).toEqual([{ id: U(80), label: "Answer 1 of these", choose: 1 }]);
     expect(p.pages.map((x) => [x.n, x.copyPage, x.extra, x.hasPicture])).toEqual([
@@ -99,11 +103,39 @@ describe("parseOpened", () => {
     expect(r.piece.saved.annotations?.[1].points).toEqual([[0.1, 0.1], [0.2, 0.2]]);
   });
 
+  it("reads practice and the note sent back, and reads their absence as no", () => {
+    const r = parseOpened({ ...opened, marking: { ...opened.marking, practice: true, sent_back_note: null } });
+    if (!r.ok) throw new Error("not ok");
+    expect([r.piece.marking.practice, r.piece.marking.sentBackNote]).toEqual([true, null]);
+    const older = Object.fromEntries(Object.entries(opened.marking).filter(([k]) => k !== "practice" && k !== "sent_back_note"));
+    const o = parseOpened({ ...opened, marking: older });
+    if (!o.ok) throw new Error("not ok");
+    expect([o.piece.marking.practice, o.piece.marking.sentBackNote]).toEqual([false, null]);
+  });
+
   it("returns the refusal code, or internal for an answer that makes no sense", () => {
     expect(parseOpened({ ok: false, code: "on_hold" })).toEqual({ ok: false, code: "on_hold" });
     expect(parseOpened({ ok: false })).toEqual({ ok: false, code: "internal" });
     expect(parseOpened(null)).toEqual({ ok: false, code: "internal" });
     expect(parseOpened({ ok: true, unit: {}, marking: {}, structure: {} })).toEqual({ ok: false, code: "internal" });
+  });
+});
+
+describe("parseSubmitted", () => {
+  it("reads the new rev and the feedback, and nothing else", () => {
+    expect(parseSubmitted({ ok: true, rev: 7, total: 8, max_total: 10, feedback: null, script_state: "marked" })).toEqual({ ok: true, rev: 7, feedback: null });
+    expect(parseSubmitted({ ok: true, rev: 7, total: 8, max_total: 10, feedback: "practice" })).toEqual({ ok: true, rev: 7, feedback: "practice" });
+    expect(parseSubmitted({ ok: true, rev: 7 })).toEqual({ ok: true, rev: 7, feedback: null });
+  });
+  it("returns a refusal's code, its reason and the questions still to mark", () => {
+    expect(parseSubmitted({ ok: false, code: "incomplete", missing: ["1", "2(a)", 3] })).toEqual({ ok: false, code: "incomplete", missing: ["1", "2(a)"] });
+    expect(parseSubmitted({ ok: false, code: "conflict", reason: "rev", rev: 9 })).toEqual({ ok: false, code: "conflict", reason: "rev", missing: [] });
+    expect(parseSubmitted({ ok: false, code: "on_hold" })).toEqual({ ok: false, code: "on_hold", missing: [] });
+  });
+  it("is internal for an answer that makes no sense", () => {
+    expect(parseSubmitted(null)).toEqual({ ok: false, code: "internal", missing: [] });
+    expect(parseSubmitted({ ok: true })).toEqual({ ok: false, code: "internal", missing: [] });
+    expect(parseSubmitted({ ok: false })).toEqual({ ok: false, code: "internal", missing: [] });
   });
 });
 

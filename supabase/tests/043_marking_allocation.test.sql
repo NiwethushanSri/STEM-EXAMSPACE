@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(180);
+select plan(181);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -192,14 +192,14 @@ select is(pg_temp.holder('w1'), 'm1 next', 'only m1 holds it');
 insert into kv values ('e3b', tests.marking_exam(pg_temp.s1()));
 select pg_temp.script('w2', 'e3b');
 select pg_temp.open('e3b');
-select is((public.marking_units_pick(pg_temp.k('e3b'), null, pg_temp.uid('m1'), null, 1))[1], pg_temp.u('w2'),
+select is((select p.unit_id from public.marking_units_pick(pg_temp.k('e3b'), null, pg_temp.uid('m1'), null, 1) p), pg_temp.u('w2'),
   'the select of Next script (for update skip locked) offers m1 the piece');
 select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('w2_m1', public.marking_next(pg_temp.k('e3b')));
 select tests.as_postgres();
 select is(pg_temp.r('w2_m1') ->> 'unit_id', pg_temp.u('w2')::text, 'm1 takes it');
-select is((public.marking_units_pick(pg_temp.k('e3b'), null, pg_temp.uid('m2'), null, 1))[1], null::uuid, 'the same select for m2 then returns no row');
-select ok(pg_get_functiondef('public.marking_units_pick(uuid, uuid, uuid, timestamptz, integer)'::regprocedure) ~* 'for update of u skip locked',
+select is((select p.unit_id from public.marking_units_pick(pg_temp.k('e3b'), null, pg_temp.uid('m2'), null, 1) p), null::uuid, 'the same select for m2 then returns no row');
+select ok(pg_get_functiondef('public.marking_units_pick(uuid, uuid, uuid, timestamptz, integer, public.marking_kind[])'::regprocedure) ~* 'for update of u skip locked',
   'the select skips a piece another marker''s Next script has locked');
 select throws_ok(format('insert into public.marking_assignments (unit_id, marker_id, how) values (%L, %L, %L)',
                         pg_temp.u('w2'), pg_temp.uid('m2'), 'next'), '23505', null,
@@ -246,7 +246,7 @@ select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('ec_m1', public.marking_next(pg_temp.k('ec')));
 select tests.as_postgres();
 select is(pg_temp.r('ec_m1') ->> 'unit_id', pg_temp.u('cz')::text, 'm1 is given the third piece');
-select is((public.marking_units_pick(pg_temp.k('ec'), null, pg_temp.uid('m1'), null, 1))[1], null::uuid, 'and nothing more is offered to m1');
+select is((select p.unit_id from public.marking_units_pick(pg_temp.k('ec'), null, pg_temp.uid('m1'), null, 1) p), null::uuid, 'and nothing more is offered to m1');
 select tests.as_user(pg_temp.uid('m2'));
 insert into res values ('ec_m2', public.marking_next(pg_temp.k('ec')));
 select tests.as_postgres();
@@ -300,7 +300,7 @@ select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('en1', public.marking_next(pg_temp.k('en')));
 select tests.as_postgres();
 select is(pg_temp.r('en1') ->> 'unit_id', pg_temp.u('nb')::text, 'Next script gives m1 the other one');
-select is((public.marking_units_pick(pg_temp.k('en'), null, pg_temp.uid('m1'), null, 1))[1], null::uuid, 'and never that one');
+select is((select p.unit_id from public.marking_units_pick(pg_temp.k('en'), null, pg_temp.uid('m1'), null, 1) p), null::uuid, 'and never that one');
 select tests.as_user(pg_temp.uid('m2'));
 insert into res values ('en2', public.marking_next(pg_temp.k('en')));
 select tests.as_postgres();
@@ -701,7 +701,7 @@ select is((select count(*)::int from public.bookings b where position(b.id::text
 select is((select p - 'last_saved_at' from jsonb_array_elements(pg_temp.r('mw') -> 'pieces') p where p ->> 'unit_id' = pg_temp.u('a1')::text),
   jsonb_build_object('unit_id', pg_temp.u('a1'), 'exam_id', pg_temp.k('ea'), 'script_number', (select number from public.scripts where id = pg_temp.k('a1')),
     'index_number', (select d.index_number from public.student_details d where d.profile_id = pg_temp.student('a1')), 'group_label', null,
-    'state', 'taken', 'how', 'assigned', 'hold_until', null, 'on_hold', false, 'hold_reason', null, 'pages_changed', false),
+    'state', 'taken', 'how', 'assigned', 'hold_until', null, 'on_hold', false, 'hold_reason', null, 'pages_changed', false, 'practice', false),
   'a piece m1 holds shows its script number, index number, state and hold');
 select is((select (e ->> 'left') || ' ' || (e -> 'mine' ->> 'taken') || ' ' || (e -> 'mine' ->> 'submitted') || ' ' || (e ->> 'closed')
                   || ' ' || (e ->> 'overdue') || ' ' || (e ->> 'mode') || ' ' || (e -> 'groups')::text
@@ -886,10 +886,12 @@ select ok((select count(*) from public.marking_units u where u.state = 'open' an
 -- ---------------------------------------------------------------------------------------------
 -- next_and_assign_some_in_time_at_1500_pieces (a timing guard, as 037: the planner's statistics are those of the
 -- tables before this transaction). 300 candidates marked by question in 5 groups: 1500 open pieces. Each timed call
--- runs under the statement_timeout it must meet (a call over it fails this file).
+-- runs under the statement_timeout it must meet (a call over it fails this file). 3B: an admin's assignment of 200
+-- chosen pieces too, which asks the one rule once per piece (by the piece's key: controller note b, Task 3).
 -- ---------------------------------------------------------------------------------------------
-insert into c values ('big', tests.create_user('corrector', 'active')), ('big2', tests.create_user('corrector', 'active'));
-insert into public.marker_approvals (marker_id, subject_id, approved_at) select c.id, pg_temp.s1(), now() from c where c.name in ('big', 'big2');
+insert into c values ('big', tests.create_user('corrector', 'active')), ('big2', tests.create_user('corrector', 'active')),
+  ('big3', tests.create_user('corrector', 'active'));
+insert into public.marker_approvals (marker_id, subject_id, approved_at) select c.id, pg_temp.s1(), now() from c where c.name in ('big', 'big2', 'big3');
 insert into kv values ('ebig', tests.marking_exam(pg_temp.s1()));
 insert into public.question_groups (exam_id, label, position) select pg_temp.k('ebig'), 'B' || i, i from generate_series(1, 5) i;
 do $$ begin for i in 1..300 loop perform pg_temp.script('bs' || i, 'ebig'); end loop; end $$;
@@ -929,6 +931,16 @@ select is(jsonb_array_length(pg_temp.timed('ms_list', format('select public.mark
 reset statement_timeout;
 select tests.as_postgres();
 select is(pg_temp.marker_lock('big2'), 'ShareLock', 'Next script held the marker''s lock, shared');
+create temp table big3 as
+  select u.id from public.marking_units u where u.exam_id = pg_temp.k('ebig') and u.state = 'open' order by u.id limit 200;
+grant select on big3 to public;
+select tests.as_user(pg_temp.uid('admin'));
+set local statement_timeout = '6s';
+select is(pg_temp.timed('ms_assign', format('select public.marking_assign(%L, %L, %L)', (select array_agg(id) from big3), pg_temp.uid('big3'),
+                                           'Start the big exam')),
+  '{"ok": true, "assigned": 200, "skipped": []}'::jsonb, 'an admin assigns 200 chosen open pieces of the 1500 within 6 s');
+reset statement_timeout;
+select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
 -- corrector_cannot_assign_or_take_back
@@ -955,17 +967,17 @@ select is(array[pg_temp.code(public.marking_assign(array[pg_temp.u('a5')], pg_te
 select tests.as_postgres();
 select is(pg_temp.holder('a2') || ' ' || pg_temp.holder('a5'), 'm2 assigned -', 'nothing changed');
 select is(array(select f from unnest(array[
-    'public.marking_unit_blocked(uuid, uuid, timestamptz, boolean)', 'public.marking_units_candidates(uuid, uuid, uuid)',
+    'public.marking_unit_blocked(uuid, uuid, timestamptz, boolean, public.marking_kind)', 'public.marking_units_candidates(uuid, uuid, uuid)',
     'public.marking_units_free(uuid, uuid, uuid, timestamptz)',
-    'public.marking_units_pick(uuid, uuid, uuid, timestamptz, integer)',
-    'public.marking_unit_take(uuid, uuid, text, uuid, timestamptz)', 'public.marking_unit_take_back(uuid)', 'public.marking_units_lock(uuid[])',
+    'public.marking_units_pick(uuid, uuid, uuid, timestamptz, integer, public.marking_kind[])',
+    'public.marking_unit_take(uuid, uuid, text, uuid, timestamptz, public.marking_kind)', 'public.marking_unit_take_back(uuid, public.marking_kind)', 'public.marking_units_lock(uuid[])',
     'public.marking_holds_expire(timestamptz)', 'public.marking_exam_overdue(uuid, timestamptz)', 'public.marking_tick()']) f
   where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')
      or has_function_privilege('service_role', f, 'execute')), '{}'::text[],
   'the internal functions cannot be called from the API, nor by the service role');
 select is(array(select f from unnest(array[
-    'public.marking_next(uuid, uuid, timestamptz)', 'public.marking_give_back(uuid, text)', 'public.marking_assign(uuid[], uuid, text)',
-    'public.marking_assign_some(uuid, uuid, uuid, integer, text)', 'public.marking_take_back(uuid[], text)', 'public.marking_reassign(uuid[], uuid, text)',
+    'public.marking_next(uuid, uuid, timestamptz)', 'public.marking_give_back(uuid, text)', 'public.marking_assign(uuid[], uuid, text, public.marking_kind)',
+    'public.marking_assign_some(uuid, uuid, uuid, integer, text)', 'public.marking_take_back(uuid[], text, public.marking_kind)', 'public.marking_reassign(uuid[], uuid, text)',
     'public.marking_my_work(timestamptz)', 'public.marking_units_list(uuid, text, uuid)', 'public.marking_progress(uuid, timestamptz)']) f
   where has_function_privilege('anon', f, 'execute') or not has_function_privilege('authenticated', f, 'execute')), '{}'::text[],
   'the others are for signed-in users only');
