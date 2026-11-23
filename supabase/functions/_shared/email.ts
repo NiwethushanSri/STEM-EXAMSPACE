@@ -1,5 +1,5 @@
 export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm" | "confirm_signup" | "paper_released" | "paper_corrected"
-  | "script_receipt" | "script_attention" | "script_rejected" | "script_staff_alert";
+  | "script_receipt" | "script_attention" | "script_rejected" | "script_staff_alert" | "script_marking_alert";
 
 /** Templates that carry a one-time sign-in link. */
 const LINK_TEMPLATES: readonly EmailTemplate[] = ["invite", "child_confirm", "confirm_signup"];
@@ -16,6 +16,7 @@ const SUBJECTS: Record<EmailTemplate, string> = {
   script_attention: "Your answers need a little attention",
   script_rejected: "Your answers could not be accepted",
   script_staff_alert: "A script needs staff attention",
+  script_marking_alert: "A script being marked needs attention",
 };
 
 /** One line, no markup characters that could break a header. */
@@ -77,6 +78,50 @@ export function staffAlertLine(kind: string, count: number): string {
     default:
       return "A script needs staff attention.";
   }
+}
+
+/** The one sentence of a marking alert, by its kind and how many scripts its email is about (migration 008 groups
+ * them per exam and kind). Never a candidate's or a marker's name. */
+export function markingAlertLine(kind: string, count = 1): string {
+  const n = Number.isInteger(count) && count > 1 ? count : 1;
+  const one = n === 1;
+  switch (kind) {
+    case "picture_changed":
+      return one
+        ? "A page picture of this script changed during marking. The script is on hold until you release it."
+        : `Page pictures of ${n} scripts changed during marking. The scripts are on hold until you release them.`;
+    case "picture_missing":
+      return one
+        ? "A page of this script lost its marking picture during marking. The script is on hold until it is handed back."
+        : `Pages of ${n} scripts lost their marking pictures during marking. The scripts are on hold until they are handed back.`;
+    case "name_visible":
+      return one
+        ? "A marker reported a visible name. Staff must hide it and hand the script back."
+        : `Markers reported a visible name on ${n} scripts. Staff must hide the names and hand the scripts back.`;
+    case "pages_set_aside":
+      return one
+        ? "Scanned pages arrived for a script that is being marked. They were set aside."
+        : `Scanned pages arrived for ${n} scripts that are being marked. They were set aside.`;
+    case "pages_changed":
+      return one
+        ? "The pages of a script changed while it was with staff. Its marker has been asked to check their marks."
+        : `The pages of ${n} scripts changed while they were with staff. Their markers have been asked to check their marks.`;
+    default:
+      return one ? "A script being marked needs attention." : `${n} scripts being marked need attention.`;
+  }
+}
+
+/** To the subject's lead marker and the owner and admin accounts. The exam, the kind's sentence and (when the email is
+ * about one script) the script number only: no candidate name, no marker name. */
+export function markingAlertEmail(data: Record<string, string>): Mail {
+  const count = Number.parseInt(data.count ?? "1", 10);
+  const number = plain(data.script_number);
+  return {
+    subject: `${SUBJECTS.script_marking_alert}: ${plain(data.exam) || "exam"}`,
+    html: `<p>${esc(markingAlertLine(data.kind ?? "", count))}</p><ul><li>Exam: ${esc(plain(data.exam) || "unknown")}</li>${
+      count > 1 ? "" : `<li>Script: ${number ? esc(number) : "unknown"}</li>`
+    }</ul><p>Sign in to Stem Examspace to see the marking alerts.</p>`,
+  };
 }
 
 /** "We have received your answers": to the student and linked parents when a home submission is received. */
@@ -182,6 +227,8 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
       return scriptRejectedEmail(data);
     case "script_staff_alert":
       return scriptStaffAlertEmail(data);
+    case "script_marking_alert":
+      return markingAlertEmail(data);
   }
   const exam = plain(data.exam);
   let subject = SUBJECTS[template];

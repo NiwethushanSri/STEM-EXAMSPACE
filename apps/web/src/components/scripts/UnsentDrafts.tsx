@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { acceptDraftAction } from "@/app/admin/scripts/unsent/actions";
-import { UNSENT_TEXT, acceptReasonProblem, draftCandidate, type UnsentDraft } from "@/lib/home-drafts";
+import { UNSENT_TEXT, acceptReasonProblem, draftCandidate, replacesNote, type UnsentDraft } from "@/lib/home-drafts";
 import { formatLondon } from "@/lib/money";
 
 const BUTTON = "rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
@@ -47,6 +47,11 @@ function Row({ d }: { d: UnsentDraft }) {
         ) : null}
         {d.files} {d.files === 1 ? "file" : "files"} uploaded{d.lastFileAt ? `, the last on ${formatLondon(d.lastFileAt)}` : ""}.
       </p>
+      {replacesNote(d) && (
+        <p data-testid="unsent-replaces" className="text-sm font-medium text-amber-900">
+          {replacesNote(d)}
+        </p>
+      )}
       <div className="flex flex-wrap items-end gap-2">
         <label htmlFor={id} className="flex min-w-64 flex-1 flex-col gap-1 text-sm text-slate-700">
           {UNSENT_TEXT.reason}

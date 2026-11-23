@@ -36,7 +36,7 @@ class FakeClient:
     `discarded` is what script_discarded_take lists (each item taken once); `remove_error` is raised by remove."""
 
     def __init__(self, jobs=(), data=b"", record=None, beats=True, on_download=None, discarded=(), remove_error=None,
-                 pictures=None, remasked=None):
+                 pictures=None, remasked=None, unused=()):
         self.jobs = list(jobs)
         self.data = data
         self.record = record or {"ok": True, "pages": 0}
@@ -46,6 +46,7 @@ class FakeClient:
         self.on_download = on_download
         self.discarded = list(discarded)
         self.remove_error = remove_error
+        self.unused = list(unused)  # what pictures_unused_take lists (each name taken once)
         self.calls = []
         self.stored = {}
         self.lock = threading.Lock()
@@ -98,6 +99,11 @@ class FakeClient:
     def discarded_take(self, limit):
         self._log("discarded_take", limit)
         taken, self.discarded = self.discarded[:limit], self.discarded[limit:]
+        return taken
+
+    def pictures_unused_take(self, limit):
+        self._log("pictures_unused_take", limit)
+        taken, self.unused = self.unused[:limit], self.unused[limit:]
         return taken
 
     def remove(self, bucket, paths):
@@ -172,10 +178,10 @@ def test_a_file_of_too_many_pages_fails_before_anything_is_rendered_or_stored(mo
 
 def test_a_file_of_exactly_the_limit_is_prepared(monkeypatch):
     monkeypatch.setattr(pipeline, "page_count", lambda source, mime: main.MAX_PAGES)
-    monkeypatch.setattr(pipeline, "page_count", lambda source, mime: 2)
     monkeypatch.setattr(pipeline, "iter_prepare", fake_pages())
     client = FakeClient(data=b"a long scan")
     assert main.process(client, "w-1", claimed(upload_kind="scan_file")) == "done"
+    assert len(client.named("record_pages")) == 1
     assert main.MAX_PAGES == 5000  # the database's own limit (script_pages_valid)
 
 

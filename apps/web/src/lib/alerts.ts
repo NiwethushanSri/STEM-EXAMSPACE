@@ -346,3 +346,95 @@ export function scriptsDashboardAlerts(d: ScriptsDashboard): StaffAlert[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------------------------
+// Staff alerts from the marking dashboard (public.marking_dashboard), shown on the admin home. Pure, as above.
+
+/** One exam whose marking is open, or closed in the last 14 days: its pieces left (not submitted), marked (submitted)
+ * and on hold (a held piece is also left or marked), its deadline, and whether marking is overdue (the deadline passed,
+ * marking not closed and a piece not submitted). */
+export type MarkingDashboardExam = {
+  examId: string;
+  title: string;
+  paper: string | null;
+  deadline: string | null;
+  overdue: boolean;
+  left: number;
+  marked: number;
+  onHold: number;
+};
+
+export type MarkingDashboard = {
+  exams: MarkingDashboardExam[];
+  /** The exams' pieces left and on hold, and how many of them are overdue. */
+  left: number;
+  onHold: number;
+  overdueExams: number;
+  /** Open marking alerts, of any exam. */
+  alertsOpen: number;
+  /** Marking pictures that wait for staff to check them (the "Marking pictures to check" tab). */
+  picturesToCheck: number;
+  /** Pieces an admin assigned that nobody has saved for 7 days (marking open, not on hold). */
+  staleAssigned: number;
+};
+
+function markingExam(x: unknown): MarkingDashboardExam | null {
+  if (!isRecord(x)) return null;
+  const examId = text(x.exam_id);
+  const title = text(x.title);
+  if (!examId || !title) return null;
+  return {
+    examId,
+    title,
+    paper: text(x.paper),
+    deadline: text(x.deadline),
+    overdue: x.overdue === true,
+    left: counted(x.left),
+    marked: counted(x.marked),
+    onHold: counted(x.on_hold),
+  };
+}
+
+/** marking_dashboard's answer, or null for a refusal or a broken answer. Malformed rows are left out. */
+export function parseMarkingDashboard(data: unknown): MarkingDashboard | null {
+  if (!isRecord(data) || data.ok !== true) return null;
+  const t = isRecord(data.totals) ? data.totals : {};
+  return {
+    exams: (Array.isArray(data.exams) ? data.exams : []).map(markingExam).filter((e): e is MarkingDashboardExam => e !== null),
+    left: counted(t.left),
+    onHold: counted(t.on_hold),
+    overdueExams: counted(t.overdue_exams),
+    alertsOpen: counted(t.alerts_open),
+    picturesToCheck: counted(t.pictures_to_check),
+    staleAssigned: counted(t.stale_assigned),
+  };
+}
+
+/** What staff should act on in marking, the most urgent first: exams whose marking is overdue, scripts on hold,
+ * marking pictures that wait for a check, and assigned scripts nobody has touched for a week. */
+export function markingAlerts(d: MarkingDashboard): StaffAlert[] {
+  const out: StaffAlert[] = [];
+  if (d.overdueExams > 0) {
+    out.push({ id: "marking-overdue", tone: "red", text: `Marking is overdue for ${plural(d.overdueExams, "exam", "exams")}.`, href: "/admin/marking" });
+  }
+  if (d.onHold > 0) {
+    out.push({ id: "marking-on-hold", tone: "amber", text: `${plural(d.onHold, "script is", "scripts are")} on hold in marking.`, href: "/admin/marking" });
+  }
+  if (d.picturesToCheck > 0) {
+    out.push({
+      id: "marking-pictures",
+      tone: "amber",
+      text: `${plural(d.picturesToCheck, "marking picture waits", "marking pictures wait")} to be checked.`,
+      href: "/admin/scripts/exceptions?tab=checks",
+    });
+  }
+  if (d.staleAssigned > 0) {
+    out.push({
+      id: "marking-stale",
+      tone: "amber",
+      text: `${plural(d.staleAssigned, "assigned script has", "assigned scripts have")} not been touched for a week.`,
+      href: "/admin/marking",
+    });
+  }
+  return out;
+}

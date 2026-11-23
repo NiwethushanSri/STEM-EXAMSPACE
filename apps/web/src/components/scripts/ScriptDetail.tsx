@@ -13,14 +13,18 @@ import {
   SOURCE_LABEL,
   STATE_TONE,
   actionText,
+  beingMarked,
   candidateText,
+  handBackBlocked,
   jobText,
   pageLabel,
   pagesEditable,
+  picturesToCheckText,
   remaskPending,
   reprocessable,
   reprocessRefusal,
   stateText,
+  takenBackReasonText,
   turnText,
   versionReason,
   voidable,
@@ -49,19 +53,24 @@ function NoteLine({ note }: { note: Note | null }) {
   );
 }
 
-/** A reason box (3 to 300 characters, audited) and the button that sends the tool with it. */
+/** A reason box (3 to 300 characters, audited; it may be left empty when `optional`) and the button that sends the
+ * tool with it. With `blocked`, the button is off and says why. */
 function ReasonForm({
   scriptId,
   build,
   label,
   hint,
   danger = false,
+  optional = false,
+  blocked = null,
 }: {
   scriptId: string;
   build: (reason: string) => RepoInput;
   label: string;
   hint: string;
   danger?: boolean;
+  optional?: boolean;
+  blocked?: string | null;
 }) {
   const router = useRouter();
   const id = useId();
@@ -70,7 +79,7 @@ function ReasonForm({
   const [note, setNote] = useState<Note | null>(null);
 
   async function send() {
-    const problem = reasonProblem(reason, true);
+    const problem = reasonProblem(reason, !optional);
     if (problem) return setNote({ ok: false, text: problem });
     setBusy(true);
     setNote(null);
@@ -89,9 +98,20 @@ function ReasonForm({
         Reason <span className="font-normal text-slate-500">({hint})</span>
       </label>
       <textarea id={id} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} rows={2} className={`${FIELD} w-full`} />
-      <button type="button" className={danger ? DANGER : BUTTON} disabled={busy} onClick={send}>
+      <button
+        type="button"
+        className={danger ? DANGER : BUTTON}
+        disabled={busy || !!blocked}
+        aria-describedby={blocked ? `${id}-blocked` : undefined}
+        onClick={send}
+      >
         {busy ? "Saving..." : label}
       </button>
+      {blocked && (
+        <p id={`${id}-blocked`} className="text-sm text-slate-600">
+          {blocked}
+        </p>
+      )}
       <NoteLine note={note} />
     </div>
   );
@@ -196,10 +216,52 @@ function PageView({ detail, page, upload }: { detail: ScriptDetail; page: Detail
             }
           />
         </fieldset>
+      ) : beingMarked(detail.script.state) ? (
+        <p className="text-sm text-slate-600">This script is being marked. To change its pages, take it back from the markers.</p>
       ) : (
         <p className="text-sm text-slate-600">This script is {stateText(detail.script.state, detail.script.stateReason).toLowerCase()}, so its pages can no longer change.</p>
       )}
     </div>
+  );
+}
+
+/** A script with the markers is taken back to change its pages; a taken-back script is handed back once it is verified
+ * and its marking pictures are made. */
+function MarkingCard({ detail }: { detail: ScriptDetail }) {
+  const s = detail.script;
+  if (s.takenBackAt) {
+    const why = takenBackReasonText(s.takenBackReason);
+    return (
+      <Card title="Marking">
+        <div className="space-y-3">
+          <p className="text-sm text-slate-700">
+            Taken back from the markers on {formatLondon(s.takenBackAt)}.{why ? ` ${why.endsWith(".") ? why : `Reason: ${why}.`}` : ""}
+          </p>
+          <ReasonForm
+            scriptId={s.id}
+            label="Hand back to markers"
+            hint="optional, 3 to 300 characters, kept in the audit log"
+            optional
+            blocked={handBackBlocked(detail)}
+            build={(reason) => ({ action: "hand_back", reason })}
+          />
+        </div>
+      </Card>
+    );
+  }
+  if (!beingMarked(s.state)) return null;
+  return (
+    <Card title="Marking">
+      <div className="space-y-3">
+        <p className="text-sm text-slate-700">This script is being marked. To change its pages, take it back from the markers.</p>
+        <ReasonForm
+          scriptId={s.id}
+          label="Take back from markers"
+          hint="3 to 300 characters, kept in the audit log"
+          build={(reason) => ({ action: "take_back", reason })}
+        />
+      </div>
+    </Card>
   );
 }
 
@@ -233,13 +295,26 @@ export function ScriptDetailView({ detail }: { detail: ScriptDetail }) {
               <p className="text-sm text-amber-800">The booking is {s.bookingStatus.replace(/_/g, " ")}.</p>
             )}
           </div>
-          {open.length > 0 && (
-            <Link href={`/admin/scripts/exceptions${s.exam ? `?exam=${s.exam.id}` : ""}`} className="text-sm text-blue-700 underline">
-              {open.length} open {open.length === 1 ? "problem" : "problems"} in the exception queue
-            </Link>
-          )}
+          <div className="space-y-1 text-sm">
+            {open.length > 0 && (
+              <Link href={`/admin/scripts/exceptions${s.exam ? `?exam=${s.exam.id}` : ""}`} className="block text-blue-700 underline">
+                {open.length} open {open.length === 1 ? "problem" : "problems"} in the exception queue
+              </Link>
+            )}
+            {s.picturesToCheck > 0 && (
+              <Link
+                href={`/admin/scripts/exceptions?tab=checks${s.exam ? `&exam=${s.exam.id}` : ""}`}
+                data-testid="pictures-to-check"
+                className="block text-blue-700 underline"
+              >
+                {picturesToCheckText(s.picturesToCheck)}
+              </Link>
+            )}
+          </div>
         </div>
       </Card>
+
+      <MarkingCard detail={detail} />
 
       <Card title="Pages">
         {detail.pages.length === 0 ? (

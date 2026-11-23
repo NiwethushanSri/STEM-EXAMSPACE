@@ -1,8 +1,18 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { AppShell, Card } from "@/components/AppShell";
+import { FamilyNotices } from "@/components/scripts/FamilyNotices";
 import { AccountsOverview } from "@/components/accounts/AccountsSection";
-import { parseScriptsDashboard, scriptsDashboardAlerts, type ScriptsDashboard } from "@/lib/alerts";
+import { DeadlineLine } from "@/components/marking/MarkingProgress";
+import {
+  markingAlerts,
+  parseMarkingDashboard,
+  parseScriptsDashboard,
+  scriptsDashboardAlerts,
+  type MarkingDashboard,
+  type ScriptsDashboard,
+  type StaffAlert,
+} from "@/lib/alerts";
 import { loadExamsMissingPaper, loadExamsRolesUnchecked } from "@/lib/exams-staff";
 import { missingPaperWarning } from "@/lib/print-pack";
 import { formatLondon } from "@/lib/money";
@@ -89,6 +99,29 @@ function Tile({ label, value, href, testId }: { label: string; value: string | n
   );
 }
 
+/** A dashboard's alerts, red or amber, each with an "Open" link when there is somewhere to act on it. */
+function StaffAlerts({ title, alerts, testId }: { title: string; alerts: StaffAlert[]; testId: string }) {
+  return (
+    <Card title={title}>
+      <ul className="space-y-2 text-sm" data-testid={testId}>
+        {alerts.map((a) => (
+          <li key={a.id} className={`rounded border p-3 ${a.tone === "red" ? "border-red-200 bg-red-50 text-red-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+            {a.text}
+            {a.href && (
+              <>
+                {" "}
+                <Link href={a.href} className="font-medium underline">
+                  Open
+                </Link>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 function ScriptsDashboardView({ d }: { d: ScriptsDashboard }) {
   const alerts = scriptsDashboardAlerts(d);
   return (
@@ -104,25 +137,7 @@ function ScriptsDashboardView({ d }: { d: ScriptsDashboard }) {
         />
       </div>
 
-      {alerts.length > 0 && (
-        <Card title="Scripts: needs action">
-          <ul className="space-y-2 text-sm" data-testid="scripts-alerts">
-            {alerts.map((a) => (
-              <li key={a.id} className={`rounded border p-3 ${a.tone === "red" ? "border-red-200 bg-red-50 text-red-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
-                {a.text}
-                {a.href && (
-                  <>
-                    {" "}
-                    <Link href={a.href} className="font-medium underline">
-                      Open
-                    </Link>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      {alerts.length > 0 && <StaffAlerts title="Scripts: needs action" alerts={alerts} testId="scripts-alerts" />}
 
       <Card title="Scripts in the last 14 days">
         {d.exams.length === 0 ? (
@@ -190,7 +205,102 @@ async function ScriptsOverview() {
       </div>
     );
   }
-  return <ScriptsDashboardView d={d} />;
+  const waiting = await familyNoticesWaiting(supabase);
+  return (
+    <>
+      {waiting > 0 && (
+        <div className="mb-6">
+          <Card title="Family emails">
+            <FamilyNotices count={waiting} />
+          </Card>
+        </div>
+      )}
+      <ScriptsDashboardView d={d} />
+    </>
+  );
+}
+
+/** The marking figures (public.marking_dashboard): what is left, on hold and waiting for staff, the alerts, and a row
+ * per exam whose marking is open or closed in the last 14 days. No candidate name. */
+function MarkingDashboardView({ d, now }: { d: MarkingDashboard; now: Date }) {
+  const alerts = markingAlerts(d);
+  return (
+    <div className="mb-6 space-y-4" data-testid="marking-dashboard">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <Tile label="Left to mark" value={d.left} href="/admin/marking" testId="tile-marking-left" />
+        <Tile label="On hold in marking" value={d.onHold} href="/admin/marking" testId="tile-marking-on-hold" />
+        <Tile label="Marking alerts open" value={d.alertsOpen} href="/admin/marking" testId="tile-marking-alerts" />
+        <Tile label="Marking pictures to check" value={d.picturesToCheck} href="/admin/scripts/exceptions?tab=checks" testId="tile-marking-pictures" />
+      </div>
+
+      {alerts.length > 0 && <StaffAlerts title="Marking: needs action" alerts={alerts} testId="marking-alerts" />}
+
+      <Card title="Marking">
+        {d.exams.length === 0 ? (
+          <p className="text-sm text-slate-500">No exam is being marked, and no marking closed in the last 14 days.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm" data-testid="marking-exams">
+              <caption className="sr-only">Marking left, marked and on hold per exam</caption>
+              <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  {["Exam", "Left", "Marked", "On hold", "Deadline"].map((h) => (
+                    <th key={h} scope="col" className="py-2 pr-4 font-medium">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {d.exams.map((e) => (
+                  <tr key={e.examId} data-testid="marking-exam" className="border-b border-slate-100 last:border-0">
+                    <th scope="row" className="py-2 pr-4 font-normal">
+                      <Link href={`/admin/marking?exam=${e.examId}`} className="font-medium text-blue-700 underline">
+                        {e.title}
+                        {e.paper ? ` (${e.paper})` : ""}
+                      </Link>
+                    </th>
+                    <td className="py-2 pr-4">{e.left}</td>
+                    <td className="py-2 pr-4">{e.marked}</td>
+                    <td className="py-2 pr-4">{e.onHold}</td>
+                    <td className="py-2 pr-4">
+                      <DeadlineLine deadline={e.deadline} overdue={e.overdue} now={now} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/** The marking part of the operations dashboard (public.marking_dashboard). */
+async function MarkingOverview() {
+  await requireStaff(["admin", "owner"]);
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("marking_dashboard", {});
+  const d = error ? null : parseMarkingDashboard(data);
+  if (!d) {
+    return (
+      <div className="mb-6">
+        <Card title="Marking">
+          <p role="alert" className="text-sm text-red-700">The marking figures could not be loaded. Refresh the page to try again.</p>
+        </Card>
+      </div>
+    );
+  }
+  return <MarkingDashboardView d={d} now={new Date()} />;
+}
+
+/** How many family emails (receipts and the like) are still to be sent; 0 when it cannot be read. */
+async function familyNoticesWaiting(supabase: Awaited<ReturnType<typeof createClient>>): Promise<number> {
+  const { data, error } = await supabase.rpc("script_family_notices_waiting", {});
+  if (error || !data || typeof data !== "object" || Array.isArray(data)) return 0;
+  const a = data as { ok?: unknown; count?: unknown };
+  return a.ok === true && typeof a.count === "number" ? a.count : 0;
 }
 
 export default function AdminDashboard() {
@@ -204,6 +314,9 @@ export default function AdminDashboard() {
       </Suspense>
       <Suspense fallback={<p className="mb-6 text-sm text-slate-500">Loading the scripts figures...</p>}>
         <ScriptsOverview />
+      </Suspense>
+      <Suspense fallback={<p className="mb-6 text-sm text-slate-500">Loading the marking figures...</p>}>
+        <MarkingOverview />
       </Suspense>
       <AccountsOverview accountsHref="/admin/accounts" roles={["admin", "owner"]} />
     </AppShell>

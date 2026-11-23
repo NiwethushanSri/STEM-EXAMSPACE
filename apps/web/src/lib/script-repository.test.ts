@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   SCRIPT_STATES,
   STATE_LABEL,
+  actionText,
+  beingMarked,
+  handBackBlocked,
+  picturesToCheckText,
   listArgs,
   pageLabel,
   pagesEditable,
@@ -15,6 +19,7 @@ import {
   reprocessable,
   reprocessRefusal,
   stateText,
+  takenBackReasonText,
   turnText,
   voidable,
   type DetailUpload,
@@ -198,5 +203,76 @@ describe("the repository actions", () => {
     expect(repoFailureMessage({ code: "staff_changes", reason: "hidden_areas" }, "reprocess")).toBe(
       "Staff have worked on pages of this file, so reprocessing it would undo that work and is not allowed.",
     );
+  });
+});
+
+describe("taking a script back from the markers", () => {
+  const takenBack = (state: string, jobs: unknown[] = [], reason = "name_visible") => {
+    const d = detail();
+    return parseScriptDetail({
+      ...d,
+      script: { ...d.script, state, taken_back_at: "2031-08-05T09:00:00Z", taken_back_reason: reason },
+      uploads: [{ ...d.uploads[0], jobs }],
+    })!;
+  };
+  it("reads when and why the script was taken back", () => {
+    const d = takenBack("needs_attention");
+    expect(d.script).toMatchObject({ takenBackAt: "2031-08-05T09:00:00Z", takenBackReason: "name_visible" });
+    expect(parseScriptDetail(detail())!.script).toMatchObject({ takenBackAt: null, takenBackReason: null });
+    expect(takenBackReasonText("name_visible")).toBe("A marker reported a visible name.");
+    expect(takenBackReasonText("Check the pages")).toBe("Check the pages");
+    expect(takenBackReasonText(null)).toBe("");
+    expect(actionText("marking_script_taken_back")).toBe("Taken back from the markers");
+    expect(actionText("marking_script_handed_back")).toBe("Handed back to the markers");
+  });
+  it("knows which scripts are with the markers", () => {
+    expect(["ready_to_mark", "marking", "marked"].every((s) => beingMarked(s as never))).toBe(true);
+    expect(["verified", "needs_attention", "checked", "final", "void"].some((s) => beingMarked(s as never))).toBe(false);
+  });
+  it("says in words why a script cannot be handed back yet", () => {
+    expect(handBackBlocked(takenBack("needs_attention"))).toBe(
+      "The script must be verified before it goes back to the markers. Settle its open problems first.",
+    );
+    expect(handBackBlocked(takenBack("checking"))).toContain("must be verified");
+    const remask = [{ id: 9, kind: "remask", state: "queued", attempts: 0, last_error: null, created_at: null, finished_at: null }];
+    expect(handBackBlocked(takenBack("verified", remask))).toBe("Its marking pictures are being made again. Hand it back when they are ready.");
+    expect(handBackBlocked(takenBack("verified", [{ ...remask[0], kind: "prepare", state: "running" }]))).toContain("being made again");
+    expect(handBackBlocked(takenBack("verified", [{ ...remask[0], state: "done" }]))).toBeNull();
+    // Not taken back: there is nothing to hand back.
+    expect(handBackBlocked(parseScriptDetail(detail())!)).toBeNull();
+  });
+  it("says when a marking picture check is what keeps it back (Phase 3A Task 8)", () => {
+    const waiting = (n: number, exceptions: unknown[] = []) => {
+      const d = detail();
+      return parseScriptDetail({
+        ...d,
+        script: { ...d.script, state: "needs_attention", taken_back_at: "2031-08-05T09:00:00Z", taken_back_reason: "Check", pictures_to_check: n },
+        uploads: [{ ...d.uploads[0], jobs: [] }],
+        exceptions,
+      })!;
+    };
+    expect(waiting(1).script.picturesToCheck).toBe(1);
+    expect(parseScriptDetail(detail())!.script.picturesToCheck).toBe(0);
+    expect(handBackBlocked(waiting(1))).toBe("A marking picture waits for a check under Marking pictures to check.");
+    expect(handBackBlocked(waiting(2))).toBe("2 marking pictures wait for a check under Marking pictures to check.");
+    expect(picturesToCheckText(0)).toBeNull();
+    // An open problem keeps it from verified first: settle that.
+    const open = { id: "e1", kind: "poor_quality", state: "open", created_at: "2031-08-04T11:00:00Z", details: {} };
+    expect(handBackBlocked(waiting(1, [open]))).toContain("Settle its open problems first");
+    expect(handBackBlocked(waiting(0))).toContain("Settle its open problems first");
+  });
+  it("makes the calls and says what happened", () => {
+    expect(repoRpc(SCRIPT, { action: "take_back", reason: " Place a page " })).toEqual({
+      fn: "marking_script_take_back", args: { p_script: SCRIPT, p_reason: "Place a page" },
+    });
+    expect(repoRpc(SCRIPT, { action: "hand_back", reason: "  " })).toEqual({ fn: "marking_script_hand_back", args: { p_script: SCRIPT, p_reason: null } });
+    expect(repoRpc(SCRIPT, { action: "hand_back", reason: "Name hidden" })).toEqual({
+      fn: "marking_script_hand_back", args: { p_script: SCRIPT, p_reason: "Name hidden" },
+    });
+    expect(repoDoneMessage({ action: "take_back", reason: "x" })).toBe("The script is taken back from the markers. Its pages can be changed now.");
+    expect(repoDoneMessage({ action: "hand_back", reason: "" })).toBe("The script is handed back to the markers.");
+    expect(repoFailureMessage({ code: "conflict", reason: "not_verified" }, "hand_back")).toContain("must be verified");
+    expect(repoFailureMessage({ code: "conflict", reason: "pictures_updating" }, "hand_back")).toContain("being made again");
+    expect(repoFailureMessage({ code: "conflict", reason: "taken_back" }, "take_back")).toContain("already taken back");
   });
 });

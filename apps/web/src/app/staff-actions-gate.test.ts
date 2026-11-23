@@ -16,6 +16,13 @@ vi.mock("@/lib/staff-gate", () => ({
 vi.mock("@/lib/supabase/server", () => ({ createClient }));
 vi.mock("@/lib/exam-rpc", () => ({ callSaveExam: vi.fn(), explainSaveConflict: vi.fn(), readRpc: vi.fn() }));
 vi.mock("@/lib/bookings-admin", () => ({ searchStudents: vi.fn() }));
+const structure = vi.hoisted(() => ({
+  saveStructure: vi.fn(),
+  beginMarkSchemeFile: vi.fn(),
+  markSchemeFileStored: vi.fn(),
+  removeMarkSchemeFile: vi.fn(),
+}));
+vi.mock("@/lib/exam-structure-server", () => structure);
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 const raw = {
@@ -36,6 +43,7 @@ beforeEach(() => {
   state.role = "teacher";
   state.calls.length = 0;
   createClient.mockClear();
+  for (const f of Object.values(structure)) f.mockClear();
 });
 
 describe("admin staff actions called directly by a teacher", () => {
@@ -79,6 +87,68 @@ describe("teacher action called by an admin", () => {
     const { saveTeacherExamAction } = await import("./teacher/exams/actions");
     await expect(saveTeacherExamAction(raw)).rejects.toThrow("NEXT_REDIRECT");
     expect(state.calls[0]).toEqual(["teacher"]);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("questions and mark scheme actions", () => {
+  const draft = { groups: [], option_groups: [], questions: [] };
+  it("the admin ones are refused for a teacher and touch nothing", async () => {
+    const a = await import("./admin/exams/[id]/actions");
+    await expect(a.saveStructureAction(UUID, draft, "Reason")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.markSchemeBeginAction(UUID, 1000)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.markSchemeStoredAction(UUID, UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.markSchemeRemoveAction(UUID, UUID, "Wrong file")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(state.calls).toHaveLength(4);
+    expect(Object.values(structure).some((f) => f.mock.calls.length > 0)).toBe(false);
+  });
+  it("the marking open and close ones are refused for a teacher and touch nothing", async () => {
+    const a = await import("./admin/exams/[id]/actions");
+    await expect(a.saveMarkingSettingsAction(UUID, { mode: "whole", deadlineDate: "", deadlineTime: "" })).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.openMarkingAction(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.closeMarkingAction(UUID, "Marking is finished")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.reopenMarkingAction(UUID, "More scripts came in")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(state.calls).toHaveLength(4);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the teacher ones are refused for an admin and touch nothing", async () => {
+    state.role = "admin";
+    const t = await import("./teacher/exams/actions");
+    await expect(t.saveTeacherStructureAction(UUID, draft)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(t.teacherMarkSchemeBeginAction(UUID, 1000)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(t.teacherMarkSchemeStoredAction(UUID, UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(t.teacherMarkSchemeRemoveAction(UUID, UUID, "Wrong file")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls.every((c) => c.join() === "teacher")).toBe(true);
+    expect(state.calls).toHaveLength(4);
+    expect(Object.values(structure).some((f) => f.mock.calls.length > 0)).toBe(false);
+  });
+});
+
+describe("marking actions", () => {
+  it("the marker and lead ones are refused for a tutor and touch nothing", async () => {
+    state.role = "tutor";
+    const m = await import("./marking/actions");
+    await expect(m.nextScript(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.nextScript(UUID, UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.giveBack(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.releaseAlert(UUID, "Pictures checked")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.noteAlert(UUID, "Seen it")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(m.releaseAllAlerts(UUID, "All checked")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(6);
+    expect(state.calls.every((c) => c.join() === "corrector,teacher,admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the admin ones are refused for a corrector (a lead marker too) and touch nothing", async () => {
+    state.role = "corrector";
+    const a = await import("./admin/marking/actions");
+    await expect(a.assignUnits([UUID], UUID, "Cover for Ann")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.assignSome(UUID, null, UUID, 5, "Even the load")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.takeBackUnits([UUID], "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.reassignUnits([UUID], UUID, "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(4);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
   });
 });

@@ -271,6 +271,60 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"exam_mark_scheme_files": {
+                  Row: {
+                    "byte_size": number,"exam_id": string,"id": string,"removed_at": string | null,"state": string,"storage_path": string,"uploaded_at": string | null,"uploaded_by": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "byte_size": number,"exam_id": string,"id"?: string,"removed_at"?: string | null,"state"?: string,"storage_path": string,"uploaded_at"?: string | null,"uploaded_by": string
+                  }
+                  Update: {
+                    "byte_size"?: number,"exam_id"?: string,"id"?: string,"removed_at"?: string | null,"state"?: string,"storage_path"?: string,"uploaded_at"?: string | null,"uploaded_by"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"exam_marking": {
+                  Row: {
+                    "closed_at": string | null,"closed_by": string | null,"deadline": string | null,"exam_id": string,"mode": Database["public"]['Enums']["marking_mode"],"opened_at": string | null,"opened_by": string | null,"structure_version": number,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"exam_id": string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"structure_version"?: number,"updated_at"?: string
+                  }
+                  Update: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"exam_id"?: string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"structure_version"?: number,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "exam_marking_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: true
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_marking_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: true
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"exam_option_groups": {
+                  Row: {
+                    "choose": number,"exam_id": string,"id": string,"label": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "choose": number,"exam_id": string,"id"?: string,"label": string
+                  }
+                  Update: {
+                    "choose"?: number,"exam_id"?: string,"id"?: string,"label"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
                 },"exam_papers": {
                   Row: {
                     "byte_size": number,"corrected_notified_at": string | null,"exam_id": string,"id": string,"kind": Database["public"]['Enums']["paper_kind"],"page_count": number,"pages_reviewed_at": string | null,"replace_reason": string | null,"storage_path": string,"superseded_at": string | null,"title": string,"uploaded_at": string,"uploaded_by": string | null,"version": number
@@ -300,6 +354,50 @@ isOneToOne: false
       columns: ["uploaded_by"]
 isOneToOne: false
       referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"exam_questions": {
+                  Row: {
+                    "alternatives": string | null,"areas": NonNullable<Json>,"created_at": string,"exam_id": string,"group_id": string | null,"guidance": string | null,"id": string,"label": string,"levels": boolean,"mark_step": number,"max_mark": number | null,"option_group_id": string | null,"pages": (number)[],"parent_id": string | null,"position": number,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "alternatives"?: string | null,"areas"?: NonNullable<Json>,"created_at"?: string,"exam_id": string,"group_id"?: string | null,"guidance"?: string | null,"id"?: string,"label": string,"levels"?: boolean,"mark_step"?: number,"max_mark"?: number | null,"option_group_id"?: string | null,"pages"?: (number)[],"parent_id"?: string | null,"position": number,"updated_at"?: string
+                  }
+                  Update: {
+                    "alternatives"?: string | null,"areas"?: NonNullable<Json>,"created_at"?: string,"exam_id"?: string,"group_id"?: string | null,"guidance"?: string | null,"id"?: string,"label"?: string,"levels"?: boolean,"mark_step"?: number,"max_mark"?: number | null,"option_group_id"?: string | null,"pages"?: (number)[],"parent_id"?: string | null,"position"?: number,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "exam_questions_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_questions_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_questions_group_id_fkey"
+      columns: ["group_id"]
+isOneToOne: false
+      referencedRelation: "question_groups"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_questions_option_group_id_fkey"
+      columns: ["option_group_id"]
+isOneToOne: false
+      referencedRelation: "exam_option_groups"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_questions_parent_id_fkey"
+      columns: ["parent_id"]
+isOneToOne: false
+      referencedRelation: "exam_questions"
       referencedColumns: ["id"]
     }
                   ]
@@ -376,6 +474,210 @@ isOneToOne: false
                   }
                   Relationships: [
                     
+                  ]
+                },"mark_scheme_points": {
+                  Row: {
+                    "id": string,"label": string | null,"marks": number,"marks_to": number | null,"position": number,"question_id": string,"text": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "id"?: string,"label"?: string | null,"marks": number,"marks_to"?: number | null,"position": number,"question_id": string,"text": string
+                  }
+                  Update: {
+                    "id"?: string,"label"?: string | null,"marks"?: number,"marks_to"?: number | null,"position"?: number,"question_id"?: string,"text"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "mark_scheme_points_question_id_fkey"
+      columns: ["question_id"]
+isOneToOne: false
+      referencedRelation: "exam_questions"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marker_approvals": {
+                  Row: {
+                    "approved_at": string,"approved_by": string | null,"lead": boolean,"marker_id": string,"subject_id": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "approved_at": string,"approved_by"?: string | null,"lead"?: boolean,"marker_id": string,"subject_id": number
+                  }
+                  Update: {
+                    "approved_at"?: string,"approved_by"?: string | null,"lead"?: boolean,"marker_id"?: string,"subject_id"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_approvals_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_approvals_subject_id_fkey"
+      columns: ["subject_id"]
+isOneToOne: false
+      referencedRelation: "subjects"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marker_conflicts": {
+                  Row: {
+                    "marker_id": string,"note": string | null,"recorded_at": string,"recorded_by": string | null,"student_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "marker_id": string,"note"?: string | null,"recorded_at": string,"recorded_by"?: string | null,"student_id": string
+                  }
+                  Update: {
+                    "marker_id"?: string,"note"?: string | null,"recorded_at"?: string,"recorded_by"?: string | null,"student_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_conflicts_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_conflicts_student_id_fkey"
+      columns: ["student_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marking_alerts": {
+                  Row: {
+                    "closed_at": string | null,"closed_by": string | null,"created_at": string,"exam_id": string,"id": string,"kind": string,"page_id": string | null,"reason": string | null,"resolution": string | null,"script_id": string,"state": string,"unit_id": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"created_at"?: string,"exam_id": string,"id"?: string,"kind": string,"page_id"?: string | null,"reason"?: string | null,"resolution"?: string | null,"script_id": string,"state"?: string,"unit_id"?: string | null
+                  }
+                  Update: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"created_at"?: string,"exam_id"?: string,"id"?: string,"kind"?: string,"page_id"?: string | null,"reason"?: string | null,"resolution"?: string | null,"script_id"?: string,"state"?: string,"unit_id"?: string | null
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"marking_assignments": {
+                  Row: {
+                    "assigned_by": string | null,"created_at": string,"end_reason": string | null,"ended_at": string | null,"hold_until": string | null,"how": string,"id": string,"kind": Database["public"]['Enums']["marking_kind"],"marker_id": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "assigned_by"?: string | null,"created_at"?: string,"end_reason"?: string | null,"ended_at"?: string | null,"hold_until"?: string | null,"how": string,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"marker_id": string,"unit_id": string
+                  }
+                  Update: {
+                    "assigned_by"?: string | null,"created_at"?: string,"end_reason"?: string | null,"ended_at"?: string | null,"hold_until"?: string | null,"how"?: string,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"marker_id"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_assignments_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marking_assignments_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: false
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marking_unit_exclusions": {
+                  Row: {
+                    "created_at": string,"marker_id": string,"reason": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"marker_id": string,"reason": string,"unit_id": string
+                  }
+                  Update: {
+                    "created_at"?: string,"marker_id"?: string,"reason"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_unit_exclusions_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: false
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marking_units": {
+                  Row: {
+                    "created_at": string,"exam_id": string,"group_id": string | null,"hold_reason": string | null,"id": string,"on_hold": boolean,"script_id": string,"state": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"exam_id": string,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"script_id": string,"state"?: string
+                  }
+                  Update: {
+                    "created_at"?: string,"exam_id"?: string,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"script_id"?: string,"state"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_units_group_id_fkey"
+      columns: ["group_id"]
+isOneToOne: false
+      referencedRelation: "question_groups"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marking_units_script_id_fkey"
+      columns: ["script_id"]
+isOneToOne: false
+      referencedRelation: "scripts"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"markings": {
+                  Row: {
+                    "active_seconds": number,"id": string,"kind": Database["public"]['Enums']["marking_kind"],"last_saved_at": string | null,"lead_note": string | null,"marker_id": string,"pages_changed_at": string | null,"pages_key": string | null,"rev": number,"set_aside_at": string | null,"set_aside_reason": string | null,"started_at": string,"status": string,"structure_version": number | null,"submitted_at": string | null,"total": number | null,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "active_seconds"?: number,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id": string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id": string
+                  }
+                  Update: {
+                    "active_seconds"?: number,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id"?: string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "markings_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "markings_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: false
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"page_annotations": {
+                  Row: {
+                    "created_at": string,"deleted_at": string | null,"id": string,"kind": string,"marking_id": string,"page_id": string,"page_rotation": number,"points": Json | null,"question_id": string | null,"text": string | null,"x": number,"y": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"deleted_at"?: string | null,"id"?: string,"kind": string,"marking_id": string,"page_id": string,"page_rotation": number,"points"?: Json | null,"question_id"?: string | null,"text"?: string | null,"x": number,"y": number
+                  }
+                  Update: {
+                    "created_at"?: string,"deleted_at"?: string | null,"id"?: string,"kind"?: string,"marking_id"?: string,"page_id"?: string,"page_rotation"?: number,"points"?: Json | null,"question_id"?: string | null,"text"?: string | null,"x"?: number,"y"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "page_annotations_marking_id_fkey"
+      columns: ["marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    }
                   ]
                 },"paper_copies": {
                   Row: {
@@ -653,6 +955,60 @@ isOneToOne: false
                   Relationships: [
                     
                   ]
+                },"question_groups": {
+                  Row: {
+                    "exam_id": string,"id": string,"label": string,"position": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "exam_id": string,"id"?: string,"label": string,"position": number
+                  }
+                  Update: {
+                    "exam_id"?: string,"id"?: string,"label"?: string,"position"?: number
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"question_mark_history": {
+                  Row: {
+                    "after_submit": boolean,"changed_at": string,"changed_by": string,"id": number,"mark": number | null,"marking_id": string,"not_attempted": boolean,"question_id": string,"reason": string | null,"source": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "after_submit": boolean,"changed_at": string,"changed_by": string,"id"?: never,"mark"?: number | null,"marking_id": string,"not_attempted": boolean,"question_id": string,"reason"?: string | null,"source": string
+                  }
+                  Update: {
+                    "after_submit"?: boolean,"changed_at"?: string,"changed_by"?: string,"id"?: never,"mark"?: number | null,"marking_id"?: string,"not_attempted"?: boolean,"question_id"?: string,"reason"?: string | null,"source"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"question_marks": {
+                  Row: {
+                    "mark": number | null,"marking_id": string,"not_attempted": boolean,"question_id": string,"source": string,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "mark"?: number | null,"marking_id": string,"not_attempted"?: boolean,"question_id": string,"source"?: string,"updated_at"?: string
+                  }
+                  Update: {
+                    "mark"?: number | null,"marking_id"?: string,"not_attempted"?: boolean,"question_id"?: string,"source"?: string,"updated_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "question_marks_marking_id_fkey"
+      columns: ["marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "question_marks_question_id_fkey"
+      columns: ["question_id"]
+isOneToOne: false
+      referencedRelation: "exam_questions"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"scan_batches": {
                   Row: {
                     "centre_id": string,"created_at": string,"created_by": string | null,"exam_id": string,"id": string,"manifest_id": string | null,"number": string,"submitted_at": string | null
@@ -695,17 +1051,23 @@ isOneToOne: false
                   ]
                 },"script_notices": {
                   Row: {
-                    "attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
+                    "alert_id": string | null,"attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"skipped_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
                   }
                   ComputedFields: "script_notice_content" | "script_notice_count" | "script_notice_recipients"
                   Insert: {
-                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"submission_id"?: string | null
+                    "alert_id"?: string | null,"attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Update: {
-                    "attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"submission_id"?: string | null
+                    "alert_id"?: string | null,"attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Relationships: [
                     {
+      foreignKeyName: "script_notices_alert_id_fkey"
+      columns: ["alert_id"]
+isOneToOne: false
+      referencedRelation: "marking_alerts"
+      referencedColumns: ["id"]
+    },{
       foreignKeyName: "script_notices_exception_id_fkey"
       columns: ["exception_id"]
 isOneToOne: false
@@ -805,14 +1167,14 @@ isOneToOne: false
                   ]
                 },"script_pages": {
                   Row: {
-                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"full_rotation": number,"id": string,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank": boolean,"booking_id": string | null,"copy_id": string | null,"copy_page": number | null,"created_at": string,"exam_id": string,"full_path": string,"full_rotation": number,"id": string,"marking_checked_at": string | null,"marking_checked_by": string | null,"marking_checked_path": string | null,"marking_inputs": string | null,"marking_path": string | null,"placed_after": number | null,"quality": NonNullable<Json>,"replaced_at": string | null,"rotation": number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"full_rotation"?: number,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id": string,"full_path": string,"full_rotation"?: number,"id"?: string,"marking_checked_at"?: string | null,"marking_checked_by"?: string | null,"marking_checked_path"?: string | null,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index": number,"state": Database["public"]['Enums']["page_state"],"upload_id": string
                   }
                   Update: {
-                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"full_rotation"?: number,"id"?: string,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
+                    "blank"?: boolean,"booking_id"?: string | null,"copy_id"?: string | null,"copy_page"?: number | null,"created_at"?: string,"exam_id"?: string,"full_path"?: string,"full_rotation"?: number,"id"?: string,"marking_checked_at"?: string | null,"marking_checked_by"?: string | null,"marking_checked_path"?: string | null,"marking_inputs"?: string | null,"marking_path"?: string | null,"placed_after"?: number | null,"quality"?: NonNullable<Json>,"replaced_at"?: string | null,"rotation"?: number,"source_index"?: number,"state"?: Database["public"]['Enums']["page_state"],"upload_id"?: string
                   }
                   Relationships: [
                     {
@@ -826,6 +1188,12 @@ isOneToOne: false
       columns: ["copy_id"]
 isOneToOne: false
       referencedRelation: "paper_copies"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_pages_marking_checked_by_fkey"
+      columns: ["marking_checked_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
       referencedColumns: ["id"]
     },{
       foreignKeyName: "script_pages_upload_id_fkey"
@@ -895,14 +1263,14 @@ isOneToOne: false
                   ]
                 },"scripts": {
                   Row: {
-                    "attention_notified_at": string | null,"booking_id": string,"complete": boolean,"created_at": string,"exam_id": string,"extras_locked": Json | null,"id": string,"late": boolean,"late_decision": string | null,"number": string,"received_at": string | null,"source": Database["public"]['Enums']["script_source"],"state": Database["public"]['Enums']["script_state"],"state_reason": string | null,"updated_at": string,"version": number
+                    "attention_notified_at": string | null,"booking_id": string,"complete": boolean,"created_at": string,"exam_id": string,"extras_locked": Json | null,"id": string,"late": boolean,"late_decision": string | null,"number": string,"received_at": string | null,"source": Database["public"]['Enums']["script_source"],"state": Database["public"]['Enums']["script_state"],"state_reason": string | null,"taken_back_at": string | null,"taken_back_by": string | null,"taken_back_reason": string | null,"updated_at": string,"version": number
                   }
                   ComputedFields: never
                   Insert: {
-                    "attention_notified_at"?: string | null,"booking_id": string,"complete"?: boolean,"created_at"?: string,"exam_id": string,"extras_locked"?: Json | null,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number": string,"received_at"?: string | null,"source": Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"updated_at"?: string,"version"?: number
+                    "attention_notified_at"?: string | null,"booking_id": string,"complete"?: boolean,"created_at"?: string,"exam_id": string,"extras_locked"?: Json | null,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number": string,"received_at"?: string | null,"source": Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"taken_back_at"?: string | null,"taken_back_by"?: string | null,"taken_back_reason"?: string | null,"updated_at"?: string,"version"?: number
                   }
                   Update: {
-                    "attention_notified_at"?: string | null,"booking_id"?: string,"complete"?: boolean,"created_at"?: string,"exam_id"?: string,"extras_locked"?: Json | null,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number"?: string,"received_at"?: string | null,"source"?: Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"updated_at"?: string,"version"?: number
+                    "attention_notified_at"?: string | null,"booking_id"?: string,"complete"?: boolean,"created_at"?: string,"exam_id"?: string,"extras_locked"?: Json | null,"id"?: string,"late"?: boolean,"late_decision"?: string | null,"number"?: string,"received_at"?: string | null,"source"?: Database["public"]['Enums']["script_source"],"state"?: Database["public"]['Enums']["script_state"],"state_reason"?: string | null,"taken_back_at"?: string | null,"taken_back_by"?: string | null,"taken_back_reason"?: string | null,"updated_at"?: string,"version"?: number
                   }
                   Relationships: [
                     {
@@ -1207,6 +1575,21 @@ isOneToOne: false
 "exam_code_generate":
 { Args: { "p_paper": string,"p_self": string,"p_starts_at": string,"p_subject": number }; Returns: string
                            },
+"exam_structure_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"exam_structure_max_total":
+{ Args: { "p_exam": string }; Returns: number
+                           },
+"exam_structure_pages":
+{ Args: { "p_exam": string }; Returns: (number)[]
+                           },
+"exam_structure_save":
+{ Args: { "p_exam": string,"p_reason"?: string,"p_structure": Json }; Returns: Json
+                           },
+"exam_structure_valid":
+{ Args: { "p_pages": (number)[],"p_structure": Json }; Returns: boolean
+                           },
 "expire_unconfirmed":
 { Args: { "p_now"?: string }; Returns: number
                            },
@@ -1295,6 +1678,12 @@ isOneToOne: false
 "home_upload_type_ok":
 { Args: { "p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string }; Returns: boolean
                            },
+"is_lead_for":
+{ Args: { "p_subject": number,"p_user": string }; Returns: boolean
+                           },
+"is_marker_for":
+{ Args: { "p_subject": number,"p_user": string }; Returns: boolean
+                           },
 "is_staff_admin":
 { Args: Record<PropertyKey, never>; Returns: boolean
                            },
@@ -1327,6 +1716,232 @@ isOneToOne: false
                            },
 "mark_booking_paid":
 { Args: { "p_booking": string,"p_note": string }; Returns: Json
+                           },
+"mark_scheme_file_begin":
+{ Args: { "p_bytes": number,"p_exam": string }; Returns: Json
+                           },
+"mark_scheme_file_can_change":
+{ Args: { "p_exam": string,"p_user": string }; Returns: boolean
+                           },
+"mark_scheme_file_remove":
+{ Args: { "p_file": string,"p_reason": string }; Returns: Json
+                           },
+"mark_scheme_file_stored":
+{ Args: { "p_file": string }; Returns: Json
+                           },
+"mark_scheme_path_allowed":
+{ Args: { "p_name": string }; Returns: boolean
+                           },
+"mark_scheme_upload_allowed":
+{ Args: { "p_name": string }; Returns: boolean
+                           },
+"marker_approve":
+{ Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"marker_audit_reason":
+{ Args: { "p_detail": string,"p_reason": string }; Returns: string
+                           },
+"marker_conflict_candidates":
+{ Args: { "p_query": string }; Returns: Json
+                           },
+"marker_conflict_remove":
+{ Args: { "p_marker": string,"p_reason": string,"p_student": string }; Returns: Json
+                           },
+"marker_conflict_set":
+{ Args: { "p_marker": string,"p_note": string,"p_reason": string,"p_student": string }; Returns: Json
+                           },
+"marker_set_lead":
+{ Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"marker_unapprove":
+{ Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"markers_list":
+{ Args: Record<PropertyKey, never>; Returns: Json
+                           },
+"marking_alert_can_release":
+{ Args: { "p_script": string }; Returns: string
+                           },
+"marking_alert_note":
+{ Args: { "p_alert": string,"p_reason": string }; Returns: Json
+                           },
+"marking_alert_raise":
+{ Args: { "p_kind": string,"p_page": string,"p_script": string,"p_unit": string }; Returns: string
+                           },
+"marking_alert_release":
+{ Args: { "p_alert": string,"p_reason": string }; Returns: Json
+                           },
+"marking_alerts_list":
+{ Args: { "p_exam"?: string,"p_state"?: string }; Returns: Json
+                           },
+"marking_alerts_release_all":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_assign":
+{ Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_assign_some":
+{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_reason": string }; Returns: Json
+                           },
+"marking_close":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_dashboard":
+{ Args: { "p_now"?: string }; Returns: Json
+                           },
+"marking_exam_get":
+{ Args: { "p_exam": string,"p_now"?: string }; Returns: Json
+                           },
+"marking_exam_overdue":
+{ Args: { "p_exam": string,"p_now": string }; Returns: boolean
+                           },
+"marking_exam_sync":
+{ Args: { "p_exam": string,"p_now": string }; Returns: number
+                           },
+"marking_give_back":
+{ Args: { "p_reason"?: string,"p_unit": string }; Returns: Json
+                           },
+"marking_holds_expire":
+{ Args: { "p_now": string }; Returns: number
+                           },
+"marking_marker_blocked":
+{ Args: { "p_marker": string,"p_student": string }; Returns: boolean
+                           },
+"marking_mask_key":
+{ Args: { "p_copy": string,"p_copy_page": number,"p_page": string,"p_rotation": number }; Returns: string
+                           },
+"marking_missing":
+{ Args: { "p_marking": string,"p_unit": string }; Returns: Json
+                           },
+"marking_my_work":
+{ Args: { "p_now"?: string }; Returns: Json
+                           },
+"marking_name_visible":
+{ Args: { "p_page": string,"p_unit": string }; Returns: Json
+                           },
+"marking_next":
+{ Args: { "p_exam": string,"p_group"?: string,"p_now"?: string }; Returns: Json
+                           },
+"marking_open":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_ops_apply":
+{ Args: { "p_actor": string,"p_after": boolean,"p_marking": string,"p_ops": Json,"p_reason": string,"p_script": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_pages_key":
+{ Args: { "p_script": string }; Returns: string
+                           },
+"marking_picture_allowed":
+{ Args: { "p_name": string }; Returns: boolean
+                           },
+"marking_progress":
+{ Args: { "p_exam"?: string,"p_now"?: string }; Returns: Json
+                           },
+"marking_reassign":
+{ Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_reopen":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_save":
+{ Args: { "p_active_seconds"?: number,"p_marking": string,"p_now"?: string,"p_ops": Json,"p_reason"?: string,"p_rev": number }; Returns: Json
+                           },
+"marking_script_blocked":
+{ Args: { "p_now": string,"p_script": string }; Returns: string
+                           },
+"marking_script_busy":
+{ Args: { "p_script": string }; Returns: boolean
+                           },
+"marking_script_hand_back":
+{ Args: { "p_reason"?: string,"p_script": string }; Returns: Json
+                           },
+"marking_script_hold":
+{ Args: { "p_alert_kind": string,"p_hold_reason": string,"p_page": string,"p_script": string }; Returns: undefined
+                           },
+"marking_script_lock":
+{ Args: { "p_script": string }; Returns: undefined
+                           },
+"marking_script_pages":
+{ Args: { "p_script": string }; Returns: {
+              "copy_page": number,"extra": boolean,"marking_path": string,"n": number,"page_id": string,"rotation": number
+            }[]
+                           },
+"marking_script_state":
+{ Args: { "p_script": string }; Returns: undefined
+                           },
+"marking_script_take_back":
+{ Args: { "p_reason": string,"p_script": string }; Returns: Json
+                           },
+"marking_script_take_back_as":
+{ Args: { "p_actor": string,"p_reason": string,"p_script": string }; Returns: undefined
+                           },
+"marking_script_waiting":
+{ Args: { "p_now": string,"p_script": string }; Returns: string
+                           },
+"marking_scripts_pages":
+{ Args: { "p_scripts": (string)[] }; Returns: {
+              "copy_page": number,"extra": boolean,"marking_path": string,"n": number,"page_id": string,"rotation": number,"script_id": string
+            }[]
+                           },
+"marking_settings_set":
+{ Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
+                           },
+"marking_submit":
+{ Args: { "p_marking": string,"p_now"?: string,"p_rev": number }; Returns: Json
+                           },
+"marking_take_back":
+{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_tick":
+{ Args: Record<PropertyKey, never>; Returns: undefined
+                           },
+"marking_total":
+{ Args: { "p_marking": string }; Returns: number
+                           },
+"marking_unit_blocked":
+{ Args: { "p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
+                           },
+"marking_unit_max_total":
+{ Args: { "p_unit": string }; Returns: number
+                           },
+"marking_unit_open":
+{ Args: { "p_now"?: string,"p_unit": string }; Returns: Json
+                           },
+"marking_unit_questions":
+{ Args: { "p_unit": string }; Returns: {
+              "label": string,"leaf": boolean,"mark_step": number,"max_mark": number,"parent_id": string,"path": (number)[],"question_id": string,"top_id": string
+            }[]
+                           },
+"marking_unit_take":
+{ Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_marker": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_unit_take_back":
+{ Args: { "p_unit": string }; Returns: boolean
+                           },
+"marking_units_candidates":
+{ Args: { "p_exam": string,"p_group": string,"p_marker": string }; Returns: {
+              "group_id": string,"script_id": string,"unit_id": string
+            }[]
+                           },
+"marking_units_free":
+{ Args: { "p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: {
+              "group_id": string,"unit_id": string
+            }[]
+                           },
+"marking_units_list":
+{ Args: { "p_exam": string,"p_marker"?: string,"p_state"?: string }; Returns: Json
+                           },
+"marking_units_lock":
+{ Args: { "p_units": (string)[] }; Returns: undefined
+                           },
+"marking_units_pick":
+{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: (string)[]
+                           },
+"marking_units_refresh":
+{ Args: { "p_script": string }; Returns: number
+                           },
+"marking_work_blocked":
+{ Args: { "p_now": string,"p_unit": string,"p_user": string }; Returns: string
                            },
 "money_totals":
 { Args: { "p_from": string,"p_to": string }; Returns: Json
@@ -1527,6 +2142,9 @@ isOneToOne: false
 "source": Database["public"]['Enums']["script_source"],
 "state": Database["public"]['Enums']["script_state"],
 "state_reason": string | null,
+"taken_back_at": string | null,
+"taken_back_by": string | null,
+"taken_back_reason": string | null,
 "updated_at": string,
 "version": number
             }
@@ -1556,6 +2174,9 @@ isOneToOne: false
                            },
 "script_exception_candidates":
 { Args: { "p_exam": string,"p_query": string }; Returns: Json
+                           },
+"script_exception_check_due":
+{ Args: { "p_exception": string }; Returns: Json
                            },
 "script_exception_close":
 { Args: { "p_action": string,"p_actor": string,"p_id": string,"p_now": string,"p_reason": string,"p_resolution": string }; Returns: undefined
@@ -1589,6 +2210,12 @@ isOneToOne: false
               "file_position": number,"page_id": string,"placed_after": number,"source_index": number
             }[]
                            },
+"script_family_notices_skip":
+{ Args: { "p_reason": string }; Returns: Json
+                           },
+"script_family_notices_waiting":
+{ Args: Record<PropertyKey, never>; Returns: Json
+                           },
 "script_home_reject":
 { Args: { "p_actor": string,"p_booking": string,"p_now": string,"p_reason": string,"p_subs": (string)[] }; Returns: undefined
                            },
@@ -1603,6 +2230,14 @@ isOneToOne: false
                            },
 "script_links_write":
 { Args: { "p_actor": string,"p_links": Json,"p_now": string,"p_reason": string,"p_script": string }; Returns: boolean
+                           },
+"script_marking_checks_due":
+{ Args: { "p_exam"?: string }; Returns: {
+              "copy_page": number,"page_id": string,"script_id": string
+            }[]
+                           },
+"script_marking_checks_list":
+{ Args: { "p_exam"?: string }; Returns: Json
                            },
 "script_notice_content":
 { Args: { "p_notice": Omit<Database["public"]['Tables']["script_notices"]['Row'], Database["public"]['Tables']["script_notices"]['ComputedFields']> }; Returns: Json
@@ -1667,14 +2302,26 @@ isOneToOne: false
 "script_page_locked":
 { Args: { "p_page": string }; Returns: boolean
                            },
+"script_page_marking_checked":
+{ Args: { "p_marking_path": string,"p_page": string }; Returns: Json
+                           },
 "script_page_marking_lost":
 { Args: { "p_cleared"?: boolean,"p_extra"?: Json,"p_page": string }; Returns: undefined
                            },
 "script_page_marking_made":
 { Args: { "p_page": string }; Returns: undefined
                            },
+"script_page_marking_name_shows":
+{ Args: { "p_page": string,"p_reason": string }; Returns: Json
+                           },
+"script_page_needs_marking_check":
+{ Args: { "p_page": string }; Returns: boolean
+                           },
 "script_page_owners":
 { Args: { "p_page": string }; Returns: (string)[]
+                           },
+"script_page_pictures_updating":
+{ Args: { "p_page": string }; Returns: boolean
                            },
 "script_page_poor":
 { Args: { "p_answer": boolean,"p_marking": string,"p_quality": Json }; Returns: boolean
@@ -1718,8 +2365,16 @@ isOneToOne: false
 "script_pages_remasked":
 { Args: { "p_attempt": number,"p_job": number,"p_now"?: string,"p_pages": Json,"p_worker": string }; Returns: Json
                            },
+"script_pages_to_check":
+{ Args: { "p_script": string }; Returns: {
+              "copy_page": number,"page_id": string
+            }[]
+                           },
 "script_pages_valid":
 { Args: { "p_pages": Json,"p_prefix": string }; Returns: boolean
+                           },
+"script_pictures_unused_take":
+{ Args: { "p_limit"?: number,"p_now"?: string }; Returns: Json
                            },
 "script_raise_mixed":
 { Args: { "p_script": string,"p_upload": string }; Returns: undefined
@@ -1837,10 +2492,13 @@ isOneToOne: false
                            },
 "sitting_phase":
 { Args: { "p_exam": Omit<Database["public"]['Tables']["exams"]['Row'], Database["public"]['Tables']["exams"]['ComputedFields']>,"p_now": string }; Returns: string
+                           },
+"structure_can_edit":
+{ Args: { "p_exam": string,"p_user": string }; Returns: boolean
                            }
           }
           Enums: {
-            "account_status": "unconfirmed"|"pending"|"profile_incomplete"|"active"|"suspended","app_role": "owner"|"admin"|"teacher"|"tutor"|"corrector"|"student"|"parent","attendance_status": "present"|"late"|"absent","booking_status": "awaiting_payment"|"paid"|"cancel_requested"|"refunded"|"part_refunded"|"cancelled"|"expired","exam_format": "in_person"|"online"|"both","exam_status": "draft"|"published"|"cancelled"|"completed","exception_kind": "no_code"|"unknown_code"|"other_exam"|"not_expected"|"duplicate"|"missing_pages"|"uncoded_family_page"|"mixed_versions"|"poor_quality"|"late"|"name_visible"|"processing_failed","job_state": "queued"|"running"|"done"|"failed","page_role": "answer"|"cover"|"blank"|"information","page_state": "matched"|"blank"|"duplicate"|"unmatched"|"rejected","paper_download_kind": "home"|"print_pack"|"reprint"|"admin_preview","paper_kind": "paper"|"insert","script_source": "home"|"centre","script_state": "receiving"|"checking"|"needs_attention"|"verified"|"ready_to_mark"|"marking"|"marked"|"checked"|"final"|"withdrawn"|"void","sitting_mode": "centre"|"home","subject_kind": "school"|"entrance","submission_state": "draft"|"checking"|"received"|"needs_attention"|"rejected","upload_kind": "home_photo"|"home_pdf"|"scan_file","upload_state": "pending"|"stored"|"discarded"|"queued"|"processing"|"processed"|"failed"
+            "account_status": "unconfirmed"|"pending"|"profile_incomplete"|"active"|"suspended","app_role": "owner"|"admin"|"teacher"|"tutor"|"corrector"|"student"|"parent","attendance_status": "present"|"late"|"absent","booking_status": "awaiting_payment"|"paid"|"cancel_requested"|"refunded"|"part_refunded"|"cancelled"|"expired","exam_format": "in_person"|"online"|"both","exam_status": "draft"|"published"|"cancelled"|"completed","exception_kind": "no_code"|"unknown_code"|"other_exam"|"not_expected"|"duplicate"|"missing_pages"|"uncoded_family_page"|"mixed_versions"|"poor_quality"|"late"|"name_visible"|"processing_failed","job_state": "queued"|"running"|"done"|"failed","marking_kind": "live"|"second"|"seed"|"practice"|"remark","marking_mode": "whole"|"by_question","page_role": "answer"|"cover"|"blank"|"information","page_state": "matched"|"blank"|"duplicate"|"unmatched"|"rejected","paper_download_kind": "home"|"print_pack"|"reprint"|"admin_preview","paper_kind": "paper"|"insert","script_source": "home"|"centre","script_state": "receiving"|"checking"|"needs_attention"|"verified"|"ready_to_mark"|"marking"|"marked"|"checked"|"final"|"withdrawn"|"void","sitting_mode": "centre"|"home","subject_kind": "school"|"entrance","submission_state": "draft"|"checking"|"received"|"needs_attention"|"rejected","upload_kind": "home_photo"|"home_pdf"|"scan_file","upload_state": "pending"|"stored"|"discarded"|"queued"|"processing"|"processed"|"failed"
           }
           CompositeTypes: {
             [_ in never]: never
@@ -1960,7 +2618,7 @@ export const Constants = {
           }
         },"public": {
           Enums: {
-            "account_status": ["unconfirmed", "pending", "profile_incomplete", "active", "suspended"],"app_role": ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"],"attendance_status": ["present", "late", "absent"],"booking_status": ["awaiting_payment", "paid", "cancel_requested", "refunded", "part_refunded", "cancelled", "expired"],"exam_format": ["in_person", "online", "both"],"exam_status": ["draft", "published", "cancelled", "completed"],"exception_kind": ["no_code", "unknown_code", "other_exam", "not_expected", "duplicate", "missing_pages", "uncoded_family_page", "mixed_versions", "poor_quality", "late", "name_visible", "processing_failed"],"job_state": ["queued", "running", "done", "failed"],"page_role": ["answer", "cover", "blank", "information"],"page_state": ["matched", "blank", "duplicate", "unmatched", "rejected"],"paper_download_kind": ["home", "print_pack", "reprint", "admin_preview"],"paper_kind": ["paper", "insert"],"script_source": ["home", "centre"],"script_state": ["receiving", "checking", "needs_attention", "verified", "ready_to_mark", "marking", "marked", "checked", "final", "withdrawn", "void"],"sitting_mode": ["centre", "home"],"subject_kind": ["school", "entrance"],"submission_state": ["draft", "checking", "received", "needs_attention", "rejected"],"upload_kind": ["home_photo", "home_pdf", "scan_file"],"upload_state": ["pending", "stored", "discarded", "queued", "processing", "processed", "failed"]
+            "account_status": ["unconfirmed", "pending", "profile_incomplete", "active", "suspended"],"app_role": ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"],"attendance_status": ["present", "late", "absent"],"booking_status": ["awaiting_payment", "paid", "cancel_requested", "refunded", "part_refunded", "cancelled", "expired"],"exam_format": ["in_person", "online", "both"],"exam_status": ["draft", "published", "cancelled", "completed"],"exception_kind": ["no_code", "unknown_code", "other_exam", "not_expected", "duplicate", "missing_pages", "uncoded_family_page", "mixed_versions", "poor_quality", "late", "name_visible", "processing_failed"],"job_state": ["queued", "running", "done", "failed"],"marking_kind": ["live", "second", "seed", "practice", "remark"],"marking_mode": ["whole", "by_question"],"page_role": ["answer", "cover", "blank", "information"],"page_state": ["matched", "blank", "duplicate", "unmatched", "rejected"],"paper_download_kind": ["home", "print_pack", "reprint", "admin_preview"],"paper_kind": ["paper", "insert"],"script_source": ["home", "centre"],"script_state": ["receiving", "checking", "needs_attention", "verified", "ready_to_mark", "marking", "marked", "checked", "final", "withdrawn", "void"],"sitting_mode": ["centre", "home"],"subject_kind": ["school", "entrance"],"submission_state": ["draft", "checking", "received", "needs_attention", "rejected"],"upload_kind": ["home_photo", "home_pdf", "scan_file"],"upload_state": ["pending", "stored", "discarded", "queued", "processing", "processed", "failed"]
           }
         }
 } as const

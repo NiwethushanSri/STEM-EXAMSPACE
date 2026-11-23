@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ACCEPT_REASON_MESSAGE, acceptDraftMessage, acceptReasonProblem, draftCandidate, parseUnsentDrafts } from "@/lib/home-drafts";
+import { ACCEPT_REASON_MESSAGE, acceptDraftMessage, acceptReasonProblem, draftCandidate, familyNoticesLine, parseUnsentDrafts, replacesNote, skipNoticesMessage } from "@/lib/home-drafts";
 
 const SUB = "11111111-1111-4111-8111-111111111111";
 const BOOKING = "22222222-2222-4222-8222-222222222222";
@@ -26,6 +26,9 @@ describe("parseUnsentDrafts", () => {
         files: 3,
         lastFileAt: "2031-06-07T11:20:00Z",
         late: true,
+        replacesReceived: false,
+        replacesAll: true,
+        receivedPages: 0,
       },
     ]);
   });
@@ -34,8 +37,18 @@ describe("parseUnsentDrafts", () => {
     expect(parseUnsentDrafts(null)).toBeNull();
     expect(parseUnsentDrafts({ ok: true })).toBeNull();
     expect(parseUnsentDrafts({ ok: true, items: [{ files: 2 }, { ...item, booking: null, exam: null, late: "yes" }] })).toEqual([
-      { submissionId: SUB, bookingId: null, name: null, indexNumber: null, exam: null, files: 3, lastFileAt: "2031-06-07T11:20:00Z", late: false },
+      {
+        submissionId: SUB, bookingId: null, name: null, indexNumber: null, exam: null, files: 3, lastFileAt: "2031-06-07T11:20:00Z", late: false,
+        replacesReceived: false, replacesAll: true, receivedPages: 0,
+      },
     ]);
+  });
+  it("reads whether a draft replaces pages already received", () => {
+    const [d] = parseUnsentDrafts({ ok: true, items: [{ ...item, replaces_received: true, replaces_all: true, received_pages: 3 }] })!;
+    expect([d.replacesReceived, d.replacesAll, d.receivedPages]).toEqual([true, true, 3]);
+    expect(replacesNote(d)).toBe("Submitting this replaces all 3 pages already received.");
+    expect(replacesNote({ ...d, replacesAll: false })).toBe("Submitting this replaces some of the pages already received.");
+    expect(replacesNote({ ...d, replacesReceived: false })).toBeNull();
   });
   it("names the candidate", () => {
     const [d] = parseUnsentDrafts({ ok: true, items: [item] })!;
@@ -63,5 +76,18 @@ describe("accepting a draft for the family", () => {
     expect(acceptDraftMessage({ ok: false, code: "forbidden" }).message).toBe("You do not have permission to do that.");
     expect(acceptDraftMessage({ ok: false, code: "script_locked" }).message).toContain("already being marked");
     expect(acceptDraftMessage({ ok: false, code: "something_new" }).message).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("family emails that are not sent", () => {
+  it("says how many wait", () => {
+    expect(familyNoticesLine(3)).toBe("3 family emails are waiting to be sent.");
+    expect(familyNoticesLine(1)).toBe("1 family email is waiting to be sent.");
+  });
+  it("says what happened", () => {
+    expect(skipNoticesMessage({ ok: true, skipped: 2 })).toEqual({ ok: true, message: "2 family emails were not sent." });
+    expect(skipNoticesMessage({ ok: false, code: "reason_required" }).message).toBe(ACCEPT_REASON_MESSAGE);
+    expect(skipNoticesMessage({ ok: false, code: "forbidden" }).message).toBe("You do not have permission to do that.");
+    expect(skipNoticesMessage({ ok: false, code: "x" }).message).toBe("Something went wrong. Please try again.");
   });
 });

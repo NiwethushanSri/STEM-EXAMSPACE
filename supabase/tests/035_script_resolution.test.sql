@@ -171,6 +171,16 @@ begin
   return r;
 end;
 $$;
+-- Phase 3A (Task 8): an admin checks the marking pictures that wait on a candidate's script ("The name is hidden").
+create function pg_temp.check_pictures(p_booking text) returns void language plpgsql as $$
+begin
+  perform tests.as_user(pg_temp.uid('admin'));
+  perform public.script_page_marking_checked((x ->> 'page_id')::uuid, x ->> 'marking_path')
+  from jsonb_array_elements(public.script_marking_checks_list() -> 'items') x
+  where x ->> 'script_number' = (select s.number from public.scripts s where s.booking_id = pg_temp.k(p_booking));
+  perform tests.as_postgres();
+end;
+$$;
 
 -- Family calls (as the signed-in user), as in 031.
 create function pg_temp.open(p_name text, p_booking text, p_all boolean, p_now text) returns jsonb language plpgsql as $$
@@ -512,6 +522,7 @@ select tests.as_postgres();
 select is(pg_temp.script('b1'), 'true/needs_attention',
   'b1 is complete, but its assigned page 4 and confirmed page 5 have no marking pictures yet: not verified (R32)');
 select pg_temp.remask_ok('u1');
+select pg_temp.check_pictures('b1');
 select is(pg_temp.script('b1'), 'true/verified', 'b1, with page 4 assigned and its page 5 confirmed, is verified once their marking pictures are made');
 select is(pg_temp.missing('b2') || ' ' || pg_temp.missing('b4'), 'open:[2, 4] open:[3, 4]',
   'b2''s v1 page 2 does not count for its v2 paper; b4 misses pages 3 and 4');
@@ -810,13 +821,19 @@ select tests.as_postgres();
 select is(pg_temp.remasks('u8') || ' ' || pg_temp.script('b8') || ' ' || (select state::text from public.home_submissions where id = pg_temp.k('d8')),
   '1 true/needs_attention received', 'noting it queues the remask again; the family''s submission stands (R32)');
 select pg_temp.remask_ok('u8');
+select pg_temp.check_pictures('b8');
 select is(pg_temp.script('b8') || ' ' || (select state::text from public.home_submissions where id = pg_temp.k('d8')), 'true/verified received',
   'once the marking pictures are made, b8''s script and submission stand');
 
 -- ---------------------------------------------------------------------------------------------
 -- resolution_keeps_original_page_row
 -- ---------------------------------------------------------------------------------------------
-select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id and to_jsonb(p) - 'marking_path' = s.j - 'marking_path'), (select count(*)::int from snap),
+-- marking_inputs (migration 20261122000008) is the key of what the marking picture hides, written with each picture;
+-- marking_checked_* (20261122000009) say which marking picture staff checked.
+select is((select count(*)::int from snap s join public.script_pages p on p.id = s.id
+           and to_jsonb(p) - array['marking_path', 'marking_inputs', 'marking_checked_path', 'marking_checked_by', 'marking_checked_at']
+               = s.j - array['marking_path', 'marking_inputs', 'marking_checked_path', 'marking_checked_by', 'marking_checked_at']),
+  (select count(*)::int from snap),
   'resolution_keeps_original_page_row: every page row of the scanner file is as the server recorded it (a remask re-makes only marking pictures)');
 select is((select count(*)::int from snap), 13, 'and none was deleted');
 select is(public.script_resolution_lock(pg_temp.k('x_ne10'), '{}'), array[pg_temp.k('b3')], 'the lock helper names the bookings an exception concerns');

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { Badge, Card } from "@/components/AppShell";
 import { ExamForm } from "@/components/exams/ExamForm";
 import { saveTeacherExamAction, type TeacherExamResult } from "@/app/teacher/exams/actions";
@@ -118,7 +119,10 @@ export function TeacherExams({ exams, subjects, venues }: { exams: ExamRow[]; su
                       ))}
                     </td>
                     <td className="py-2.5 pr-4"><Badge tone={STATUS_TONE[e.status]}>{STATUS_LABEL[e.status]}</Badge></td>
-                    <td className="py-2.5">
+                    <td className="space-y-1.5 py-2.5">
+                      <Link href={`/teacher/exams/${e.id}/structure`} className="block text-xs text-blue-700 underline">
+                        Questions and mark scheme
+                      </Link>
                       {e.status === "draft" ? (
                         <button
                           type="button"

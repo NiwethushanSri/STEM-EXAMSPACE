@@ -14,6 +14,8 @@ import {
   blankPrompt,
   canSubmit,
   unsentFiles,
+  unsentWarning,
+  leavePrompt,
   fileProblem,
   isStale,
   retakePrompt,
@@ -218,17 +220,20 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
     }
   });
 
-  // Uploaded pages are not handed in until Submit: leaving the page with files uploaded or on their way asks first.
+  // Uploaded pages are not handed in until Submit: while uploading is possible, leaving the page with files uploaded or on
+  // their way asks first (not once the upload time has ended).
   const unsent = unsentFiles(files);
+  const prompt = leavePrompt(phase, files);
+  const warning = unsentWarning(phase, files.filter((f) => f.state === "stored").length);
   useEffect(() => {
-    if (unsent === "none") return;
+    if (!prompt) return;
     const warn = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [unsent]);
+  }, [prompt]);
 
   // Local previews are let go when the screen closes.
   useEffect(
@@ -474,10 +479,16 @@ export function HomeUpload({ bookingId, label, phase }: { bookingId: string; lab
         {showEditor ? (uploadingCount ? `${UPLOAD_TEXT.uploading}: ${uploadingCount}` : "") : (word ?? "")}
       </p>
 
-      {unsent !== "none" && (
+      {warning === "press_submit" && (
         <p data-testid="unsent-warning" role="status"
           className="rounded-lg border-2 border-amber-500 bg-amber-50 p-3 text-base font-semibold text-amber-950 print:hidden">
-          {unsent === "not_sent" ? UPLOAD_TEXT.notSent : UPLOAD_TEXT.notSentUploading}
+          {unsent === "uploading" ? UPLOAD_TEXT.notSentUploading : UPLOAD_TEXT.notSent}
+        </p>
+      )}
+      {warning === "closed_unsent" && (
+        <p data-testid="unsent-closed" role="status"
+          className="rounded-lg border-2 border-amber-500 bg-amber-50 p-3 text-base font-semibold text-amber-950 print:hidden">
+          {UPLOAD_TEXT.closedUnsent}
         </p>
       )}
 

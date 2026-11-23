@@ -7,6 +7,8 @@ import {
   blankPrompt,
   canSubmit,
   unsentFiles,
+  unsentWarning,
+  leavePrompt,
   fileProblem,
   isStale,
   retakePrompt,
@@ -226,5 +228,33 @@ describe("storeFile", () => {
   it("a refused stored call fails with its code", async () => {
     const s = steps([{ ok: false, code: "invalid_input" }]);
     await expect(storeFile({ uploadId: null, path: null }, s)).rejects.toThrow("invalid_input");
+  });
+});
+
+describe("the warning that pages are not sent", () => {
+  it("unsent_warning_only_while_submit_is_possible", () => {
+    for (const phase of ["sitting", "upload_open", "late_window"] as const) {
+      expect(unsentWarning(phase, 1)).toBe("press_submit");
+      expect(unsentWarning(phase, 0)).toBeNull();
+    }
+    expect(unsentWarning("closed", 2)).toBe("closed_unsent");
+    expect(unsentWarning("closed", 0)).toBeNull();
+    expect(unsentWarning("before_start", 3)).toBeNull();
+  });
+
+  it("says the upload time has ended when it has", () => {
+    expect(UPLOAD_TEXT.closedUnsent).toBe("The upload time has ended. Your pages were not sent. Please contact the institution.");
+  });
+});
+
+describe("asking before the page is left", () => {
+  it("leave_prompt_follows_what_can_still_be_lost", () => {
+    expect(leavePrompt("upload_open", [{ state: "uploading" }])).toBe(true);
+    expect(leavePrompt("sitting", [{ state: "waiting" }])).toBe(true);
+    expect(leavePrompt("late_window", [{ state: "stored" }])).toBe(true);
+    expect(leavePrompt("closed", [{ state: "stored" }])).toBe(false);
+    expect(leavePrompt("closed", [{ state: "uploading" }])).toBe(false);
+    expect(leavePrompt("upload_open", [])).toBe(false);
+    expect(leavePrompt("upload_open", [{ state: "failed" }])).toBe(false);
   });
 });

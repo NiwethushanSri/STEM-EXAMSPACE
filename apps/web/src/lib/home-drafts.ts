@@ -12,6 +12,12 @@ export type UnsentDraft = {
   lastFileAt: string | null;
   /** Whether accepting it now marks it late (the on-time deadline, finish + 2 hours, has passed). */
   late: boolean;
+  /** The booking already has a submission that was handed in (not a draft, not rejected). */
+  replacesReceived: boolean;
+  /** Submitting this draft replaces every page already received, not just some. */
+  replacesAll: boolean;
+  /** The pages of the script's current version. */
+  receivedPages: number;
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -35,6 +41,9 @@ function draft(x: unknown): UnsentDraft | null {
     files: typeof x.files === "number" && Number.isInteger(x.files) && x.files >= 0 ? x.files : 0,
     lastFileAt: text(x.last_file_at),
     late: x.late === true,
+    replacesReceived: x.replaces_received === true,
+    replacesAll: x.replaces_all !== false,
+    receivedPages: typeof x.received_pages === "number" && Number.isInteger(x.received_pages) && x.received_pages >= 0 ? x.received_pages : 0,
   };
 }
 
@@ -42,6 +51,14 @@ function draft(x: unknown): UnsentDraft | null {
 export function parseUnsentDrafts(data: unknown): UnsentDraft[] | null {
   if (!isRecord(data) || data.ok !== true || !Array.isArray(data.items)) return null;
   return data.items.map(draft).filter((d): d is UnsentDraft => d !== null);
+}
+
+/** What submitting the draft does to pages the family already handed in, or null when it replaces none. */
+export function replacesNote(d: Pick<UnsentDraft, "replacesReceived" | "replacesAll" | "receivedPages">): string | null {
+  if (!d.replacesReceived) return null;
+  return d.replacesAll
+    ? `Submitting this replaces all ${d.receivedPages} pages already received.`
+    : "Submitting this replaces some of the pages already received.";
 }
 
 /** "Sam One (SE-2098-7701)", or what is known of the candidate. */
@@ -89,4 +106,29 @@ export function acceptDraftMessage(a: { ok?: unknown; code?: unknown; late?: unk
   }
   const code = typeof a.code === "string" ? a.code : "";
   return { ok: false, message: ACCEPT_FAILURES[code] ?? "Something went wrong. Please try again." };
+}
+
+const SKIP_FAILURES: Record<string, string> = {
+  forbidden: "You do not have permission to do that.",
+  reason_required: ACCEPT_REASON_MESSAGE,
+};
+
+export const SKIP_TEXT = {
+  button: "Do not send them",
+  reason: "Reason (kept in the audit log)",
+} as const;
+
+/** The line on the admin home page about family emails that are still to be sent. */
+export function familyNoticesLine(count: number): string {
+  return `${count} family ${count === 1 ? "email is" : "emails are"} waiting to be sent.`;
+}
+
+/** What script_family_notices_skip's answer says to staff. */
+export function skipNoticesMessage(a: { ok?: unknown; code?: unknown; skipped?: unknown }): { ok: boolean; message: string } {
+  if (a.ok === true) {
+    const n = typeof a.skipped === "number" ? a.skipped : 0;
+    return { ok: true, message: `${n} family ${n === 1 ? "email was" : "emails were"} not sent.` };
+  }
+  const code = typeof a.code === "string" ? a.code : "";
+  return { ok: false, message: SKIP_FAILURES[code] ?? "Something went wrong. Please try again." };
 }

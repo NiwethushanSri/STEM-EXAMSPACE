@@ -26,7 +26,8 @@ create function pg_temp.pid(p text) returns uuid language sql stable as $$ selec
 create function pg_temp.nid(p text) returns bigint language sql stable as $$ select id from n where name = p $$;
 create function pg_temp.t(p text) returns timestamptz language sql immutable as $$ select (p || ' Europe/London')::timestamptz $$;
 
--- Published at-home exams, released 10 minutes before the start.
+-- Published at-home exams, released 10 minutes before the start. Their papers' page roles are saved (a notice waits
+-- for that: test 038).
 create function pg_temp.mk_exam(p_name text, p_starts timestamptz, p_minutes int default 90) returns void language sql as $$
   with x as (
     insert into public.exams (subject_id, title, paper, format, starts_at, duration_minutes, price_pence,
@@ -38,9 +39,9 @@ create function pg_temp.mk_exam(p_name text, p_starts timestamptz, p_minutes int
 $$;
 create function pg_temp.mk_paper(p_key text, p_exam text, p_version int default 1) returns void language sql as $$
   with p as (
-    insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size)
+    insert into public.exam_papers (exam_id, kind, title, version, storage_path, page_count, byte_size, pages_reviewed_at)
     values (pg_temp.eid(p_exam), 'paper', 'Question paper', p_version,
-      pg_temp.eid(p_exam)::text || '/' || gen_random_uuid()::text || '.pdf', 2, 1000)
+      pg_temp.eid(p_exam)::text || '/' || gen_random_uuid()::text || '.pdf', 2, 1000, now())
     returning id)
   insert into pp select p_key, p.id from p
 $$;

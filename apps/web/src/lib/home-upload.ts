@@ -1,5 +1,7 @@
 /** What `home_submission_status` tells a family about the answers they hand in, and the words they see for it. */
 
+import type { SittingPhase } from "@/lib/sitting-state";
+
 export type UploadKind = "home_photo" | "home_pdf";
 
 export type DraftUpload = {
@@ -84,6 +86,7 @@ export const UPLOAD_TEXT = {
   lateNote: "These answers were handed in after the on-time deadline. The institution decides whether they are marked.",
   rejectedNote: "Your answers were not accepted. Please upload them again.",
   rejectedReason: "Reason from the institution:",
+  closedUnsent: "The upload time has ended. Your pages were not sent. Please contact the institution.",
   closed: "Uploads for this exam have closed. If you could not hand in your answers, please contact the institution.",
   print: "Print",
   loadFailure: "Your upload could not be loaded. Please try again.",
@@ -259,6 +262,26 @@ export function canSubmit(files: { state: string }[]): boolean {
 export function unsentFiles(files: { state: string }[]): "none" | "uploading" | "not_sent" {
   if (files.some((f) => f.state === "waiting" || f.state === "uploading")) return "uploading";
   return files.some((f) => f.state === "stored") ? "not_sent" : "none";
+}
+
+/**
+ * Which warning a family sees about uploaded pages that were never sent: "press_submit" while Submit is still
+ * possible (the sitting, and the upload and late windows) with at least one stored file; "closed_unsent" once the
+ * upload time has ended with one; otherwise none. Only "press_submit" asks before the page is left.
+ */
+export function unsentWarning(phase: SittingPhase, storedFiles: number): "press_submit" | "closed_unsent" | null {
+  if (storedFiles < 1) return null;
+  if (phase === "sitting" || phase === "upload_open" || phase === "late_window") return "press_submit";
+  return phase === "closed" ? "closed_unsent" : null;
+}
+
+/**
+ * Whether leaving the page asks first: while uploading is possible (the sitting, and the upload and late windows),
+ * when a file is still waiting or uploading, or a file is stored and not yet submitted. Never once the time has ended.
+ */
+export function leavePrompt(phase: SittingPhase, files: { state: string }[]): boolean {
+  if (phase !== "sitting" && phase !== "upload_open" && phase !== "late_window") return false;
+  return unsentFiles(files) !== "none";
 }
 
 /** "2, 3, 4 and 6" */

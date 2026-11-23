@@ -232,6 +232,12 @@ export type ScriptDetail = {
     createdAt: string | null;
     exam: ScriptExam | null;
     bookingStatus: string | null;
+    /** When staff took the script back from the markers (null: not taken back), and why ("name_visible": a marker
+     * reported a visible name). */
+    takenBackAt: string | null;
+    takenBackReason: string | null;
+    /** How many of its pages wait for staff to check their marking picture (Phase 3A Task 8). */
+    picturesToCheck: number;
   };
   candidate: Candidate;
   versions: DetailVersion[];
@@ -320,6 +326,9 @@ export function parseScriptDetail(data: unknown): ScriptDetail | null {
       createdAt: str(s.created_at),
       exam: parseExam(s.exam),
       bookingStatus: isObject(s.booking) ? str(s.booking.status) : null,
+      takenBackAt: str(s.taken_back_at),
+      takenBackReason: str(s.taken_back_reason),
+      picturesToCheck: num(s.pictures_to_check) ?? 0,
     },
     candidate: parseCandidate(data.candidate),
     versions: list(data.versions, (v) =>
@@ -387,6 +396,8 @@ const ACTION_WORDS: Record<string, string> = {
   script_page_hidden_areas_set: "Name hidden on a page",
   script_late_accepted: "Late script accepted",
   script_late_rejected: "Late script not marked",
+  marking_script_taken_back: "Taken back from the markers",
+  marking_script_handed_back: "Handed back to the markers",
 };
 export const actionText = (a: string) => ACTION_WORDS[a] ?? a.replace(/^script_/, "").replace(/_/g, " ");
 
@@ -410,6 +421,38 @@ export const remaskPending = (u: DetailUpload) => u.jobs.some((j) => j.kind === 
 /** Whether the file may be processed again: processed or failed, while the script is not being marked. */
 export const reprocessable = (u: DetailUpload, s: ScriptState) => (u.state === "processed" || u.state === "failed") && !MARKING.includes(s);
 
+/** Whether the script is with the markers (ready to mark, being marked or marked): staff take it back to change it. */
+export const beingMarked = (s: ScriptState) => s === "ready_to_mark" || s === "marking" || s === "marked";
+
+/** That marking pictures of the script wait for staff to check them (Phase 3A Task 8), or null when none does. */
+export function picturesToCheckText(n: number): string | null {
+  if (n <= 0) return null;
+  return n === 1
+    ? "A marking picture waits for a check under Marking pictures to check."
+    : `${n} marking pictures wait for a check under Marking pictures to check.`;
+}
+
+/** Whether a check of a marking picture is what keeps the script from verified (or, being marked, its holds from
+ * release): a picture waits for a check and no problem of the script is open. */
+export const checkBlocks = (d: ScriptDetail) => d.script.picturesToCheck > 0 && !d.exceptions.some((e) => e.state === "open");
+
+/** Why a taken-back script cannot be handed back to the markers yet, in words (null: it can). It must be verified, and
+ * no file of its pages may be waiting to be prepared or to have its marking pictures made. When a marking picture
+ * check is what keeps it from verified, that is said. The database checks again. */
+export function handBackBlocked(d: ScriptDetail): string | null {
+  if (!d.script.takenBackAt) return null;
+  if (d.script.state !== "verified") {
+    return checkBlocks(d)
+      ? picturesToCheckText(d.script.picturesToCheck)
+      : "The script must be verified before it goes back to the markers. Settle its open problems first.";
+  }
+  const busy = d.uploads.some((u) => u.jobs.some((j) => (j.kind === "remask" || j.kind === "prepare") && (j.state === "queued" || j.state === "running")));
+  return busy ? "Its marking pictures are being made again. Hand it back when they are ready." : null;
+}
+
+/** Why a script was taken back, as staff read it. */
+export const takenBackReasonText = (r: string | null) => (r === "name_visible" ? "A marker reported a visible name." : (r ?? ""));
+
 // ---------------------------------------------------------------------------------------------------------------
 // The page tools.
 // ---------------------------------------------------------------------------------------------------------------
@@ -418,7 +461,10 @@ export type RepoInput =
   | { action: "rotate"; pageId: string; turns: 1 | -1 | 2; reason: string }
   | { action: "reprocess"; uploadId: string; reason: string }
   | { action: "void"; reason: string }
-  | { action: "remove"; copyPage: number; reason: string };
+  | { action: "remove"; copyPage: number; reason: string }
+  | { action: "take_back"; reason: string }
+  /** The reason is optional when handing back (empty: none). */
+  | { action: "hand_back"; reason: string };
 
 /** The database function a page tool calls, with its arguments. */
 export function repoRpc(scriptId: string, input: RepoInput): { fn: string; args: Record<string, unknown> } {
@@ -432,6 +478,10 @@ export function repoRpc(scriptId: string, input: RepoInput): { fn: string; args:
       return { fn: "script_void", args: { p_script: scriptId, p_reason: reason } };
     case "remove":
       return { fn: "script_page_remove", args: { p_script: scriptId, p_copy_page: input.copyPage, p_reason: reason } };
+    case "take_back":
+      return { fn: "marking_script_take_back", args: { p_script: scriptId, p_reason: reason } };
+    case "hand_back":
+      return { fn: "marking_script_hand_back", args: { p_script: scriptId, p_reason: reason || null } };
   }
 }
 
@@ -446,6 +496,10 @@ export function repoDoneMessage(input: RepoInput): string {
       return "The script is void. It will not be marked.";
     case "remove":
       return `Page ${input.copyPage} is taken out of the script (a new version). The page itself is kept.`;
+    case "take_back":
+      return "The script is taken back from the markers. Its pages can be changed now.";
+    case "hand_back":
+      return "The script is handed back to the markers.";
   }
 }
 
