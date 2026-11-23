@@ -718,7 +718,8 @@ select is((select array[m.status, (m.submitted_at = now())::text, m.structure_ve
   array['submitted', 'true', '0', 'null', '4.0'], 'the marking is submitted, with the structure version and the total');
 select is((select array[a.end_reason, (a.ended_at = now())::text] from public.marking_assignments a where a.unit_id = pg_temp.u('a1')),
   array['submitted', 'true'], 'm1''s hold ends');
-select is(array[pg_temp.us('a1'), pg_temp.st('a1')], array['submitted', 'marked'], 'the piece is submitted and the script marked');
+-- Phase 3B: with the checks off the submitted piece is checked at once, and so is its script.
+select is(array[pg_temp.us('a1'), pg_temp.st('a1')], array['submitted', 'checked'], 'the piece is submitted and the script marked (checked: the checks are off)');
 select is((select count(*)::int from public.audit_log a where a.action = 'marking_submitted' and a.target_type = 'marking'
              and a.target_id = pg_temp.k('mk:a1') and a.actor_id = pg_temp.uid('m1')), 1, 'an audit row says who submitted it');
 select is(pg_temp.r('sub_again'), '{"ok": false, "code": "conflict", "reason": "submitted"}'::jsonb, 'a second submit is refused');
@@ -736,7 +737,7 @@ select tests.as_postgres();
 select is(array[pg_temp.r('sub_g1'), pg_temp.r('st_g1')], array['{"ok": true, "rev": 2, "total": 2, "max_total": 3, "feedback": null}', '"marking"']::jsonb[],
   'by question, the script is still being marked after the first group is submitted');
 select is(pg_temp.r('sub_g2'), '{"ok": true, "rev": 2, "total": 5, "max_total": 7, "feedback": null}'::jsonb, 'and marked after the last');
-select is(pg_temp.st('g1'), 'marked', 'the script is marked');
+select is(pg_temp.st('g1'), 'checked', 'the script is marked (checked: the checks are off)');
 
 -- ---------------------------------------------------------------------------------------------
 -- change_after_submit_needs_reason_and_keeps_history
@@ -754,7 +755,7 @@ select is(array[pg_temp.code(pg_temp.r('open_sub')), pg_temp.r('open_sub') -> 'm
   array['ok', 'submitted', null, 'false'], 'the marker opens their submitted piece, with no hold');
 select is(pg_temp.r('changed'), jsonb_build_object('ok', true, 'rev', 17, 'total', 3, 'hold_until', null), 'with a reason the change is saved');
 select is(array[(select status from public.markings where id = pg_temp.k('mk:a1')), pg_temp.marks('mk:a1'), pg_temp.us('a1'), pg_temp.st('a1')],
-  array['submitted', '1=2,2(a)=1,2(b)=NR', 'submitted', 'marked'], 'the marking stays submitted and the script marked');
+  array['submitted', '1=2,2(a)=1,2(b)=NR', 'submitted', 'checked'], 'the marking stays submitted and the script marked (checked: the checks are off)');
 select is((select array[trim_scale(h.mark)::text, h.after_submit::text, h.reason, (h.changed_by = pg_temp.uid('m1'))::text]
            from public.question_mark_history h where h.marking_id = pg_temp.k('mk:a1') and h.question_id = pg_temp.k('q:e:1')
            order by h.id desc limit 1),

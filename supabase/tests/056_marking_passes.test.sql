@@ -7,8 +7,9 @@ select tests.assert_no_owner();
 -- Fixtures. Subject 'ZZ Passes': markers m1 (Mara One) to m7 and the lead marker are approved for it (tests.marker);
 -- corr is a corrector never approved. Exam e (tests.marking_exam: finished 2 days ago; the test structure; whole
 -- scripts) has the home scripts x1 to x6, opened (tests.open_marking). m1 marks every one of them (their live pass is
--- submitted and each script is marked); x1 by hand, with an annotation and a note to the lead. A piece waits for a
--- second marking when its check_state is set to waiting_second here, as postgres (Task 4 sets it). Scripts made later
+-- submitted and, the checks being off, each piece and script is checked: Task 4); x1 by hand, with an annotation and a
+-- note to the lead. A piece waits for a second marking when its check_state is set to waiting_second here, as postgres
+-- (Task 4 decides it; with no second marking wanted, a second marking submitted still leaves the piece checked). Scripts made later
 -- (y1, y2, z1, z2, h1) come in once marking is open; exam eb is the timing guard's. A unit is kept as 'u:<script>', a page as 'p:<script>:<copy page>', a
 -- question as 'q:<label>', a marking as 'mk<marker number>:<script>'.
 -- ---------------------------------------------------------------------------------------------
@@ -140,8 +141,8 @@ insert into res values ('sub1', public.marking_submit(pg_temp.k('mk1:x1'), 1));
 select tests.as_postgres();
 do $$ begin for i in 2..6 loop perform tests.mark_piece(pg_temp.u('x' || i), pg_temp.uid('m1'), array[1, 1, 1]); end loop; end $$;
 select is((select string_agg(pg_temp.us('x' || i) || '/' || pg_temp.st('x' || i), ' ' order by i) from generate_series(1, 6) i),
-  'submitted/marked submitted/marked submitted/marked submitted/marked submitted/marked submitted/marked',
-  'fixtures: m1 has marked x1 to x6; each piece is submitted and each script marked');
+  'submitted/checked submitted/checked submitted/checked submitted/checked submitted/checked submitted/checked',
+  'fixtures: m1 has marked x1 to x6; each piece is submitted and each script marked (checked: the checks are off)');
 select is(array[pg_temp.code(pg_temp.r('save1')), pg_temp.code(pg_temp.r('sub1')), pg_temp.marks('mk1:x1')], array['ok', 'ok', '1=2,2(a)=1,2(b)=4'],
   'fixtures: m1''s marking of x1 has marks, an annotation and a note');
 
@@ -350,7 +351,8 @@ select is(array[pg_temp.r('i_open') #>> '{marking,id}', pg_temp.r('i_sub')::text
   array[pg_temp.k('mk2:x1')::text, '{"ok": true, "rev": 3, "total": 10.0, "feedback": null, "max_total": 10.0}'],
   'second_submit_ends_only_the_second_hold: m2 opens their marking again and submits it');
 select is(array[pg_temp.ended('x1', 'm2'), pg_temp.ms('x1', 'm2'), pg_temp.holders('x1'), pg_temp.us('x1'), pg_temp.st('x1')],
-  array['expired,expired,submitted', 'submitted', '-', 'submitted', 'marked'], 'their hold ends; the piece and its script are as they were');
+  array['expired,expired,submitted', 'submitted', '-', 'submitted', 'checked'],
+  'their hold ends; the piece is as it was, and its script is checked (Task 4: no second marking was wanted, the checks being off)');
 select is(array[pg_temp.ms('x1', 'm1'), pg_temp.marks('mk1:x1'), pg_temp.rev('mk1:x1')::text, pg_temp.holders('x2')],
   array['submitted', '1=2,2(a)=1,2(b)=4', pg_temp.r('sub1') ->> 'rev', 'lead second next'],
   'the first marking stands as it was, and the lead still holds x2''s second pass');
@@ -406,8 +408,8 @@ select is(pg_temp.r('l_assign'), '{"ok": true, "assigned": 1, "skipped": []}'::j
 select is((select array[a.kind::text, a.how, (a.hold_until is null)::text, pg_temp.who(a.assigned_by)] from public.marking_assignments a
            where a.unit_id = pg_temp.u('x4') and a.marker_id = pg_temp.uid('m3') and a.ended_at is null),
   array['second', 'assigned', 'true', 'admin'], 'm3 holds it, with no time limit');
-select is(array[pg_temp.us('x4'), pg_temp.ms('x4', 'm1'), pg_temp.st('x4')], array['submitted', 'submitted', 'marked'],
-  'the piece, its first marking and its script are as they were');
+select is(array[pg_temp.us('x4'), pg_temp.ms('x4', 'm1'), pg_temp.st('x4')], array['submitted', 'submitted', 'checked'],
+  'the piece, its first marking and its script are as they were (checked: the checks are off)');
 select is((select a.reason from public.audit_log a where a.action = 'marking_second_assigned' and a.target_id = pg_temp.u('x4')),
   'Second marking for the sample', 'audited, with the reason');
 select tests.as_user(pg_temp.uid('m3'));

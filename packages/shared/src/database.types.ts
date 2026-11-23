@@ -475,14 +475,14 @@ isOneToOne: false
                   ]
                 },"final_marks": {
                   Row: {
-                    "mark": number | null,"not_attempted": boolean,"question_id": string,"set_at": string,"set_by": string | null,"source": string,"unit_id": string
+                    "mark": number | null,"not_attempted": boolean,"question_id": string,"reason": string | null,"set_at": string,"set_by": string | null,"source": string,"unit_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "mark"?: number | null,"not_attempted"?: boolean,"question_id": string,"set_at"?: string,"set_by"?: string | null,"source": string,"unit_id": string
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id": string,"reason"?: string | null,"set_at"?: string,"set_by"?: string | null,"source": string,"unit_id": string
                   }
                   Update: {
-                    "mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"set_at"?: string,"set_by"?: string | null,"source"?: string,"unit_id"?: string
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"reason"?: string | null,"set_at"?: string,"set_by"?: string | null,"source"?: string,"unit_id"?: string
                   }
                   Relationships: [
                     {
@@ -1936,6 +1936,12 @@ isOneToOne: false
 "marking_assign_some":
 { Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_reason": string }; Returns: Json
                            },
+"marking_check_evaluate":
+{ Args: { "p_unit": string }; Returns: string
+                           },
+"marking_check_exam":
+{ Args: { "p_exam": string }; Returns: number
+                           },
 "marking_checks_get":
 { Args: { "p_exam": string }; Returns: Json
                            },
@@ -1944,6 +1950,12 @@ isOneToOne: false
                            },
 "marking_close":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_compare":
+{ Args: { "p_first": string,"p_second": string }; Returns: Json
+                           },
+"marking_compare_sets":
+{ Args: { "p_a": Json,"p_b": Json,"p_unit": string }; Returns: Json
                            },
 "marking_dashboard":
 { Args: { "p_now"?: string }; Returns: Json
@@ -1956,6 +1968,12 @@ isOneToOne: false
                            },
 "marking_exam_sync":
 { Args: { "p_exam": string,"p_now": string }; Returns: number
+                           },
+"marking_final_marks_from":
+{ Args: { "p_marking": string,"p_reason": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_final_marks_remove":
+{ Args: { "p_reason": string,"p_unit": string }; Returns: undefined
                            },
 "marking_give_back":
 { Args: { "p_reason"?: string,"p_unit": string }; Returns: Json
@@ -2047,6 +2065,23 @@ isOneToOne: false
               "copy_page": number,"extra": boolean,"marking_path": string,"n": number,"page_id": string,"rotation": number,"script_id": string
             }[]
                            },
+"marking_second_add":
+{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_second_drop":
+{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_second_release":
+{ Args: { "p_reason": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_second_stuck":
+{ Args: { "p_exam": string }; Returns: {
+              "unit_id": string
+            }[]
+                           },
+"marking_set_total":
+{ Args: { "p_set": Json,"p_unit": string }; Returns: number
+                           },
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
                            },
@@ -2065,6 +2100,9 @@ isOneToOne: false
 "marking_tick":
 { Args: Record<PropertyKey, never>; Returns: undefined
                            },
+"marking_tolerance":
+{ Args: { "p_max": number,"p_percent": number }; Returns: number
+                           },
 "marking_total":
 { Args: { "p_marking": string }; Returns: number
                            },
@@ -2081,6 +2119,9 @@ isOneToOne: false
 { Args: { "p_unit": string }; Returns: {
               "label": string,"leaf": boolean,"mark_step": number,"max_mark": number,"parent_id": string,"path": (number)[],"question_id": string,"top_id": string
             }[]
+                           },
+"marking_unit_settled":
+{ Args: { "p_unit": string }; Returns: boolean
                            },
 "marking_unit_take":
 { Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_unit": string }; Returns: undefined
@@ -2397,6 +2438,14 @@ isOneToOne: false
                            },
 "script_family_notices_waiting":
 { Args: Record<PropertyKey, never>; Returns: Json
+                           },
+"script_final_marks":
+{ Args: { "p_script": string }; Returns: {
+              "mark": number,"not_attempted": boolean,"question_id": string,"source": string
+            }[]
+                           },
+"script_final_total":
+{ Args: { "p_script": string }; Returns: number
                            },
 "script_home_reject":
 { Args: { "p_actor": string,"p_booking": string,"p_now": string,"p_reason": string,"p_subs": (string)[] }; Returns: undefined

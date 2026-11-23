@@ -305,6 +305,10 @@ describe("markingWorkMessageFor", () => {
     expect(markingWorkMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
     expect(markingWorkMessageFor("forbidden")).toBe("You do not have permission to do that.");
   });
+  it("says a settled script's marks go through the lead marker", () => {
+    expect(markingWorkMessageFor("settled")).toBe("The lead marker has settled this script. Ask them if a mark should change.");
+    expect(markingScreenMessageFor("settled")).toBe("The lead marker has settled this script. Ask them if a mark should change.");
+  });
   it("says why a conflict was refused", () => {
     expect(markingWorkMessageFor("conflict", "rev")).toBe("This script was changed on another screen. Reload to carry on.");
     expect(markingWorkMessageFor("conflict", "set_aside")).toContain("no longer yours");

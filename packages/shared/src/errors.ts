@@ -468,6 +468,8 @@ const markingWorkMessages: Record<string, string> = {
   marking_closed: "Marking has closed for this exam.",
   incomplete: "Give every question a mark, or NR, before you submit.",
   mark_out_of_range: "That mark is not allowed for this question.",
+  // 3B: a change after submit to a piece the lead marker has settled (marking_save).
+  settled: "The lead marker has settled this script. Ask them if a mark should change.",
 };
 const markingWorkConflicts: Record<string, string> = {
   rev: "This script was changed on another screen. Reload to carry on.",

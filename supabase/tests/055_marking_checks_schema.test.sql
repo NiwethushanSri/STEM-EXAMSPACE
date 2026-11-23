@@ -136,9 +136,9 @@ insert into kv select 'q1', q.id from public.exam_questions q where q.exam_id = 
 insert into public.marking_standard_marks (standard_id, question_id, mark) values (pg_temp.k('std'), pg_temp.k('q1'), 2);
 insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, opened_at)
 values (pg_temp.k('ex'), pg_temp.k('ux'), 'difference', pg_temp.k('mx'), now());
-insert into public.final_marks (unit_id, question_id, mark, source, set_at) values (pg_temp.k('ux'), pg_temp.k('q1'), 2, 'first', now());
-insert into public.final_mark_history (unit_id, question_id, mark, not_attempted, source, changed_at)
-values (pg_temp.k('ux'), pg_temp.k('q1'), 2, false, 'first', now());
+-- Its history row is written by the final_marks trigger (Phase 3B Task 4), with the reason the final mark carries.
+insert into public.final_marks (unit_id, question_id, mark, source, set_at, reason)
+values (pg_temp.k('ux'), pg_temp.k('q1'), 2, 'first', now(), 'Checked: not second-marked.');
 select tests.as_user(pg_temp.uid('m1'));
 select is(pg_temp.counts(), '0/0/0/0/0',
   'marker_and_lead_select_nothing_directly: an approved marker reads no final marks, reviews, standards, standard marks or exam markers');
@@ -500,8 +500,8 @@ insert into kv values ('mf1', tests.mark_piece(pg_temp.k('uf1'), pg_temp.uid('fm
 select is(current_user::text, 'postgres', 'tests.mark_piece returns as postgres');
 select is((select concat_ws('/', m.kind, m.status, m.marker_id = pg_temp.uid('fm'), m.total, u.state, s.state)
            from public.markings m join public.marking_units u on u.id = m.unit_id join public.scripts s on s.id = u.script_id
-           where m.id = pg_temp.k('mf1')), 'live/submitted/t/7.0/submitted/marked',
-  'and the piece is marked: the marker''s live marking is submitted, with its total, and the script is marked');
+           where m.id = pg_temp.k('mf1')), 'live/submitted/t/7.0/submitted/checked',
+  'and the piece is marked: the marker''s live marking is submitted, with its total, and the script is marked (checked: exam ef''s checks are off)');
 select is((select string_agg(trim_scale(qm.mark)::text, ',' order by q.position, q.parent_id nulls first) from public.question_marks qm
            join public.exam_questions q on q.id = qm.question_id where qm.marking_id = pg_temp.k('mf1')), '2,1,4',
   'with the marks given, one per question in paper order');

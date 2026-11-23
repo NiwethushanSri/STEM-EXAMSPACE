@@ -587,7 +587,8 @@ select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.marking_script_hand_back(pg_temp.k('a3'), 'ab')), 'reason_required', 'hand_back_with_same_pages_keeps_submitted: a reason given is 3 to 300 characters');
 insert into res values ('hb_a3', public.marking_script_hand_back(pg_temp.k('a3'), 'Pages are fine'));
 select tests.as_postgres();
-select is(pg_temp.r('hb_a3'), '{"ok": true, "state": "marked", "reopened": 0}'::jsonb, 'handed back with the same pages, the script is marked again');
+-- Phase 3B: with the checks off its submitted piece was checked, and stays so: the script is checked again.
+select is(pg_temp.r('hb_a3'), '{"ok": true, "state": "checked", "reopened": 0}'::jsonb, 'handed back with the same pages, the script is marked again (checked: the checks are off)');
 select is(array[pg_temp.us('a3'), pg_temp.hold('a3'), pg_temp.ms('a3', 'm2'), pg_temp.holder('a3'), pg_temp.alerts('a3'), pg_temp.marks('mk:a3')],
   array['submitted', '-', 'submitted', '-', '', '1=1,2(a)=1,2(b)=1'], 'the submitted marking is kept as it was; nothing to check');
 select is((select pages_changed_at from public.markings where id = pg_temp.k('mk:a3')), null::timestamptz, 'and its pages are not marked as changed');
@@ -608,7 +609,7 @@ select public.marking_submit(pg_temp.k('mk:c1'), 1);
 select tests.as_postgres();
 insert into res select 'key_c1', to_jsonb(public.marking_pages_key(pg_temp.k('c1')));
 select pg_temp.set_aside('c1', 4);
-select is(array[pg_temp.st('c1'), pg_temp.alerts('c1'), pg_temp.notices('c1')::text], array['marked', 'pages_set_aside open', '1'],
+select is(array[pg_temp.st('c1'), pg_temp.alerts('c1'), pg_temp.notices('c1')::text], array['checked', 'pages_set_aside open', '1'],
   'set_aside_scan_page_raises_alert_and_adds_nothing: an alert that pages were set aside, and its email');
 select is((select array[a.page_id::text, coalesce(a.unit_id::text, '-')] from public.marking_alerts a where a.id = pg_temp.alert('c1', 'pages_set_aside')),
   array[pg_temp.k('set_aside:c1')::text, '-'], 'about the page set aside');

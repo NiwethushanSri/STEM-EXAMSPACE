@@ -421,8 +421,9 @@ export const remaskPending = (u: DetailUpload) => u.jobs.some((j) => j.kind === 
 /** Whether the file may be processed again: processed or failed, while the script is not being marked. */
 export const reprocessable = (u: DetailUpload, s: ScriptState) => (u.state === "processed" || u.state === "failed") && !MARKING.includes(s);
 
-/** Whether the script is with the markers (ready to mark, being marked or marked): staff take it back to change it. */
-export const beingMarked = (s: ScriptState) => s === "ready_to_mark" || s === "marking" || s === "marked";
+/** Whether the script is with the markers (ready to mark, being marked, marked or checked): staff take it back to change
+ * it. */
+export const beingMarked = (s: ScriptState) => s === "ready_to_mark" || s === "marking" || s === "marked" || s === "checked";
 
 /** That marking pictures of the script wait for staff to check them (Phase 3A Task 8), or null when none does. */
 export function picturesToCheckText(n: number): string | null {
