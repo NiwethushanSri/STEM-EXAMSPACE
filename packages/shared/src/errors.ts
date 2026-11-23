@@ -386,9 +386,24 @@ export function markerMessageFor(code: string | null | undefined): string {
   return code && Object.hasOwn(markerMessages, code) ? markerMessages[code] : messages.internal;
 }
 
+// 3B: sentences more than one table gives, so a code reads the same wherever staff or a marker meet it.
+const NAME_SEEN = "This marker may have seen a name on this script, so they cannot mark it.";
+const PRACTICE_FIRST = "This marker has not been cleared for live marking on this exam.";
+const MARKER_PAUSED = "This marker is paused on this exam.";
+const YOU_ARE_PAUSED = "Your marking on this exam is paused. The lead marker will be in touch.";
+const PRACTICE_WAIT = "Your practice scripts are with the lead marker.";
+const PRACTICE_NOT_READY = "Practice scripts are not ready yet.";
+const LOCKED = "This script can no longer be changed.";
+const NOT_YOURS = "Choose a script you marked yourself.";
+const TOO_MANY = "There are already 10 of these for this exam.";
+
 /** Failure codes of opening and closing marking for an exam (marking_settings_set, marking_exam_get, marking_open,
  * marking_close, marking_reopen) and of its checks (marking_checks_get, marking_checks_set); marking_not_open and
- * marking_closed are also what hand-out answers. */
+ * marking_closed are also what hand-out answers. 3B: also every other code of the checks on the marking (Tasks 2 to
+ * 5), for the lead's and the admin's pages: the pieces a second marking request skips (marking_second_add,
+ * marking_second_drop), practice and seeded scripts (marking_standard_set, as standardMessageFor says them), a marker
+ * not cleared or paused, and the codes only a marker meets (practice_wait, practice_not_ready, locked), in the words
+ * the marker reads. */
 const markingMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   reason_required: "Give a reason of 3 to 300 characters.",
@@ -404,6 +419,22 @@ const markingMessages: Record<string, string> = {
   needs_two_markers: "Double marking needs two approved markers. Approve another, or turn it off with a reason.",
   no_lead: "Choose a lead marker for this subject first.",
   marking_approved: "This exam's marking has been approved. An admin must withdraw the approval first.",
+  // 3B Task 3: a second pass is never given to a marker who saw a name on the script.
+  name_seen: NAME_SEEN,
+  // 3B Task 4: the pieces "Second-mark these" (marking_second_add) or a drop (marking_second_drop) skipped.
+  not_submitted: "This script's first marking is not submitted yet.",
+  settled: "The lead marker has settled this script.",
+  with_lead: "This script is with the lead marker.",
+  already: "This script already has a second marking, or is waiting for one.",
+  not_waiting: "This script is not waiting for a second marker.",
+  // 3B Task 5: practice and seeded scripts, and a marker not cleared after practice or paused on the exam.
+  not_yours: NOT_YOURS,
+  too_many: TOO_MANY,
+  practice_first: PRACTICE_FIRST,
+  paused: MARKER_PAUSED,
+  practice_wait: PRACTICE_WAIT,
+  practice_not_ready: PRACTICE_NOT_READY,
+  locked: LOCKED,
 };
 
 /** Message for a marking open or close RPC failure code; unknown codes get the generic message. */
@@ -427,9 +458,9 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     nothing_left: "Nothing left to mark for now.",
     hold_expired: "Your hold on this script has ended. Press Next script to carry on.",
     // 3B: Next script for a paused marker, and for one not cleared for live marking.
-    paused: "Your marking on this exam is paused. The lead marker will be in touch.",
-    practice_wait: "Your practice scripts are with the lead marker.",
-    practice_not_ready: "Practice scripts are not ready yet.",
+    paused: YOU_ARE_PAUSED,
+    practice_wait: PRACTICE_WAIT,
+    practice_not_ready: PRACTICE_NOT_READY,
   },
   admin: {
     forbidden: FORBIDDEN,
@@ -446,10 +477,10 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     not_ready: "This script cannot be handed out yet.",
     not_eligible: "This script cannot be given to this marker.",
     // 3B: a second pass is never given to a marker who saw a name on the script, not even by an admin.
-    name_seen: "This marker may have seen a name on this script, so they cannot mark it.",
+    name_seen: NAME_SEEN,
     // 3B: a marker not cleared after practice, or paused on the exam, is given no live work.
-    practice_first: "This marker has not been cleared for live marking on this exam.",
-    paused: "This marker is paused on this exam.",
+    practice_first: PRACTICE_FIRST,
+    paused: MARKER_PAUSED,
   },
 };
 
@@ -478,8 +509,8 @@ const markingWorkMessages: Record<string, string> = {
   // 3B: a change after submit to a piece the lead marker has settled (marking_save).
   settled: "The lead marker has settled this script. Ask them if a mark should change.",
   // 3B: a paused marker's work (opening, saving, submitting), and an attempt whose feedback was shown (marking_save).
-  paused: "Your marking on this exam is paused. The lead marker will be in touch.",
-  locked: "This script can no longer be changed.",
+  paused: YOU_ARE_PAUSED,
+  locked: LOCKED,
 };
 const markingWorkConflicts: Record<string, string> = {
   rev: "This script was changed on another screen. Reload to carry on.",
@@ -515,8 +546,8 @@ const standardMessages: Record<string, string> = {
   not_found: "This could not be found. Refresh the page.",
   reason_required: "Give a reason of 3 to 300 characters.",
   not_approved: "This marker is not approved to mark this subject.",
-  not_yours: "Choose a script you marked yourself.",
-  too_many: "There are already 10 of these for this exam.",
+  not_yours: NOT_YOURS,
+  too_many: TOO_MANY,
   on_hold: "This script is on hold.",
 };
 const standardConflicts: Record<string, string> = {

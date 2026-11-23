@@ -43,8 +43,9 @@ export type OpenedPiece = {
     holdUntil: string | null;
     closed: boolean;
   };
-  /** practice: a practice piece (always false until 3B Task 5). sentBackNote: the lead marker's note when the piece
-   * was sent back to this marker. Every kind of pass is read the same way. */
+  /** practice: a practice piece (practice is announced; every other kind, a seeded one too, says false).
+   * sentBackNote: the lead marker's note when the piece was sent back to this marker. Every kind of pass is read the
+   * same way. */
   marking: { id: string; rev: number; status: MarkingStatus; pagesChanged: boolean; practice: boolean; sentBackNote: string | null };
   questions: ScreenQuestion[];
   optionGroups: { id: string; label: string; choose: number }[];
@@ -180,24 +181,48 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
   };
 }
 
-/** What marking_submit answers, in the screen's shape: the new rev and the feedback to show (null: none; Task 5 sends
- * "practice" or "seed"), or the refusal's code, its reason (a conflict's) and the labels of the questions still to
- * mark (incomplete). "internal" when the answer makes no sense. The script's state is no longer sent (3B). */
+/** The feedback a submit can bring (3B): a practice script, or a seeded script marked outside tolerance. */
+export type SubmitFeedback = "practice" | "seed";
+
+/** What marking_submit answers, in the screen's shape: the new rev and the feedback to show (null: none, as for every
+ * live, second and seeded piece within tolerance; anything else it might send is read as none), or the refusal's
+ * code, its reason (a conflict's) and the labels of the questions still to mark (incomplete). "internal" when the
+ * answer makes no sense. The script's state is no longer sent (3B). */
 export type SubmitAnswer =
-  | { ok: true; rev: number; feedback: string | null }
+  | { ok: true; rev: number; feedback: SubmitFeedback | null }
   | { ok: false; code: string; reason?: string; missing: string[] };
 
 export function parseSubmitted(data: unknown): SubmitAnswer {
   const d = obj(data);
   if (d?.ok === true) {
     const rev = num(d.rev);
-    return rev === null ? { ok: false, code: "internal", missing: [] } : { ok: true, rev, feedback: str(d.feedback) };
+    const feedback = d.feedback === "practice" || d.feedback === "seed" ? d.feedback : null;
+    return rev === null ? { ok: false, code: "internal", missing: [] } : { ok: true, rev, feedback };
   }
   const code = str(d?.code);
   if (!d || !code) return { ok: false, code: "internal", missing: [] };
   const reason = str(d.reason);
   const missing = Array.isArray(d.missing) ? d.missing.filter((x): x is string => typeof x === "string") : [];
   return reason === null ? { ok: false, code, missing } : { ok: false, code, reason, missing };
+}
+
+/** Refusals that take the page away until the marker goes back, with the refusal's own sentence in its place: the
+ * script is on hold, its pictures are being made again, the hold ended, marking closed (3A); the marker is paused on
+ * the exam, the attempt was locked once its feedback was shown, or the lead marker settled the script (3B). Input
+ * stops at once. */
+const SCREEN_STOPS = new Set(["on_hold", "pictures_updating", "hold_expired", "marking_closed", "paused", "locked", "settled"]);
+/** Of those, the refusals the server never takes back. */
+const FINAL_STOPS = new Set(["locked", "settled"]);
+
+export function stopsTheScreen(code: string | null | undefined): boolean {
+  return typeof code === "string" && SCREEN_STOPS.has(code);
+}
+
+/** Whether a stop drops the changes not yet saved: only for a refusal the server never takes back (they would be
+ * refused again each time the piece opened). A hold or a pause can end, so what was not saved then stays stored and
+ * goes when the piece is next opened. */
+export function dropsUnsaved(code: string | null | undefined): boolean {
+  return typeof code === "string" && FINAL_STOPS.has(code);
 }
 
 /** A mark as the marker reads it: "3", "2.5", "NR", or a dash for none yet. */

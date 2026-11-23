@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { markingScreenMessageFor, type Json } from "@stem/shared";
 import { giveBack, nextScript } from "@/app/marking/actions";
+import { FeedbackPanel } from "@/components/marking/FeedbackPanel";
 import { MarkPanel, focusMarkBox } from "@/components/marking/MarkPanel";
 import { PageCanvas } from "@/components/marking/PageCanvas";
 import { QuestionList } from "@/components/marking/QuestionList";
@@ -21,16 +22,19 @@ import {
   ACCESS_TICK_MS,
   accessCheckDue,
   accessCheckOutcome,
+  dropsUnsaved,
   firstLeaf,
   labelList,
   parseOpened,
   parseSubmitted,
   questionPageIndexes,
+  stopsTheScreen,
   zoomStepIn,
   zoomStepOut,
   type OpenedPiece,
   type ScreenPage,
   type ScreenQuestion,
+  type SubmitFeedback,
 } from "@/lib/marking-screen";
 import { createClient } from "@/lib/supabase/client";
 
@@ -163,11 +167,23 @@ type QueueHooks = {
   onReasonRequired: () => void;
   /** The refusal that stopped the queue, in plain words. */
   onRefused: (message: string) => void;
+  /** A refusal that takes the page away (stopsTheScreen: paused, locked, settled), by its code. */
+  onStop: (code: string) => void;
+};
+
+type Stop = { code: string; reason?: string };
+
+/** What a save refused with a code that stops the screen does: a change the server never takes (locked, settled) is
+ * dropped, so the piece opens again as it was saved, and the page is covered with the refusal's sentence. */
+const stopWith = (queue: RefObject<SaveQueue | null>, setStop: Dispatch<SetStateAction<Stop | null>>) => (code: string) => {
+  if (dropsUnsaved(code)) queue.current?.discard();
+  setStop({ code });
 };
 
 /**
  * The save queue of one marking at `atRev`. Its send throws on a network, PostgREST, server or sign-in error (the
- * queue tries again) and otherwise returns marking_save's answer; any refusal is final and stops the queue.
+ * queue tries again) and otherwise returns marking_save's answer; any refusal is final and stops the queue. One that
+ * stops the screen (paused, locked, settled) covers the page as on_hold does; any other is said in a banner.
  */
 function queueAt(atRev: number, h: QueueHooks): SaveQueue {
   const send = async (rev: number, ops: Op[], activeSeconds: number, reason?: string): Promise<SaveResult> => {
@@ -202,7 +218,9 @@ function queueAt(atRev: number, h: QueueHooks): SaveQueue {
     onStatus: (s, code) => {
       h.setStatus(s);
       if (s === "reason_required") h.onReasonRequired();
-      if (s === "refused") h.onRefused(markingScreenMessageFor(code ?? null, typeof h.last.current?.reason === "string" ? h.last.current.reason : null));
+      if (s !== "refused") return;
+      if (code && stopsTheScreen(code)) h.onStop(code);
+      else h.onRefused(markingScreenMessageFor(code ?? null, typeof h.last.current?.reason === "string" ? h.last.current.reason : null));
     },
   });
 }
@@ -243,8 +261,14 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
   /** Submit is running: input stops until it answers (the ref stops it at once, before the next render). */
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
-  /** A refusal of Submit that takes the page away (a hold, marking closed, the script no longer the marker's). */
-  const [stop, setStop] = useState<{ code: string; reason?: string } | null>(null);
+  /** A refusal that takes the page away: of Submit (a hold, marking closed, the script no longer the marker's, a
+   * pause) or of a save (stopsTheScreen: paused, locked, settled). */
+  const [stop, setStop] = useState<Stop | null>(null);
+  /** 3B: a practice script, or a seeded script marked outside tolerance, once submitted: its feedback takes the page's
+   * place. A submitted practice script opens on it again (practice is announced); a seeded one never does. */
+  const [feedback, setFeedback] = useState<SubmitFeedback | null>(
+    !readOnly && piece.marking.practice && piece.marking.status === "submitted" ? "practice" : null,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [schemeMessage, setSchemeMessage] = useState<string | null>(null);
   /** The pictures' links, whether each failed and how often it was tried: all by page id. */
@@ -261,12 +285,17 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
 
   // A change after submit asks for its reason, unless another box is open (its banner offers the reason then).
   const askReason = () => setDialog((d) => d ?? "reason");
-  const hooksFor = (): QueueHooks => ({ markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: askReason, onRefused: setRefusal });
+  const hooksFor = (): QueueHooks => ({
+    markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: askReason, onRefused: setRefusal, onStop: stopWith(queue, setStop),
+  });
 
   // The save queue lives as long as the screen; operations left from an earlier visit at this rev are sent first.
   useEffect(() => {
     if (readOnly) return;
-    const q = queueAt(piece.marking.rev, { markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog((d) => d ?? "reason"), onRefused: setRefusal });
+    const q = queueAt(piece.marking.rev, {
+      markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog((d) => d ?? "reason"), onRefused: setRefusal,
+      onStop: stopWith(queue, setStop),
+    });
     queue.current = q;
     if (boot.pending.length > 0) q.push(boot.pending);
     // The queue in use (Submit starts a new one) warns before the tab closes with changes not yet sent.
@@ -304,8 +333,9 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
   );
   const missing = totals.missing.map((id) => questions.find((q) => q.id === id)?.label ?? "");
   const coverCode = stop?.code ?? COVER_CODES[status] ?? null;
-  /** The page is taken away (a hold, new pictures, the hold ended, marking closed): no picture is shown or asked for. */
-  const covered = readOnly || coverCode !== null;
+  /** The page is taken away (a hold, new pictures, the hold ended, marking closed, a pause, a locked or settled script),
+   * or the feedback took its place: no picture is shown or asked for. */
+  const covered = readOnly || coverCode !== null || feedback !== null;
   const stale = status === "stale";
   const stopped = busy || covered || stale || status === "refused" || status === "reason_required";
   const pageId = page?.pageId ?? null;
@@ -600,6 +630,18 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
     const atRev = rev.current;
     const { data, error } = await createClient().rpc("marking_submit", { p_marking: markingId, p_rev: atRev });
     const d = parseSubmitted(error ? null : data);
+    if (d.ok && d.feedback) {
+      // A practice script, or a seeded one outside tolerance: the attempt is locked and its feedback takes the page's
+      // place. Nothing can be changed on it, so nothing (normally nothing: input stops while Submit runs) is kept.
+      rev.current = d.rev;
+      q?.discard();
+      q?.dispose();
+      queue.current = null;
+      setStatus("saved");
+      setSubmitted(true);
+      setFeedback(d.feedback);
+      return;
+    }
     if (d.ok) {
       // Submit moves the rev on: the queue starts again from it, with no reason yet for this visit. Anything still
       // waiting in the old queue (input stops while Submit runs, so normally nothing) moves to the new one, and the
@@ -623,7 +665,7 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
     if (code === "incomplete") {
       return setNotice(`${markingScreenMessageFor(code)}${labels.length ? ` Still to mark: ${labelList(labels)}.` : ""}`);
     }
-    if (["on_hold", "pictures_updating", "hold_expired", "marking_closed", "forbidden", "not_found"].includes(code) || code === "conflict") {
+    if (stopsTheScreen(code) || code === "forbidden" || code === "not_found" || code === "conflict") {
       return setStop({ code, reason });
     }
     setNotice(markingScreenMessageFor(code, reason));
@@ -706,9 +748,11 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
           </svg>
           Marking
         </Link>
-        <button type="button" aria-expanded={listOpen} onClick={openList} className={`${QUIET} min-[1200px]:hidden`}>
-          Questions
-        </button>
+        {!feedback && (
+          <button type="button" aria-expanded={listOpen} onClick={openList} className={`${QUIET} min-[1200px]:hidden`}>
+            Questions
+          </button>
+        )}
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold text-slate-900">{piece.unit.examTitle}</h1>
           <p className="truncate text-sm text-slate-600">
@@ -722,13 +766,17 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
             {piece.unit.indexNumber ?? "–"}
           </span>
           <span className="rounded-full border border-slate-300 bg-slate-100 px-2.5 py-0.5 text-sm font-medium text-slate-700">Name hidden</span>
+          {/* Practice is announced; every other kind of piece, a seeded one too, shows nothing here. */}
+          {piece.marking.practice && (
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-sm font-medium text-blue-800">Practice</span>
+          )}
         </div>
         <p data-testid="save-status" role="status" className="max-w-md text-sm text-slate-700">
           {statusWords}
         </p>
         {holdLine && <p className="text-sm text-slate-600">{holdLine}</p>}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {!readOnly && page && (
+          {!readOnly && page && !feedback && (
             <button type="button" className={QUIET} disabled={busy || covered} onClick={() => setDialog("name")}>
               Name visible
             </button>
@@ -761,10 +809,11 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
       </header>
 
       <Banners
-        submitted={submitted && !readOnly}
+        submitted={submitted && !readOnly && !feedback}
         pagesChanged={piece.marking.pagesChanged && !submitted}
+        sentBackNote={readOnly || feedback ? null : piece.marking.sentBackNote}
         status={status}
-        refusal={status === "refused" ? refusal : null}
+        refusal={status === "refused" && !stop ? refusal : null}
         notice={notice}
         onReload={onReload}
         onUndoLast={() => {
@@ -774,73 +823,85 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
         onReason={() => setDialog("reason")}
       />
 
-      <div className="relative flex min-h-0 flex-1">
-        <aside className="hidden w-60 shrink-0 border-r border-slate-200 bg-white min-[1200px]:block">{list}</aside>
-        {listOpen && (
-          <div className="fixed inset-0 z-40 flex min-[1200px]:hidden">
-            <div role="dialog" aria-modal="true" aria-label="Questions" className="flex h-full w-72 max-w-[85vw] flex-col border-r border-slate-200 bg-white shadow-xl">
-              <div className="flex justify-end border-b border-slate-200 p-2">
-                <button type="button" autoFocus className={QUIET} onClick={closeList}>
-                  Close
-                </button>
-              </div>
-              <div className="min-h-0 flex-1">{list}</div>
+      {feedback ? (
+        // The attempt's feedback takes the page's place: the marks beside the lead marker's, then Next script.
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl p-4 sm:p-6">
+            <div className="space-y-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <FeedbackPanel markingId={markingId} />
+              <NextScriptButton unitId={piece.unit.id} saveFirst={saveFirst} onSame={onReload} />
             </div>
-            <button type="button" aria-label="Close the questions" className={`flex-1 bg-slate-900/30 ${FOCUS}`} onClick={closeList} />
           </div>
-        )}
-        <main className="flex min-w-0 flex-1 flex-col">
-          <PageCanvas
-            page={page}
-            pageIndex={pageIndex}
-            pageCount={pages.length}
-            onPage={showPage}
-            url={!covered && shownPicture && !failed[shownPicture] ? (urls[shownPicture] ?? null) : null}
-            pictureFailed={!!(shownPicture && failed[shownPicture])}
-            onPictureError={() => shownPicture && pictureError(shownPicture)}
-            onPictureLoad={() => shownPicture && pictureLoaded(shownPicture)}
-            onRetryPicture={() => shownPicture && retryPicture(shownPicture)}
-            annotations={pageAnnotations}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onPut={(a: SavedAnnotation) => apply([{ op: "ann_put", ...a }])}
-            onErase={(ids) => {
-              apply(ids.map((id) => ({ op: "ann_del" as const, id })));
-              if (selectedId && ids.includes(selectedId)) setSelectedId(null);
-            }}
-            questionId={current?.id ?? null}
-            tool={tool}
-            onTool={setTool}
-            touchDevice={touchDevice}
-            fingerDraw={fingerDraw}
-            onFingerDraw={setFingerDraw}
-            zoom={zoom}
-            onZoom={(z) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)))}
-            onZoomIn={() => setZoom((z) => zoomStepIn(z))}
-            onZoomOut={() => setZoom((z) => zoomStepOut(z))}
-            onFitWidth={() => setZoom(1)}
-            canUndo={model.undo.length > 0}
-            canRedo={model.redo.length > 0}
-            onUndo={onUndo}
-            onRedo={onRedo}
-            onDeleteSelected={deleteSelected}
-            disabled={stopped}
-            cover={coverBody}
-          />
         </main>
-        <aside className="w-[300px] shrink-0 border-l border-slate-200 bg-white min-[1200px]:w-[340px]">
-          <MarkPanel
-            question={current}
-            entry={entry}
-            onMark={(mark, na) => current && setMark(current.id, mark, na)}
-            disabled={stopped}
-            note={model.note}
-            onNote={(text) => apply([{ op: "note", text }])}
-            onOpenScheme={piece.markSchemePath ? () => void openScheme() : null}
-            schemeMessage={schemeMessage}
-          />
-        </aside>
-      </div>
+      ) : (
+        <div className="relative flex min-h-0 flex-1">
+          <aside className="hidden w-60 shrink-0 border-r border-slate-200 bg-white min-[1200px]:block">{list}</aside>
+          {listOpen && (
+            <div className="fixed inset-0 z-40 flex min-[1200px]:hidden">
+              <div role="dialog" aria-modal="true" aria-label="Questions" className="flex h-full w-72 max-w-[85vw] flex-col border-r border-slate-200 bg-white shadow-xl">
+                <div className="flex justify-end border-b border-slate-200 p-2">
+                  <button type="button" autoFocus className={QUIET} onClick={closeList}>
+                    Close
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1">{list}</div>
+              </div>
+              <button type="button" aria-label="Close the questions" className={`flex-1 bg-slate-900/30 ${FOCUS}`} onClick={closeList} />
+            </div>
+          )}
+          <main className="flex min-w-0 flex-1 flex-col">
+            <PageCanvas
+              page={page}
+              pageIndex={pageIndex}
+              pageCount={pages.length}
+              onPage={showPage}
+              url={!covered && shownPicture && !failed[shownPicture] ? (urls[shownPicture] ?? null) : null}
+              pictureFailed={!!(shownPicture && failed[shownPicture])}
+              onPictureError={() => shownPicture && pictureError(shownPicture)}
+              onPictureLoad={() => shownPicture && pictureLoaded(shownPicture)}
+              onRetryPicture={() => shownPicture && retryPicture(shownPicture)}
+              annotations={pageAnnotations}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onPut={(a: SavedAnnotation) => apply([{ op: "ann_put", ...a }])}
+              onErase={(ids) => {
+                apply(ids.map((id) => ({ op: "ann_del" as const, id })));
+                if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+              }}
+              questionId={current?.id ?? null}
+              tool={tool}
+              onTool={setTool}
+              touchDevice={touchDevice}
+              fingerDraw={fingerDraw}
+              onFingerDraw={setFingerDraw}
+              zoom={zoom}
+              onZoom={(z) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)))}
+              onZoomIn={() => setZoom((z) => zoomStepIn(z))}
+              onZoomOut={() => setZoom((z) => zoomStepOut(z))}
+              onFitWidth={() => setZoom(1)}
+              canUndo={model.undo.length > 0}
+              canRedo={model.redo.length > 0}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onDeleteSelected={deleteSelected}
+              disabled={stopped}
+              cover={coverBody}
+            />
+          </main>
+          <aside className="w-[300px] shrink-0 border-l border-slate-200 bg-white min-[1200px]:w-[340px]">
+            <MarkPanel
+              question={current}
+              entry={entry}
+              onMark={(mark, na) => current && setMark(current.id, mark, na)}
+              disabled={stopped}
+              note={model.note}
+              onNote={(text) => apply([{ op: "note", text }])}
+              onOpenScheme={piece.markSchemePath ? () => void openScheme() : null}
+              schemeMessage={schemeMessage}
+            />
+          </aside>
+        </div>
+      )}
 
       {dialog === "name" && page && (
         <NameVisibleDialog
@@ -974,6 +1035,7 @@ function pagesFor(q: ScreenQuestion | null, questions: ScreenQuestion[], pages: 
 function Banners({
   submitted,
   pagesChanged,
+  sentBackNote,
   status,
   refusal,
   notice,
@@ -983,6 +1045,8 @@ function Banners({
 }: {
   submitted: boolean;
   pagesChanged: boolean;
+  /** 3B: the lead marker's note when they sent the piece back to this marker. */
+  sentBackNote: string | null;
   status: SaveStatus;
   refusal: string | null;
   notice: string | null;
@@ -996,6 +1060,11 @@ function Banners({
       {submitted && (
         <p role="status" className={`${box} border-blue-200 bg-blue-50 text-blue-900`}>
           Submitted. You can still change it until marking closes.
+        </p>
+      )}
+      {sentBackNote && (
+        <p role="note" data-testid="sent-back-note" className={`${box} whitespace-pre-wrap border-amber-200 bg-amber-50 text-amber-900`}>
+          The lead marker sent this back: {sentBackNote}
         </p>
       )}
       {pagesChanged && <p className={`${box} border-amber-200 bg-amber-50 text-amber-900`}>Pages of this script changed. Check your marks and submit again.</p>}

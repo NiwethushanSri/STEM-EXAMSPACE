@@ -13,6 +13,8 @@ import {
   parseSubmitted,
   questionMarkText,
   questionPageIndexes,
+  stopsTheScreen,
+  dropsUnsaved,
   zoomStepIn,
   zoomStepOut,
 } from "./marking-screen";
@@ -127,6 +129,11 @@ describe("parseSubmitted", () => {
     expect(parseSubmitted({ ok: true, rev: 7, total: 8, max_total: 10, feedback: "practice" })).toEqual({ ok: true, rev: 7, feedback: "practice" });
     expect(parseSubmitted({ ok: true, rev: 7 })).toEqual({ ok: true, rev: 7, feedback: null });
   });
+  it("reads only the two kinds of feedback: practice, and a seeded script outside tolerance", () => {
+    expect(parseSubmitted({ ok: true, rev: 7, feedback: "seed" })).toEqual({ ok: true, rev: 7, feedback: "seed" });
+    expect(parseSubmitted({ ok: true, rev: 7, feedback: "live" })).toEqual({ ok: true, rev: 7, feedback: null });
+    expect(parseSubmitted({ ok: true, rev: 7, feedback: 1 })).toEqual({ ok: true, rev: 7, feedback: null });
+  });
   it("returns a refusal's code, its reason and the questions still to mark", () => {
     expect(parseSubmitted({ ok: false, code: "incomplete", missing: ["1", "2(a)", 3] })).toEqual({ ok: false, code: "incomplete", missing: ["1", "2(a)"] });
     expect(parseSubmitted({ ok: false, code: "conflict", reason: "rev", rev: 9 })).toEqual({ ok: false, code: "conflict", reason: "rev", missing: [] });
@@ -136,6 +143,20 @@ describe("parseSubmitted", () => {
     expect(parseSubmitted(null)).toEqual({ ok: false, code: "internal", missing: [] });
     expect(parseSubmitted({ ok: true })).toEqual({ ok: false, code: "internal", missing: [] });
     expect(parseSubmitted({ ok: false })).toEqual({ ok: false, code: "internal", missing: [] });
+  });
+});
+
+describe("refusals that stop the screen", () => {
+  it("paused, locked and settled take the page away with their sentence, as on_hold does", () => {
+    for (const c of ["on_hold", "pictures_updating", "hold_expired", "marking_closed", "paused", "locked", "settled"]) expect(stopsTheScreen(c), c).toBe(true);
+    for (const c of ["incomplete", "mark_out_of_range", "reason_required", "invalid_input", "conflict", "internal", "__proto__", null, undefined]) {
+      expect(stopsTheScreen(c), String(c)).toBe(false);
+    }
+  });
+  it("drops what was not saved only for a refusal the server never takes back", () => {
+    expect(["locked", "settled"].map(dropsUnsaved)).toEqual([true, true]);
+    // A hold or a pause can end: what was not saved stays stored and goes when the piece is next opened.
+    expect(["paused", "on_hold", "pictures_updating", "hold_expired", "marking_closed", null].map(dropsUnsaved)).toEqual([false, false, false, false, false, false]);
   });
 });
 

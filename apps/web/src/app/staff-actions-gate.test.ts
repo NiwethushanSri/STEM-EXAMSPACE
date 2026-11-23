@@ -136,7 +136,8 @@ describe("marking actions", () => {
     await expect(m.releaseAlert(UUID, "Pictures checked")).rejects.toThrow("NEXT_REDIRECT");
     await expect(m.noteAlert(UUID, "Seen it")).rejects.toThrow("NEXT_REDIRECT");
     await expect(m.releaseAllAlerts(UUID, "All checked")).rejects.toThrow("NEXT_REDIRECT");
-    expect(state.calls).toHaveLength(6);
+    await expect(m.markingFeedback(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(7);
     expect(state.calls.every((c) => c.join() === "corrector,teacher,admin,owner")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
   });

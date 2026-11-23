@@ -258,6 +258,21 @@ describe("markingMessageFor", () => {
     expect(markingMessageFor("no_lead")).toBe("Choose a lead marker for this subject first.");
     expect(markingMessageFor("marking_approved")).toBe("This exam's marking has been approved. An admin must withdraw the approval first.");
   });
+  it("maps every staff code of the checks on the marking (3B Tasks 2 to 5)", () => {
+    expect(markingMessageFor("name_seen")).toBe("This marker may have seen a name on this script, so they cannot mark it.");
+    expect(markingMessageFor("not_submitted")).toBe("This script's first marking is not submitted yet.");
+    expect(markingMessageFor("settled")).toBe("The lead marker has settled this script.");
+    expect(markingMessageFor("with_lead")).toBe("This script is with the lead marker.");
+    expect(markingMessageFor("already")).toBe("This script already has a second marking, or is waiting for one.");
+    expect(markingMessageFor("not_waiting")).toBe("This script is not waiting for a second marker.");
+    expect(markingMessageFor("not_yours")).toBe("Choose a script you marked yourself.");
+    expect(markingMessageFor("too_many")).toBe("There are already 10 of these for this exam.");
+    expect(markingMessageFor("practice_first")).toBe("This marker has not been cleared for live marking on this exam.");
+    expect(markingMessageFor("paused")).toBe("This marker is paused on this exam.");
+    expect(markingMessageFor("practice_wait")).toBe("Your practice scripts are with the lead marker.");
+    expect(markingMessageFor("practice_not_ready")).toBe("Practice scripts are not ready yet.");
+    expect(markingMessageFor("locked")).toBe("This script can no longer be changed.");
+  });
   it("falls back to the generic message", () => {
     expect(markingMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingMessageFor("__proto__")).toBe("Something went wrong. Please try again.");

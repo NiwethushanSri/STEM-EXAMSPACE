@@ -14,6 +14,7 @@ import {
   parseUnits,
   pieceHoldLine,
   pieceStateLabel,
+  practiceText,
   releaseBlockedText,
   type MyPiece,
 } from "./marking-lists";
@@ -73,6 +74,8 @@ const piece = (over: Partial<MyPiece>): MyPiece => ({
   holdReason: null,
   pagesChanged: false,
   lastSavedAt: null,
+  practice: false,
+  sentBack: false,
   ...over,
 });
 
@@ -144,6 +147,27 @@ describe("parseMyWork", () => {
   it("keeps only the fields it knows, so nothing else reaches the page", () => {
     expect(JSON.stringify(parseMyWork(answer))).not.toContain("Wilhelmina");
   });
+  it("reads the pause and practice of each exam, and practice and a note sent back on each piece", () => {
+    const w = parseMyWork({
+      ...answer,
+      exams: [
+        { ...answer.exams[0], paused: true, practice: { needed: 3, done: 1, waiting: false } },
+        { ...answer.exams[0], exam_id: "e2", paused: false, practice: null },
+        { ...answer.exams[0], exam_id: "e3", practice: { needed: "3", done: 1 } },
+      ],
+      pieces: [{ ...answer.pieces[0], practice: true, sent_back: true }, { ...answer.pieces[0], unit_id: "u2" }],
+    });
+    expect(w!.exams.map((e) => [e.paused, e.practice])).toEqual([
+      [true, { needed: 3, done: 1, waiting: false }],
+      [false, null],
+      // A practice line that makes no sense is read as none (the database checks again on Next script).
+      [false, null],
+    ]);
+    expect(w!.pieces.map((p) => [p.practice, p.sentBack])).toEqual([
+      [true, true],
+      [false, false],
+    ]);
+  });
   it("is null for a refusal or a broken answer", () => {
     expect(parseMyWork({ ok: false, code: "forbidden" })).toBeNull();
     expect(parseMyWork(null)).toBeNull();
@@ -156,6 +180,15 @@ describe("parseMyWork", () => {
       exams: [],
       pieces: [],
     });
+  });
+});
+
+describe("practiceText", () => {
+  it("practice_text_cases: practice to do, done and with the lead, not ready", () => {
+    expect(practiceText({ needed: 3, done: 1, waiting: false })).toBe("Practice first: 1 of 3 done");
+    expect(practiceText({ needed: 3, done: 0, waiting: false })).toBe("Practice first: 0 of 3 done");
+    expect(practiceText({ needed: 2, done: 2, waiting: true })).toBe("Your practice scripts are with the lead marker.");
+    expect(practiceText({ needed: 0, done: 0, waiting: false })).toBe("Practice scripts are not ready yet.");
   });
 });
 

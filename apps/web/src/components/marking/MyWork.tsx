@@ -7,7 +7,7 @@ import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
 import { DeadlineLine } from "@/components/marking/MarkingProgress";
 import { giveBack, nextScript } from "@/app/marking/actions";
-import { pieceHoldLine, pieceStateLabel, type MyPiece, type MyWorkExam } from "@/lib/marking-lists";
+import { PAUSED_TEXT, SENT_BACK_TEXT, pieceHoldLine, pieceStateLabel, practiceText, type MyPiece, type MyWorkExam } from "@/lib/marking-lists";
 
 const BUTTON = "min-h-11 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
 const QUIET = "min-h-11 rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
@@ -44,8 +44,19 @@ function ExamCard({ exam, now }: { exam: MyWorkExam; now: Date }) {
           {exam.paper ? ` · ${exam.paper}` : ""}
         </p>
         <DeadlineLine deadline={exam.deadline} overdue={exam.overdue} now={now} />
+        {/* 3B: while the marker is not cleared for live marking on the exam, where their practice stands. */}
+        {!exam.closed && exam.practice && (
+          <p data-testid="practice-line" className="text-sm font-medium text-slate-800">
+            {practiceText(exam.practice)}
+          </p>
+        )}
         {exam.closed ? (
           <p className="text-sm text-slate-700">Marking has closed for this exam.</p>
+        ) : exam.paused ? (
+          // 3B: a paused marker is given nothing on the exam, so there is no Next script.
+          <p role="status" className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            {PAUSED_TEXT}
+          </p>
         ) : exam.mode === "by_question" ? (
           <ul className="divide-y divide-slate-100">
             {exam.groups.map((g) => (
@@ -134,9 +145,20 @@ function PieceRow({ piece, examTitle, closed, now }: { piece: MyPiece; examTitle
           <span className="ml-2">
             <Badge tone={piece.onHold ? "amber" : piece.state === "submitted" ? "green" : "blue"}>{state}</Badge>
           </span>
+          {/* Practice is announced; a seeded script is listed as any other. */}
+          {piece.practice && (
+            <span className="ml-2">
+              <Badge tone="slate">Practice</Badge>
+            </span>
+          )}
         </p>
         <p className="text-slate-600">{examTitle}</p>
         {line && <p className="text-slate-700">{line}</p>}
+        {piece.sentBack && (
+          <p role="note" className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
+            {SENT_BACK_TEXT}
+          </p>
+        )}
         {piece.pagesChanged && (
           <p role="note" className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
             Pages of this script changed. Check your marks and submit again.

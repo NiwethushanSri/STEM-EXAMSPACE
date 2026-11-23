@@ -3,7 +3,7 @@
  * lines in plain words, in UK time. Each parser keeps only the fields it knows, so nothing else reaches a page. No
  * candidate name is read:
  * the functions give the script number and the index number only. The database checks every rule again. */
-import { markingWorkMessageFor, releaseBlockedMessage, type AppRole } from "@stem/shared";
+import { allocationMessageFor, markingWorkMessageFor, releaseBlockedMessage, type AppRole } from "@stem/shared";
 import { utcToLondonParts } from "@/lib/london-time";
 
 /** Who may open /marking. The database decides who may mark (an approval) and who leads a subject. */
@@ -79,7 +79,13 @@ export type MyWorkExam = {
   overdue: boolean;
   closed: boolean;
   left: number;
+  /** 3B: the marker is paused on this exam: Next script gives them nothing. */
+  paused: boolean;
+  /** 3B: while the marker is not cleared for live marking on this exam: the practice scripts (those done and those
+   * still to do), those done, and whether they are all done and wait for the lead marker. Null once cleared. */
+  practice: MyWorkPractice | null;
 };
+export type MyWorkPractice = { needed: number; done: number; waiting: boolean };
 export type MyPiece = {
   unitId: string;
   examId: string;
@@ -93,6 +99,10 @@ export type MyPiece = {
   holdReason: string | null;
   pagesChanged: boolean;
   lastSavedAt: string | null;
+  /** 3B: a practice script (practice is announced; a seeded script is listed as any other). */
+  practice: boolean;
+  /** 3B: the lead marker sent the piece back to the marker with a note. */
+  sentBack: boolean;
 };
 export type MyWork = { approved: boolean; leadSubjects: number[]; exams: MyWorkExam[]; pieces: MyPiece[] };
 
@@ -118,6 +128,8 @@ export function parseMyWork(data: unknown): MyWork | null {
       overdue: e.overdue === true,
       closed: e.closed === true,
       left: num(e.left),
+      paused: e.paused === true,
+      practice: practiceOf(e.practice),
     });
   }
   const pieces: MyPiece[] = [];
@@ -139,6 +151,8 @@ export function parseMyWork(data: unknown): MyWork | null {
       holdReason: str(p.hold_reason),
       pagesChanged: p.pages_changed === true,
       lastSavedAt: time(p.last_saved_at),
+      practice: p.practice === true,
+      sentBack: p.sent_back === true,
     });
   }
   return {
@@ -148,6 +162,30 @@ export function parseMyWork(data: unknown): MyWork | null {
     pieces,
   };
 }
+
+/** An exam's practice line as marking_my_work gives it, or null (none, or one that makes no sense). */
+function practiceOf(v: unknown): MyWorkPractice | null {
+  const p = obj(v);
+  if (!p) return null;
+  const { needed, done } = p;
+  const count = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+  return count(needed) && count(done) ? { needed, done, waiting: p.waiting === true } : null;
+}
+
+/** The practice line on an exam's card while the marker is not cleared for live marking: "Practice first: 1 of 3
+ * done"; once all are done, that they wait for the lead marker; while the exam has no practice script yet, that they
+ * are not ready. */
+export function practiceText(p: MyWorkPractice): string {
+  if (p.waiting) return allocationMessageFor("practice_wait", "marker");
+  if (p.needed === 0) return allocationMessageFor("practice_not_ready", "marker");
+  return `Practice first: ${p.done} of ${p.needed} done`;
+}
+
+/** What a paused exam's card says, in place of Next script. */
+export const PAUSED_TEXT = allocationMessageFor("paused", "marker");
+
+/** What a piece the lead marker sent back says in the marker's list (the note itself is on the marking screen). */
+export const SENT_BACK_TEXT = "Sent back by the lead marker.";
 
 /** Where "Next script" on the marking screen looks: the exam of the piece on the screen and, for an exam marked by
  * question, its question group (found by its label, which is unique in an exam). Null when the piece is not in the
