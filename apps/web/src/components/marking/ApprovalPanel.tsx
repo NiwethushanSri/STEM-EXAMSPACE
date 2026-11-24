@@ -162,7 +162,7 @@ export function ApprovalPanel({ examId, approval }: { examId: string; approval: 
                 maxLength={300}
                 className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
               />
-              <span className="text-xs text-slate-500">Up to 300 characters. It goes into the audit log.</span>
+              <span className="text-xs text-slate-500">3 to 300 characters, or leave it empty. It goes into the audit log.</span>
             </label>
             {error && (
               <p role="alert" className="text-sm text-red-700">
@@ -180,7 +180,9 @@ export function ApprovalPanel({ examId, approval }: { examId: string; approval: 
           busy={busy}
           error={error}
           onConfirm={(reason) => void run(() => withdrawApproval(examId, reason))}
-          onCancel={() => setDialog(null)}
+          onCancel={() => {
+            if (!busy) setDialog(null);
+          }}
         >
           <p className="text-sm text-slate-700">Marking stays closed until an admin reopens it.</p>
         </ReasonDialog>

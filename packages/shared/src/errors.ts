@@ -354,7 +354,8 @@ const structureMessages: Record<StructureContext, Record<string, string>> = {
     reason_required: "Give a reason of 3 to 300 characters.",
     invalid_input:
       "Check the questions: each needs a label and a maximum, on answer or spare pages of this paper, and optional questions must be out of the same total.",
-    conflict: "A maximum cannot go below a mark a marker has already given.",
+    // 3B Task 10: a final mark or a practice or seeded script's mark counts too (exam_structure_save).
+    conflict: "A maximum cannot go below a mark already given.",
     not_found: "This exam no longer exists. Refresh the page.",
   },
   file: {

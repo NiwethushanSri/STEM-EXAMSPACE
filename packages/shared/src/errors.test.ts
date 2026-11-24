@@ -268,6 +268,9 @@ describe("markingMessageFor", () => {
     expect(structureMessageFor("marking_approved", "save")).toBe(approved);
     expect(reviewMessageFor("marking_approved")).toBe(approved);
   });
+  it("says a maximum cannot go below any mark given, a final or a standard's too (3B Task 10)", () => {
+    expect(structureMessageFor("conflict", "save")).toBe("A maximum cannot go below a mark already given.");
+  });
   it("maps every staff code of the checks on the marking (3B Tasks 2 to 5)", () => {
     expect(markingMessageFor("name_seen")).toBe("This marker may have seen a name on this script, so they cannot mark it.");
     expect(markingMessageFor("not_submitted")).toBe("This script's first marking is not submitted yet.");

@@ -5,7 +5,17 @@
 -- final marks, questions, check settings) until an admin withdraws the approval with a reason; marking then stays
 -- closed until an admin reopens it. A script that turns up after the approval (verified, handed back or un-withdrawn)
 -- is flagged on the page (stale) and never added silently: marking is closed, so it is not handed out, not checked and
--- has no final marks (Review Focus 4). Results (Phase 4) may be prepared only while exam_marking.approved_at is set.
+-- has no final marks (Review Focus 4). Results (Phase 4) may be prepared only while exam_marking.approved_at is set,
+-- and (Ruling R22) not while the approval is stale.
+--
+-- A seen name is always reportable (Ruling R22: the privacy anti-goal outranks the freeze): a marker's Name visible
+-- (marking_name_visible) and staff's "A name still shows" (script_page_marking_name_shows) work on an approved exam as
+-- before. They take the script back from the markers, so it is no longer checked and its final marks go; the approval
+-- is then stale: stale is the exam approved with anything blocking it (a script arrived or changed after the approval).
+--
+-- A pause never strands an approval (Ruling R22): the minute job applies the pauses not applied yet on every exam whose
+-- marking has opened and is not approved, a closed one too, so pause_pending clears within a minute and the paused
+-- marker's scripts wait for the lead (with_lead), as on an open exam.
 --
 -- What blocks approval (marking_approval_blocks), on the scripts of the exam that are not withdrawn or void:
 --   scripts_not_checked: scripts not checked, whatever their state (a script still with staff counts); with_staff says
@@ -21,7 +31,11 @@
 --
 -- What the checks found (figures), on the same scripts:
 --   pieces; second_marked: pieces whose first and second markings are both submitted; within_tolerance: of those, the
---     pairs within tolerance now (marking_compare);
+--     pairs the check did not find to differ, as it recorded it (Ruling R22, as R20 for seeds): no difference review
+--     of that first and second marking stands (one withdrawn does not count). The check opens one exactly when a
+--     second marking is outside tolerance (Task 4's rule 5), so this is the comparison made then, with the tolerance
+--     of that time; nothing is compared again here (marking_compare per pair was too slow at 1,500 pairs). A paused
+--     marker's piece accepted with a submitted second marking (Ruling R15) was never compared, and counts as within;
 --   settled: difference reviews closed as first_stands, second_stands or lead_marks (a lead's change of a final mark is
 --     recorded as a closed sample review with outcome lead_marks, 20261123000007, and is not a settle);
 --   settled_by_a_party: those settled by one of the piece's two markers (the party flag of the lead's list);
@@ -49,12 +63,18 @@
 --   marking_reopen (20261122000005), marking_settings_set (20261122000005), marking_take_back (20261123000004),
 --   marking_assign (20261123000006), marking_script_take_back (20261123000005), marking_second_add (20261123000005),
 --   marking_second_drop (20261123000005), marking_standard_set (20261123000006), marking_marker_clear
---   (20261123000006), marking_marker_pause (20261123000006), marking_checks_set (20261123000007);
+--   (20261123000006), marking_marker_pause (20261123000006), marking_checks_set (20261123000007), and (Ruling R22)
+--   marking_script_hand_back (20261123000004) and marking_standard_retire (20261123000006);
 --   exam_structure_save (20261123000005): frozen too, and a maximum cannot go below a final mark or a practice or
 --     seeded script's mark either (final_marks, marking_standard_marks), as it cannot go below a marker's.
+--   marking_tick (20261123000006): the pauses not applied yet, on closed exams that are not approved too (above);
+--     marking_exam_sync still runs on open exams only.
 -- Already frozen since 20261123000007, so not made again: marking_review_settle, marking_review_accept,
 -- marking_send_back, marking_review_sample, marking_final_set. A marker's save after approval is refused marking_closed
--- (approval closes marking). Nothing else in them changed. Nothing here names a candidate.
+-- (approval closes marking). Looked at and left alone (Ruling R22, the review's M4): marking_alert_release and
+-- marking_alerts_release_all (only after a picture changed since the approval), marking_holds_expire (holds only),
+-- marker_unapprove and marker_conflict_set (markings in progress only), marking_reassign (marking_closed undoes it).
+-- Nothing else in them changed. Nothing here names a candidate.
 --
 -- Lock order (as 20261123000003): marker key -> exam_marking -> booking lock -> script rows in id order -> units in id
 -- order -> assignments and markings -> marking_reviews -> final_marks -> exam_markers. Approving and withdrawing take
@@ -150,8 +170,9 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- marking_approval_get: the exam's approval page (see the header). Admins only (forbidden otherwise); invalid_input (no
--- exam); not_found. can_approve: marking has opened and nothing blocks. stale: the exam is approved and a script is not
--- checked (one that arrived after the approval). Returns {ok, approved_at, approved_by_name, opened, can_approve, stale,
+-- exam); not_found. can_approve: marking has opened and nothing blocks. stale (Ruling R22): the exam is approved and
+-- something blocks (a script arrived after the approval, or a name was reported, a picture changed or an alert was
+-- raised on one since). Returns {ok, approved_at, approved_by_name, opened, can_approve, stale,
 -- blocks: [{code, count}], scripts: {checked, withdrawn, void, other}, no_script, checks: {double_marking,
 -- sample_percent, tolerance_percent, seeds, seed_every, practice, off: {reason, by_name, at}|null}, lead_name, figures:
 -- {pieces, second_marked, within_tolerance, settled: {first_stands, second_stands, lead_marks}, settled_by_a_party,
@@ -199,8 +220,11 @@ begin
   u as materialized (
     select u.id from public.marking_units u join s on s.id = u.script_id where u.exam_id = p_exam
   ),
+  -- Ruling R22 (as R20 for seeds): within as the check recorded it, not compared again here.
   pairs as materialized (
-    select coalesce((public.marking_compare(f.id, k.id) ->> 'within')::boolean, false) as within
+    select not exists (select 1 from public.marking_reviews r
+                       where r.unit_id = u.id and r.kind = 'difference' and r.marking_id = f.id and r.second_marking_id = k.id
+                         and r.outcome is distinct from 'withdrawn') as within
     from u
     join public.markings f on f.unit_id = u.id and f.kind = 'live' and f.status = 'submitted'
     join public.markings k on k.unit_id = u.id and k.kind = 'second' and k.status = 'submitted'
@@ -251,8 +275,7 @@ begin
                          from public.profiles p where p.id = v_m.approved_by),
     'opened', v_m.opened_at is not null,
     'can_approve', v_m.opened_at is not null and jsonb_array_length(v_blocks) = 0,
-    'stale', v_m.approved_at is not null and exists (select 1 from jsonb_array_elements(v_blocks) b
-                                                     where b ->> 'code' = 'scripts_not_checked'),
+    'stale', v_m.approved_at is not null and jsonb_array_length(v_blocks) > 0,
     'blocks', v_blocks,
     'scripts', v_scripts,
     'no_script', (select count(*)::int from public.bookings b
@@ -279,12 +302,12 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
--- marking_approve: an admin approves the exam's marking, with an optional note (up to 300 characters, trimmed). Refused:
--- forbidden; invalid_input (no exam, or a longer note); not_found; marking_not_open; not_all_checked with the blocks
--- (marking_approval_blocks). Sets approved_at and approved_by and, when marking is not closed, closes it (closed_at and
--- closed_by, the same moment and admin). Audited marking_approved: its reason is the note and, when checks were turned
--- off, "Checks turned off: {the reason}". An approved exam answers {ok, already: true} and nothing is written. Returns
--- {ok, already: false, closed} (closed: marking was closed by this approval).
+-- marking_approve: an admin approves the exam's marking, with an optional note (given, 3 to 300 characters, trimmed:
+-- Ruling R22). Refused: forbidden; invalid_input (no exam, or a note of another length); not_found; marking_not_open;
+-- not_all_checked with the blocks (marking_approval_blocks). Sets approved_at and approved_by and, when marking is not
+-- closed, closes it (closed_at and closed_by, the same moment and admin). Audited marking_approved: its reason is the
+-- note and, when checks were turned off, "Checks turned off: {the reason}". An approved exam answers {ok, already:
+-- true} and nothing is written. Returns {ok, already: false, closed} (closed: marking was closed by this approval).
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_approve(p_exam uuid, p_note text default null)
 returns jsonb
@@ -294,14 +317,15 @@ set search_path = ''
 as $$
 declare
   v_actor uuid := auth.uid();
-  v_note text := nullif(btrim(coalesce(p_note, '')), '');
+  v_given text := nullif(btrim(coalesce(p_note, '')), '');
+  v_note text := public.script_resolution_reason(p_note);
   v_m public.exam_marking%rowtype;
   v_blocks jsonb;
 begin
   if not public.is_staff_admin() then
     return jsonb_build_object('ok', false, 'code', 'forbidden');
   end if;
-  if p_exam is null or char_length(v_note) > 300 then
+  if p_exam is null or (v_given is not null and v_note is null) then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
   end if;
   if not exists (select 1 from public.exams e where e.id = p_exam) then
@@ -1526,6 +1550,170 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
+-- marking_script_hand_back: as 20261123000004, and (3B Task 10, Ruling R22) refused marking_approved while the exam's
+-- marking is approved, once the script's locks are held (marking_script_lock): a script taken back after the approval
+-- (a name reported) is handed back only once an admin has withdrawn it.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_script_hand_back(p_script uuid, p_reason text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_given text := nullif(btrim(coalesce(p_reason, '')), '');
+  v_reason text := public.script_resolution_reason(p_reason);
+  v_x public.scripts%rowtype;
+  v_reopened int;
+  v_marker uuid;
+begin
+  if not public.is_staff_admin() then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  if p_script is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  if v_given is not null and v_reason is null then
+    return jsonb_build_object('ok', false, 'code', 'reason_required');
+  end if;
+  if not exists (select 1 from public.scripts s where s.id = p_script) then
+    return jsonb_build_object('ok', false, 'code', 'not_found');
+  end if;
+  -- Ruling R10: a submitted piece may go back to its marker (marking_units_refresh), as a hand-out does, so the markers
+  -- of the script's markings of every kind have their keys taken (shared, in uuid order) before the script's locks.
+  -- While the script is taken back its pieces are on hold, so no new marking appears meanwhile.
+  for v_marker in
+    select distinct m.marker_id from public.markings m join public.marking_units u on u.id = m.unit_id
+    where u.script_id = p_script and m.status <> 'set_aside'
+    order by 1
+  loop
+    perform pg_advisory_xact_lock_shared(hashtextextended('marker:' || v_marker::text, 0));
+  end loop;
+  perform public.marking_script_lock(p_script);
+  select * into v_x from public.scripts s where s.id = p_script;
+  -- 3B Task 10: nothing about an approved exam's marking changes until an admin withdraws the approval.
+  if public.marking_exam_frozen(v_x.exam_id) then
+    return jsonb_build_object('ok', false, 'code', 'marking_approved');
+  end if;
+  if v_x.taken_back_at is null then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'not_taken_back');
+  end if;
+  if v_x.state <> 'verified' then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'not_verified');
+  end if;
+  if public.marking_script_busy(p_script) then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'pictures_updating');
+  end if;
+
+  -- Through ready to mark first: marking_exam_sync looks at no pieces, and the extras trigger writes extras_locked.
+  update public.scripts set taken_back_at = null, taken_back_by = null, taken_back_reason = null, state = 'ready_to_mark'
+  where id = p_script;
+  update public.marking_alerts set state = 'closed', closed_by = v_actor, closed_at = now(), resolution = 'handed_back', reason = v_reason
+  where script_id = p_script and state = 'open';
+  v_reopened := public.marking_units_refresh(p_script);
+  update public.marking_units u set on_hold = false, hold_reason = null
+  where u.script_id = p_script and u.on_hold and u.hold_reason in ('taken_back', 'name_visible', 'picture_changed', 'picture_missing');
+  update public.marking_assignments a set hold_until = now() + interval '2 hours'
+  where a.ended_at is null and a.how = 'next'
+    and a.unit_id in (select u.id from public.marking_units u where u.script_id = p_script and not u.on_hold);
+  perform public.marking_script_state(p_script);
+  insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+  values (v_actor, 'marking_script_handed_back', 'script', p_script, v_reason);
+  select * into v_x from public.scripts s where s.id = p_script;
+  return jsonb_build_object('ok', true, 'state', v_x.state, 'reopened', v_reopened);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- marking_standard_retire: as 20261123000006, and (3B Task 10, Ruling R22) refused marking_approved while the exam's
+-- marking is approved, once the exam's marking row is held.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_standard_retire(p_standard uuid, p_reason text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_actor uuid := auth.uid();
+  v_admin boolean := public.is_staff_admin();
+  v_reason text := public.script_resolution_reason(p_reason);
+  v_s public.marking_standards%rowtype;
+  v_u public.marking_units%rowtype;
+begin
+  if p_standard is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  select * into v_s from public.marking_standards s where s.id = p_standard;
+  if not found then
+    return jsonb_build_object('ok', false, 'code', case when v_admin then 'not_found' else 'forbidden' end);
+  end if;
+  if not v_admin and not exists (select 1 from public.exams e where e.id = v_s.exam_id and public.is_lead_for(v_actor, e.subject_id)) then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  if v_reason is null then
+    return jsonb_build_object('ok', false, 'code', 'reason_required');
+  end if;
+  -- Ruling R9: the exam's marking row, the script's row, the piece's, then its passes.
+  select * into v_u from public.marking_units u where u.id = v_s.unit_id;
+  perform 1 from public.exam_marking m where m.exam_id = v_u.exam_id for share;
+  -- 3B Task 10: nothing about an approved exam's marking changes until an admin withdraws the approval.
+  if public.marking_exam_frozen(v_u.exam_id) then
+    return jsonb_build_object('ok', false, 'code', 'marking_approved');
+  end if;
+  perform 1 from public.scripts s where s.id = v_u.script_id for no key update;
+  perform 1 from public.marking_units u where u.id = v_u.id for update;
+  if not public.marking_standard_end(p_standard, v_actor, v_reason) then
+    return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'retired');
+  end if;
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- Internal: the minute job, as 20261123000006, and (3B Task 10, Ruling R22) the pauses not applied yet are applied on
+-- every exam whose marking has opened and is not approved, a closed one too, so a pause never strands an approval
+-- (pause_pending clears within a minute); only an exam whose marking is open is synced. The marker's key is still only
+-- tried, before the pause takes the exam's row.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_tick()
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  r record;
+  v_marker uuid;
+begin
+  -- 3B Task 10 (Ruling R22): every exam whose marking has opened and is not approved, a closed one too (its pauses only).
+  for r in select m.exam_id, m.closed_at is null as is_open from public.exam_marking m
+           where m.opened_at is not null and m.approved_at is null order by m.exam_id loop
+    -- One exam's failure is its own: what it did is undone, the others still run, and the next minute tries it again.
+    -- The log line names the exam and the error's SQLSTATE only: an error's message can quote a row.
+    begin
+      if r.is_open then
+        perform public.marking_exam_sync(r.exam_id, null);
+      end if;
+      for v_marker in
+        select x.marker_id from public.exam_markers x
+        where x.exam_id = r.exam_id and x.paused_at is not null and x.pause_applied_at is null
+        order by x.marker_id
+      loop
+        if pg_try_advisory_xact_lock(hashtextextended('marker:' || v_marker::text, 0)) then
+          perform public.marking_pause_apply(r.exam_id, v_marker);
+        end if;
+      end loop;
+    exception when others then
+      raise warning 'marking_tick: the sync of exam % failed (SQLSTATE %)', r.exam_id, sqlstate;
+    end;
+  end loop;
+  perform public.marking_holds_expire(null);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
 -- Privileges. The internal functions are for definer callers only; the approval functions for signed-in users (they
 -- check for an admin). Functions made again by create or replace keep theirs (restated).
 -- ---------------------------------------------------------------------------------------------
@@ -1546,6 +1734,9 @@ revoke execute on function public.marking_second_drop(uuid[], text) from public,
 revoke execute on function public.marking_standard_set(uuid, text, text) from public, anon;
 revoke execute on function public.marking_marker_clear(uuid, uuid, text) from public, anon;
 revoke execute on function public.marking_marker_pause(uuid, uuid, text) from public, anon;
+revoke execute on function public.marking_script_hand_back(uuid, text) from public, anon;
+revoke execute on function public.marking_standard_retire(uuid, text) from public, anon;
+revoke execute on function public.marking_tick() from public, anon, authenticated, service_role;
 grant execute on function public.marking_approval_get(uuid) to authenticated;
 grant execute on function public.marking_approve(uuid, text) to authenticated;
 grant execute on function public.marking_approval_withdraw(uuid, text) to authenticated;
@@ -1561,3 +1752,5 @@ grant execute on function public.marking_second_drop(uuid[], text) to authentica
 grant execute on function public.marking_standard_set(uuid, text, text) to authenticated;
 grant execute on function public.marking_marker_clear(uuid, uuid, text) to authenticated;
 grant execute on function public.marking_marker_pause(uuid, uuid, text) to authenticated;
+grant execute on function public.marking_script_hand_back(uuid, text) to authenticated;
+grant execute on function public.marking_standard_retire(uuid, text) to authenticated;

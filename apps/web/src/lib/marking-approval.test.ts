@@ -87,7 +87,9 @@ describe("blockText", () => {
     expect(blockText({ code: "alerts_open", count: 1, withStaff: 0 })).toBe("1 alert needs attention.");
     expect(blockText({ code: "pictures_to_check", count: 1, withStaff: 0 })).toBe("1 script has a marking picture for staff to check.");
     expect(blockText({ code: "pictures_to_check", count: 2, withStaff: 0 })).toBe("2 scripts have marking pictures for staff to check.");
-    expect(blockText({ code: "pause_pending", count: 1, withStaff: 0 })).toBe("1 paused marker's scripts have not gone to the lead marker yet.");
+    expect(blockText({ code: "pause_pending", count: 1, withStaff: 0 })).toBe(
+      "1 paused marker's scripts have not gone to the lead marker yet. This clears within a minute.",
+    );
   });
 });
 
@@ -146,9 +148,12 @@ describe("the page's lines", () => {
     expect(figureLines({ ...f, settledByAParty: 0 })).toContain("Settled by a lead marker who was one of the two markers: 0.");
   });
   it("stale_text_and_note", () => {
-    expect(STALE_TEXT).toBe("A script arrived after this approval. Withdraw the approval to include it.");
+    expect(STALE_TEXT).toBe("A script arrived or changed after this approval. Withdraw the approval to include it.");
     expect(noteProblem("")).toBeNull();
+    expect(noteProblem("   ")).toBeNull();
+    expect(noteProblem("abc")).toBeNull();
     expect(noteProblem("x".repeat(300))).toBeNull();
-    expect(noteProblem("x".repeat(301))).toBe("A note can be up to 300 characters.");
+    expect(noteProblem(" ab ")).toBe("A note can be 3 to 300 characters, or leave it empty.");
+    expect(noteProblem("x".repeat(301))).toBe("A note can be 3 to 300 characters, or leave it empty.");
   });
 });

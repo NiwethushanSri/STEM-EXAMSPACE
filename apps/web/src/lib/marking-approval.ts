@@ -147,7 +147,7 @@ export function blockText(b: ApprovalBlock): string {
     case "pictures_to_check":
       return `${scripts(n)} ${n === 1 ? "has a marking picture" : "have marking pictures"} for staff to check.`;
     case "pause_pending":
-      return `${n} paused ${n === 1 ? "marker's" : "markers'"} scripts have not gone to the lead marker yet.`;
+      return `${n} paused ${n === 1 ? "marker's" : "markers'"} scripts have not gone to the lead marker yet. This clears within a minute.`;
     default:
       return "";
   }
@@ -197,9 +197,12 @@ export function figureLines(f: ApprovalFigures): string[] {
   return lines;
 }
 
-export const STALE_TEXT = "A script arrived after this approval. Withdraw the approval to include it.";
+/** Shown while an approval is stale (Ruling R22): it is approved and something blocks it, as a script that arrived, or a
+ * name reported, a picture changed or an alert raised on a script since. */
+export const STALE_TEXT = "A script arrived or changed after this approval. Withdraw the approval to include it.";
 
-/** Why an approval note cannot be sent (null: it can): optional, up to 300 characters. */
+/** Why an approval note cannot be sent (null: it can): optional; given, 3 to 300 characters (Ruling R22). */
 export function noteProblem(note: string): string | null {
-  return note.trim().length > 300 ? "A note can be up to 300 characters." : null;
+  const n = note.trim().length;
+  return n > 0 && (n < 3 || n > 300) ? "A note can be 3 to 300 characters, or leave it empty." : null;
 }
