@@ -13,6 +13,7 @@ import {
   parseSubmitted,
   questionMarkText,
   questionPageIndexes,
+  saveStatusWords,
   stopsTheScreen,
   dropsUnsaved,
   zoomStepIn,
@@ -157,6 +158,25 @@ describe("refusals that stop the screen", () => {
     expect(["locked", "settled"].map(dropsUnsaved)).toEqual([true, true]);
     // A hold or a pause can end: what was not saved stays stored and goes when the piece is next opened.
     expect(["paused", "on_hold", "pictures_updating", "hold_expired", "marking_closed", null].map(dropsUnsaved)).toEqual([false, false, false, false, false, false]);
+  });
+});
+
+describe("the save status beside the index", () => {
+  it("a save stopped by locked or settled says why, and never Saved", () => {
+    for (const status of ["saved", "refused"] as const) {
+      expect(saveStatusWords({ readOnly: false, status, stop: { code: "locked" } })).toBe("This script can no longer be changed.");
+      expect(saveStatusWords({ readOnly: false, status, stop: { code: "settled" } })).toBe(
+        "The lead marker has settled this script. Ask them if a mark should change.",
+      );
+    }
+  });
+  it("otherwise says what the save queue says, as before", () => {
+    expect(saveStatusWords({ readOnly: false, status: "saved", stop: null })).toBe("Saved");
+    expect(saveStatusWords({ readOnly: false, status: "saving", stop: null })).toBe("Saving…");
+    expect(saveStatusWords({ readOnly: false, status: "on_hold", stop: null })).toBe("Not saved");
+    // A pause keeps the change stored, to be sent when it ends: it is not saved.
+    expect(saveStatusWords({ readOnly: false, status: "refused", stop: { code: "paused" } })).toBe("Not saved");
+    expect(saveStatusWords({ readOnly: true, status: "saved", stop: null })).toBe("Read only");
   });
 });
 

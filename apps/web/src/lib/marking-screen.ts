@@ -2,11 +2,13 @@
  * draws with: full question labels ("2(b)(i)"), a question's pages, a mark in plain words, and the zoom steps. The
  * parser keeps only the fields it knows, so nothing else reaches the screen; the function itself names no candidate
  * (the index number only, Ruling R4). The database checks every rule again. */
+import { markingScreenMessageFor } from "@stem/shared";
 import type { AnnotationKind } from "@/lib/annotations";
 import { ANNOTATION_KINDS } from "@/lib/annotations";
 import { markButtons, type MarkEntry } from "@/lib/marking-marks";
 import type { OpenedMarking } from "@/lib/marking-model";
 import { ZOOM_MAX, ZOOM_MIN } from "@/lib/marking-pointer";
+import type { SaveStatus } from "@/lib/marking-save";
 
 export type ScreenPoint = { id: string; label: string | null; marks: number; marksTo: number | null; text: string };
 export type ScreenQuestion = {
@@ -223,6 +225,22 @@ export function stopsTheScreen(code: string | null | undefined): boolean {
  * goes when the piece is next opened. */
 export function dropsUnsaved(code: string | null | undefined): boolean {
   return typeof code === "string" && FINAL_STOPS.has(code);
+}
+
+const SAVE_WORDS: Partial<Record<SaveStatus, string>> = {
+  saved: "Saved",
+  saving: "Saving…",
+  offline: "Not saved: no connection. Your work is kept on this screen and will be sent when you are back online.",
+};
+
+/** The save status beside the index: "Read only" once marking has closed; for a save stopped by a refusal the server
+ * never takes back (locked, settled: the screen is back to the last saved marks), that refusal's sentence, never
+ * "Saved" (3B Ruling R12); otherwise what the save queue says ("Saved", "Saving…", no connection), or "Not saved"
+ * while it is stopped. */
+export function saveStatusWords(s: { readOnly: boolean; status: SaveStatus; stop: { code: string; reason?: string } | null }): string {
+  if (s.readOnly) return "Read only";
+  if (s.stop && dropsUnsaved(s.stop.code)) return markingScreenMessageFor(s.stop.code, s.stop.reason);
+  return SAVE_WORDS[s.status] ?? "Not saved";
 }
 
 /** A mark as the marker reads it: "3", "2.5", "NR", or a dash for none yet. */

@@ -22,15 +22,18 @@ import {
 
 // What the marker sees of the checks on the marking (Phase 3B Task 6), against the local stack, on a computer (1440 x
 // 900) and an iPad (820 x 1180): practice scripts and what they are told after each, a seeded script that looks like
-// any other until it is marked outside tolerance (Review Focus 1), a second marker who sees nothing of the first
-// marking, and a paused marker. Each test has an exam of its own (seedCheckedExam: the lead marker's own marking makes
-// the practice and seeded scripts); every row and file is removed afterwards.
+// any other until it is marked outside tolerance (Review Focus 1) and is then locked, a second marker who sees nothing
+// of the first marking, and a paused marker. Each test has an exam of its own (seedCheckedExam: the lead marker's own
+// marking makes the practice and seeded scripts), except that the locked seed is the one the test before missed; every
+// row and file is removed afterwards.
 // Needs the Edge Functions served locally (supabase functions serve --env-file supabase/functions/.env.test.local): the
 // screen's picture links come from marking-pictures. npm run e2e:local starts them when they are not served already.
 
 test.describe.configure({ mode: "serial" });
 
 const made: string[] = [];
+/** The seeded script seed_looks_like_any_script_until_a_miss marked outside the tolerance, and its marker. */
+let missed: { unitId: string; marker: Login } | null = null;
 
 test.beforeAll(async () => {
   await assertNoOwner();
@@ -55,6 +58,7 @@ const PRACTICE_HEADING = "Practice script. Compare your marks with the lead mark
 const SEED_HEADING = "This was a check script. Your marks were outside the tolerance. These are the lead marker's marks.";
 const PRACTICE_WAIT = "Your practice scripts are with the lead marker.";
 const PAUSED = "Your marking on this exam is paused. The lead marker will be in touch.";
+const LOCKED = "This script can no longer be changed.";
 const PIECE = /^\/marking\/[0-9a-f-]{36}$/;
 const COMPUTER = { width: 1440, height: 900 };
 const IPAD = { width: 820, height: 1180 };
@@ -295,6 +299,37 @@ test.describe("on a computer", () => {
     await expect(page.getByTestId("page-surface")).toHaveCount(0);
     await noSidewaysScroll(page, "the feedback on a seeded script", COMPUTER);
     await noNames(page, students);
+    missed = { unitId: second, marker };
+  });
+
+  test("missed_seed_opened_again_refuses_a_change", async ({ page }) => {
+    // The seed the test before marked outside the tolerance: its attempt is locked.
+    expect(missed).not.toBeNull();
+    const { unitId, marker } = missed!;
+    await signIn(page, marker);
+    await page.goto(`/marking/${unitId}`);
+    await expect(page.getByTestId("page-surface")).toBeVisible();
+    await expect(page.getByText(SUBMITTED)).toBeVisible();
+    await expect(page.getByTestId("question-3-mark")).toHaveText("1");
+
+    // A change is refused (Ruling R12): the screen says why, never "Saved"; the Submitted banner goes; input stops; and
+    // the mark on screen is back to its saved value.
+    await page.getByTestId("question-3").click();
+    await page.getByRole("button", { name: "2 marks", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: LOCKED })).toBeVisible();
+    await expect(page.getByTestId("save-status")).toHaveText(LOCKED);
+    await expect(page.getByText(SUBMITTED)).toHaveCount(0);
+    await expect(page.getByTestId("question-3-mark")).toHaveText("1");
+    await expect(page.getByTestId("running-total")).toHaveText("1 / 24");
+    await expect(page.getByTestId("page-surface")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "3 marks", exact: true })).toBeDisabled();
+
+    // Opened again, it shows the saved marks only: the refused change was not kept to be sent again.
+    await page.reload();
+    await expect(page.getByTestId("page-surface")).toBeVisible();
+    await expect(page.getByText(SUBMITTED)).toBeVisible();
+    await expect(page.getByTestId("question-3-mark")).toHaveText("1");
+    await saved(page);
   });
 
   test("paused_marker_is_told_and_stopped", async ({ page }) => {

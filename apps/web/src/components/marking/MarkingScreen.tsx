@@ -28,6 +28,7 @@ import {
   parseOpened,
   parseSubmitted,
   questionPageIndexes,
+  saveStatusWords,
   stopsTheScreen,
   zoomStepIn,
   zoomStepOut,
@@ -46,11 +47,6 @@ const BUTTON = `inline-flex min-h-11 items-center justify-center rounded px-4 te
 const PRIMARY = `${BUTTON} bg-blue-600 text-white hover:bg-blue-700`;
 const QUIET = `${BUTTON} border border-slate-300 bg-white text-slate-900 hover:bg-slate-50`;
 
-const SAVE_WORDS: Partial<Record<SaveStatus, string>> = {
-  saved: "Saved",
-  saving: "Saving…",
-  offline: "Not saved: no connection. Your work is kept on this screen and will be sent when you are back online.",
-};
 /** Save stops that take the page away until the marker goes back (or the lead releases the hold). */
 const COVER_CODES: Partial<Record<SaveStatus, string>> = {
   on_hold: "on_hold",
@@ -169,15 +165,38 @@ type QueueHooks = {
   onRefused: (message: string) => void;
   /** A refusal that takes the page away (stopsTheScreen: paused, locked, settled), by its code. */
   onStop: (code: string) => void;
+  /** A batch of operations the server accepted. */
+  onSaved: (ops: Op[]) => void;
 };
 
 type Stop = { code: string; reason?: string };
 
-/** What a save refused with a code that stops the screen does: a change the server never takes (locked, settled) is
- * dropped, so the piece opens again as it was saved, and the page is covered with the refusal's sentence. */
-const stopWith = (queue: RefObject<SaveQueue | null>, setStop: Dispatch<SetStateAction<Stop | null>>) => (code: string) => {
-  if (dropsUnsaved(code)) queue.current?.discard();
-  setStop({ code });
+/** What the screen keeps of its marking for a save that stops it: the state the server last confirmed, and the one on
+ * screen. */
+type StopTarget = {
+  queue: RefObject<SaveQueue | null>;
+  setStop: Dispatch<SetStateAction<Stop | null>>;
+  saved: RefObject<MarkingState>;
+  modelRef: RefObject<MarkingState>;
+  setModel: Dispatch<SetStateAction<MarkingState>>;
+};
+
+/** What a save refused with a code that stops the screen does (3B Ruling R12): the page is covered with the refusal's
+ * sentence and input stops. For a change the server never takes (locked, settled), the queue drops it and stays
+ * stopped, and the marks, NR, annotations and note go back to what the server last confirmed, so the screen shows
+ * only what is saved (and the piece opens again as it was saved). A pause keeps the change, as a hold does. */
+const stopWith = (t: StopTarget) => (code: string) => {
+  if (dropsUnsaved(code)) {
+    t.queue.current?.drop();
+    t.modelRef.current = t.saved.current;
+    t.setModel(t.saved.current);
+  }
+  t.setStop({ code });
+};
+
+/** Keeps the state the server last confirmed up to date with each batch it accepts. */
+const savedWith = (saved: RefObject<MarkingState>) => (ops: Op[]) => {
+  saved.current = applyOps(saved.current, ops);
 };
 
 /**
@@ -215,6 +234,7 @@ function queueAt(atRev: number, h: QueueHooks): SaveQueue {
     markingId: h.markingId,
     rev: atRev,
     send,
+    onSaved: h.onSaved,
     onStatus: (s, code) => {
       h.setStatus(s);
       if (s === "reason_required") h.onReasonRequired();
@@ -239,10 +259,13 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
     const pending = readOnly ? [] : restorePending(markingId, piece.marking.rev);
     const state = pending.length > 0 ? applyOps(base, pending) : base;
     const first = leaves.find((q) => !state.marks[q.id] || (state.marks[q.id].mark === null && !state.marks[q.id].na)) ?? leaves[0] ?? null;
-    return { state, pending, first };
+    return { base, state, pending, first };
   });
   const [model, setModel] = useState<MarkingState>(boot.state);
   const modelRef = useRef(boot.state);
+  /** The marks, NR, annotations and note as the server last confirmed them (as opened, then each batch it accepted),
+   * with nothing to undo: what the screen goes back to when a save is refused for good. */
+  const saved = useRef(boot.base);
   const [status, setStatus] = useState<SaveStatus>(boot.pending.length > 0 ? "saving" : "saved");
   const [submitted, setSubmitted] = useState(piece.marking.status === "submitted");
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -286,7 +309,8 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
   // A change after submit asks for its reason, unless another box is open (its banner offers the reason then).
   const askReason = () => setDialog((d) => d ?? "reason");
   const hooksFor = (): QueueHooks => ({
-    markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: askReason, onRefused: setRefusal, onStop: stopWith(queue, setStop),
+    markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: askReason, onRefused: setRefusal,
+    onStop: stopWith({ queue, setStop, saved, modelRef, setModel }), onSaved: savedWith(saved),
   });
 
   // The save queue lives as long as the screen; operations left from an earlier visit at this rev are sent first.
@@ -294,7 +318,7 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
     if (readOnly) return;
     const q = queueAt(piece.marking.rev, {
       markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog((d) => d ?? "reason"), onRefused: setRefusal,
-      onStop: stopWith(queue, setStop),
+      onStop: stopWith({ queue, setStop, saved, modelRef, setModel }), onSaved: savedWith(saved),
     });
     queue.current = q;
     if (boot.pending.length > 0) q.push(boot.pending);
@@ -696,7 +720,7 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
     router.push("/marking");
   };
 
-  const statusWords = readOnly ? "Read only" : (SAVE_WORDS[status] ?? "Not saved");
+  const statusWords = saveStatusWords({ readOnly, status, stop });
   const holdLine = !readOnly && !submitted && now !== null ? holdText(holdUntil, new Date(now)) : null;
   const canGiveBack = !readOnly && !submitted;
 
@@ -809,7 +833,7 @@ function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; a
       </header>
 
       <Banners
-        submitted={submitted && !readOnly && !feedback}
+        submitted={submitted && !readOnly && !feedback && !stopped}
         pagesChanged={piece.marking.pagesChanged && !submitted}
         sentBackNote={readOnly || feedback ? null : piece.marking.sentBackNote}
         status={status}
