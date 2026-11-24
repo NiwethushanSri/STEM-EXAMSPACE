@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, standardMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -365,6 +365,33 @@ describe("practice, seeded scripts and the pause (3B Task 5)", () => {
     expect(standardMessageFor("invalid_input")).toBe("That request was not valid. Reload the page and try again.");
     expect(standardMessageFor("conflict", "nope")).toBe("Something went wrong. Please try again.");
     expect(standardMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("reviewMessageFor (3B Task 7)", () => {
+  it("maps each code of the lead's review", () => {
+    expect(reviewMessageFor("forbidden")).toBe("You do not have permission to do that.");
+    expect(reviewMessageFor("invalid_input")).toBe("Check the details. A note to the marker can be 3 to 1,000 characters.");
+    expect(reviewMessageFor("not_found")).toBe("This could not be found. Refresh the page.");
+    expect(reviewMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(reviewMessageFor("conflict_of_interest")).toBe("You cannot review this script because of a declared conflict. Ask an admin.");
+    expect(reviewMessageFor("wrong_kind")).toBe("That action does not fit this review.");
+    expect(reviewMessageFor("incomplete")).toBe("Give every question a mark, or NR.");
+    expect(reviewMessageFor("mark_out_of_range")).toBe("That mark is not allowed for this question.");
+    expect(reviewMessageFor("marking_approved")).toBe("This exam's marking has been approved. An admin must withdraw the approval first.");
+  });
+  it("says why a review action met a conflict", () => {
+    expect(reviewMessageFor("conflict", "changed")).toBe("A marker changed this script while you were looking. Reload to see it.");
+    expect(reviewMessageFor("conflict", "settled")).toBe("This review is already closed. Refresh the page.");
+    expect(reviewMessageFor("conflict", "not_submitted")).toBe("This script's first marking is not submitted.");
+    expect(reviewMessageFor("conflict", "with_lead")).toBe("This script is with the lead marker. Settle or accept it first.");
+    expect(reviewMessageFor("conflict", "not_checked")).toBe("This script is not checked yet.");
+  });
+  it("falls back to the generic message", () => {
+    expect(reviewMessageFor("conflict", "nope")).toBe("Something went wrong. Please try again.");
+    expect(reviewMessageFor("conflict")).toBe("Something went wrong. Please try again.");
+    expect(reviewMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(reviewMessageFor(null)).toBe("Something went wrong. Please try again.");
   });
 });
 

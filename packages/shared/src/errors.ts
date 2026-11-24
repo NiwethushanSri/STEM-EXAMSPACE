@@ -565,6 +565,38 @@ export function standardMessageFor(code: string | null | undefined, reason?: str
   return code && Object.hasOwn(standardMessages, code) ? standardMessages[code] : messages.internal;
 }
 
+/** Failure codes of the lead's review (marking_review_list, marking_review_open, marking_review_settle,
+ * marking_review_accept, marking_send_back, marking_review_sample, marking_final_set). A conflict says why in `reason`:
+ * changed (a marker saved a change since the review was opened), settled (the review is closed already), not_submitted
+ * (the first marking is not submitted), with_lead (an open difference or paused marker's script is settled or accepted
+ * instead) or not_checked (the script is not checked yet). */
+const reviewMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input: "Check the details. A note to the marker can be 3 to 1,000 characters.",
+  not_found: "This could not be found. Refresh the page.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  conflict_of_interest: "You cannot review this script because of a declared conflict. Ask an admin.",
+  wrong_kind: "That action does not fit this review.",
+  incomplete: "Give every question a mark, or NR.",
+  mark_out_of_range: "That mark is not allowed for this question.",
+  marking_approved: "This exam's marking has been approved. An admin must withdraw the approval first.",
+};
+const reviewConflicts: Record<string, string> = {
+  changed: "A marker changed this script while you were looking. Reload to see it.",
+  settled: "This review is already closed. Refresh the page.",
+  not_submitted: "This script's first marking is not submitted.",
+  with_lead: "This script is with the lead marker. Settle or accept it first.",
+  not_checked: "This script is not checked yet.",
+};
+
+/** Message for a lead review RPC failure code (and a conflict's reason); unknown codes get the generic message. */
+export function reviewMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") {
+    return reason && Object.hasOwn(reviewConflicts, reason) ? reviewConflicts[reason] : messages.internal;
+  }
+  return code && Object.hasOwn(reviewMessages, code) ? reviewMessages[code] : messages.internal;
+}
+
 /** A lead marker with a declared conflict (or a tutor link) for the script's candidate. */
 const CONFLICTED_LEAD = "You cannot release this script because of a declared conflict. Ask an admin.";
 

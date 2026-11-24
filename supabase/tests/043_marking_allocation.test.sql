@@ -701,7 +701,8 @@ select is((select count(*)::int from public.bookings b where position(b.id::text
 select is((select p - 'last_saved_at' from jsonb_array_elements(pg_temp.r('mw') -> 'pieces') p where p ->> 'unit_id' = pg_temp.u('a1')::text),
   jsonb_build_object('unit_id', pg_temp.u('a1'), 'exam_id', pg_temp.k('ea'), 'script_number', (select number from public.scripts where id = pg_temp.k('a1')),
     'index_number', (select d.index_number from public.student_details d where d.profile_id = pg_temp.student('a1')), 'group_label', null,
-    'state', 'taken', 'how', 'assigned', 'hold_until', null, 'on_hold', false, 'hold_reason', null, 'pages_changed', false, 'practice', false),
+    'state', 'taken', 'how', 'assigned', 'hold_until', null, 'on_hold', false, 'hold_reason', null, 'pages_changed', false, 'practice', false,
+    'sent_back', false),
   'a piece m1 holds shows its script number, index number, state and hold');
 select is((select (e ->> 'left') || ' ' || (e -> 'mine' ->> 'taken') || ' ' || (e -> 'mine' ->> 'submitted') || ' ' || (e ->> 'closed')
                   || ' ' || (e ->> 'overdue') || ' ' || (e ->> 'mode') || ' ' || (e -> 'groups')::text

@@ -1978,14 +1978,23 @@ isOneToOne: false
 "marking_final_marks_from":
 { Args: { "p_marking": string,"p_reason": string,"p_unit": string }; Returns: undefined
                            },
+"marking_final_marks_lead":
+{ Args: { "p_marks": Json,"p_reason": string,"p_unit": string }; Returns: undefined
+                           },
 "marking_final_marks_remove":
 { Args: { "p_reason": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_final_set":
+{ Args: { "p_marks": Json,"p_reason": string,"p_unit": string }; Returns: Json
                            },
 "marking_give_back":
 { Args: { "p_reason"?: string,"p_unit": string }; Returns: Json
                            },
 "marking_holds_expire":
 { Args: { "p_now": string }; Returns: number
+                           },
+"marking_lead_marks_refusal":
+{ Args: { "p_every": boolean,"p_marks": Json,"p_unit": string }; Returns: Json
                            },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
@@ -2046,6 +2055,30 @@ isOneToOne: false
 "marking_reopen":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
+"marking_review_accept":
+{ Args: { "p_reason"?: string,"p_review": string }; Returns: Json
+                           },
+"marking_review_blind":
+{ Args: { "p_unit": string }; Returns: boolean
+                           },
+"marking_review_list":
+{ Args: { "p_exam"?: string,"p_kind"?: string }; Returns: Json
+                           },
+"marking_review_marking":
+{ Args: { "p_marking": string }; Returns: Json
+                           },
+"marking_review_open":
+{ Args: { "p_review": string }; Returns: Json
+                           },
+"marking_review_refusal":
+{ Args: { "p_unit": string }; Returns: string
+                           },
+"marking_review_sample":
+{ Args: { "p_count"?: number,"p_exam": string,"p_marker": string }; Returns: Json
+                           },
+"marking_review_settle":
+{ Args: { "p_first_rev": number,"p_marks"?: Json,"p_outcome": string,"p_reason": string,"p_review": string,"p_second_rev": number }; Returns: Json
+                           },
 "marking_save":
 { Args: { "p_active_seconds"?: number,"p_marking": string,"p_now"?: string,"p_ops": Json,"p_reason"?: string,"p_rev": number }; Returns: Json
                            },
@@ -2099,6 +2132,9 @@ isOneToOne: false
 { Args: { "p_exam": string }; Returns: {
               "unit_id": string
             }[]
+                           },
+"marking_send_back":
+{ Args: { "p_note": string,"p_reason": string,"p_to": string,"p_unit": string }; Returns: Json
                            },
 "marking_set_total":
 { Args: { "p_set": Json,"p_unit": string }; Returns: number
