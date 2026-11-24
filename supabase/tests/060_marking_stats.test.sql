@@ -426,8 +426,9 @@ select is(array[pg_temp.code(pg_temp.r('lead_suspended')), pg_temp.code(pg_temp.
 -- Subject 'ZZ Stats Big' (its lead bl, markers b1 to b5): exam big is marked by question in 5 groups (one question of 5
 -- marks each) and has 300 scripts. Each of the 1,500 pieces is first-marked; 10 of them are made 5 seeded and 5 practice
 -- scripts, attempted by the 4 markers who did not mark them live, and every other piece is second-marked (the worst case
--- the sample allows: 1,490 comparisons); rows written directly. The lead's call runs under the 4-second limit of a
--- list.
+-- the sample allows: 1,490 comparisons); rows written directly. The lead's call runs under a 6-second limit (Ruling
+-- R21): the limit a user meets is the 8-second statement timeout of a signed-in call (as Phase 3A Ruling R25), and
+-- this worst case took about 3.4 s in a full run here, too close to a list's 4 s.
 -- ---------------------------------------------------------------------------------------------
 create function pg_temp.timed(p_name text, p_sql text) returns jsonb language plpgsql as $$
 declare
@@ -473,16 +474,17 @@ analyze public.scripts, public.marking_units, public.markings, public.question_m
         public.marking_standard_marks, public.exam_questions, public.question_groups, public.exam_option_groups,
         public.exam_marking, public.exams, public.marker_approvals, public.profiles;
 select tests.as_user(pg_temp.uid('bl'));
-set local statement_timeout = '4s';
+set local statement_timeout = '6s';
 insert into res values ('big', pg_temp.timed('ms_big', format('select public.marking_stats(%L)', pg_temp.k('big'))));
 reset statement_timeout;
 select tests.as_postgres();
 select is(array[pg_temp.code(pg_temp.r('big')), pg_temp.e('big', 'pieces'), jsonb_array_length(pg_temp.r('big') -> 'markers')::text,
                 (select sum((x #>> '{second,compared}')::int)::text from jsonb_array_elements(pg_temp.r('big') -> 'markers') x),
                 (select sum((x #>> '{seeds,done}')::int + (x #>> '{practice,done}')::int)::text from jsonb_array_elements(pg_temp.r('big') -> 'markers') x),
-                ((pg_temp.r('ms_big') ->> 'ms')::int <= 4000)::text],
+                ((pg_temp.r('ms_big') ->> 'ms')::int <= 6000)::text],
   array['ok', '1500', '5', '2980', '40', 'true'],
-  'stats_in_time_at_1500_pieces: the lead''s statistics of 1,500 pieces (1,490 second-marked, 40 attempts) within 4 s');
+  'stats_in_time_at_1500_pieces: the lead''s statistics of 1,500 pieces (1,490 second-marked, 40 attempts) within 6 s, '
+  || 'under the 8 s statement timeout a signed-in user meets (Ruling R21, as Phase 3A R25)');
 select diag('marking_stats at 1,500 pieces: ' || (pg_temp.r('ms_big') ->> 'ms') || ' ms');
 
 select * from finish();
