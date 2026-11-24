@@ -379,6 +379,7 @@ describe("reviewMessageFor (3B Task 7)", () => {
     expect(reviewMessageFor("incomplete")).toBe("Give every question a mark, or NR.");
     expect(reviewMessageFor("mark_out_of_range")).toBe("That mark is not allowed for this question.");
     expect(reviewMessageFor("marking_approved")).toBe("This exam's marking has been approved. An admin must withdraw the approval first.");
+    expect(reviewMessageFor("marking_closed")).toBe("Marking has closed for this exam, so nobody could mark this script again.");
   });
   it("says why a review action met a conflict", () => {
     expect(reviewMessageFor("conflict", "changed")).toBe("A marker changed this script while you were looking. Reload to see it.");

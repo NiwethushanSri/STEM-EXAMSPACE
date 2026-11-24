@@ -580,6 +580,8 @@ const reviewMessages: Record<string, string> = {
   incomplete: "Give every question a mark, or NR.",
   mark_out_of_range: "That mark is not allowed for this question.",
   marking_approved: "This exam's marking has been approved. An admin must withdraw the approval first.",
+  // Ruling R16: a send-back while marking is closed.
+  marking_closed: "Marking has closed for this exam, so nobody could mark this script again.",
 };
 const reviewConflicts: Record<string, string> = {
   changed: "A marker changed this script while you were looking. Reload to see it.",

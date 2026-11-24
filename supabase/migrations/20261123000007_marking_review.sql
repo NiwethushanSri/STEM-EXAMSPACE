@@ -32,19 +32,27 @@
 -- is recorded (a closed sample review, lead_marks). So a later marker change is refused (settled), and no evaluation
 -- writes the first marks over the lead's.
 --
+-- A second marker sees neither the first marks nor the first layer (Ruling R14): the subject's lead and staff admins,
+-- whom a review may have shown a piece's first marking, are never given a second pass on a piece with any review. A
+-- paused marker's piece accepted by the lead is checked without a second marking (Ruling R15): a second pass not yet
+-- submitted ends, one submitted stands and is shown on the review.
+--
 -- Added:
 --   marking_review_refusal(p_unit), marking_review_blind(p_unit), marking_review_marking(p_marking),
---     marking_lead_marks_refusal(p_unit, p_marks, p_every), marking_final_marks_lead(p_unit, p_marks, p_reason)
---     (internal).
+--     marking_lead_marks_refusal(p_unit, p_marks, p_every), marking_final_marks_lead(p_unit, p_marks, p_reason),
+--     marking_review_sample_pieces(p_exam, p_marker, p_units) (internal).
 --   marking_review_list, marking_review_open, marking_review_settle, marking_review_accept, marking_send_back,
 --     marking_review_sample, marking_final_set.
+--   Index marking_reviews_unit_idx (a piece's reviews).
 -- Changed, each from its latest definition:
+--   marking_units_allowed (20261123000006): Ruling R14 (above), in the second-pass branch; marking_unit_blocked then
+--     answers not_eligible, and marking_second_stuck counts such a piece when nobody else may take it.
 --   marking_unit_settled (20261123000005): a closed sample review with outcome lead_marks (the lead changed a final
 --     mark) settles the piece too, closed after the first marking's current submission as before.
 --   marking_check_evaluate (20261123000005): rule 3 reads such a review as marking_unit_settled does; accepted writes the
 --     first marks as final marks only when it makes the piece checked (a final mark the lead changed afterwards stands
 --     when the piece is evaluated again); rule 1 also withdraws an open sample review (the marking it was of is no longer
---     submitted).
+--     submitted); an open paused marker's review is kept on the piece's submitted second marking (Ruling R15).
 --   marking_checks_set (20261123000005): Ruling R11: seeded scripts or practice turned off retire their standards still
 --     in use (marking_standard_end: their open attempts end and those in progress are set aside, switched_off), so Next
 --     script hands out and resumes none of them, as the list's left counts none.
@@ -262,11 +270,12 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- Internal: as 20261123000005, the piece's check, worked out again (that migration's header, rules 1 to 6), and (3B Task
 -- 7): rule 1 also withdraws an open sample review; rule 3 also finds a closed sample review with outcome lead_marks (as
--- marking_unit_settled); and accepted writes the first marks as final marks only when it makes the piece checked, so a
--- final mark the lead changed afterwards stands. Sets the piece's check_state, second_wanted (decided once), checked_at
--- (when it became checked) and final_marking_id (the marking its final marks came from; null unless checked), writes or
--- removes its final marks, opens or withdraws its reviews, and then its script's state follows. The caller holds the
--- script's and the piece's rows. Returns the check state.
+-- marking_unit_settled); accepted writes the first marks as final marks only when it makes the piece checked, so a final
+-- mark the lead changed afterwards stands; and (Ruling R15) an open paused marker's review is kept on the piece's
+-- submitted second marking, one submitted while it is open included. Sets the piece's check_state, second_wanted
+-- (decided once), checked_at (when it became checked) and final_marking_id (the marking its final marks came from; null
+-- unless checked), writes or removes its final marks, opens or withdraws its reviews, and then its script's state
+-- follows. The caller holds the script's and the piece's rows. Returns the check state.
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.marking_check_evaluate(p_unit uuid)
 returns text
@@ -305,6 +314,10 @@ begin
     update public.marking_reviews r set state = 'closed', outcome = 'withdrawn', closed_by = v_actor, closed_at = now()
     where r.unit_id = p_unit and r.state = 'open' and r.kind = 'difference'
       and (r.marking_id <> v_first.id or r.second_marking_id is distinct from v_second.id);
+    -- 3B Task 7 (Ruling R15): an open paused marker's review follows the piece's submitted second marking, so the lead
+    -- sees one submitted while the review waits for them.
+    update public.marking_reviews r set second_marking_id = v_second.id
+    where r.unit_id = p_unit and r.state = 'open' and r.kind = 'paused_marker' and r.second_marking_id is distinct from v_second.id;
     -- A settle covers only the submission it reviewed (as marking_unit_settled): one closed before this submission does not.
     select r.* into v_r from public.marking_reviews r
     where r.unit_id = p_unit and r.marking_id = v_first.id and r.state = 'closed'
@@ -489,7 +502,9 @@ $$;
 -- marking_review_open: one review, open or closed, for the review screen: refused as marking_review_refusal says, and
 -- forbidden for a lead blind to the piece (marking_review_blind). Both markings (marking_review_marking: marks, total,
 -- annotations and each marker's note to the lead), their comparison (marking_compare_sets, null without a second
--- marking) and the piece's final marks. Nothing names the candidate. Returns {ok, review: {id, kind, state, outcome,
+-- marking) and the piece's final marks. The second marking of an open review is the piece's submitted second marking now
+-- (Ruling R15: one submitted while a paused marker's review waits is shown); of a closed one, the one it was closed on.
+-- Nothing names the candidate. Returns {ok, review: {id, kind, state, outcome,
 -- party}, unit: {id, exam_title, paper, script_number, index_number, group_label}, structure: {questions,
 -- option_groups}, pages: [{n, page_id, copy_page, extra, rotation}], first: {...}, second: {...}|null, compare, final:
 -- [{question_id, mark, na, source}]}.
@@ -508,6 +523,7 @@ declare
   v_x public.scripts%rowtype;
   v_e public.exams%rowtype;
   v_why text;
+  v_second uuid;
 begin
   if p_review is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
@@ -526,12 +542,16 @@ begin
   select * into v_u from public.marking_units u where u.id = v_r.unit_id;
   select * into v_x from public.scripts s where s.id = v_u.script_id;
   select * into v_e from public.exams e where e.id = v_u.exam_id;
+  -- Ruling R15: an open review shows the piece's submitted second marking now; a closed one, the one it was closed on.
+  v_second := case when v_r.state = 'open'
+                   then (select k.id from public.markings k where k.unit_id = v_r.unit_id and k.kind = 'second' and k.status = 'submitted')
+                   else v_r.second_marking_id end;
 
   return jsonb_build_object(
     'ok', true,
     'review', jsonb_build_object(
       'id', v_r.id, 'kind', v_r.kind, 'state', v_r.state, 'outcome', v_r.outcome,
-      'party', exists (select 1 from public.markings m where m.id in (v_r.marking_id, v_r.second_marking_id) and m.marker_id = v_actor)),
+      'party', exists (select 1 from public.markings m where m.id in (v_r.marking_id, v_second) and m.marker_id = v_actor)),
     'unit', jsonb_build_object(
       'id', v_u.id,
       'exam_title', v_e.title,
@@ -561,8 +581,8 @@ begin
                                           'rotation', x.rotation) order by x.n)
       from public.marking_script_pages(v_u.script_id) x), '[]'::jsonb),
     'first', public.marking_review_marking(v_r.marking_id),
-    'second', case when v_r.second_marking_id is not null then public.marking_review_marking(v_r.second_marking_id) end,
-    'compare', case when v_r.second_marking_id is not null then public.marking_compare(v_r.marking_id, v_r.second_marking_id) end,
+    'second', case when v_second is not null then public.marking_review_marking(v_second) end,
+    'compare', case when v_second is not null then public.marking_compare(v_r.marking_id, v_second) end,
     'final', coalesce((
       select jsonb_agg(jsonb_build_object('question_id', f.question_id, 'mark', f.mark, 'na', f.not_attempted, 'source', f.source)
                        order by t.path)
@@ -670,7 +690,9 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- marking_review_accept: the lead (or an admin) accepts an open paused-marker or sample review; the reason is optional
 -- and, given, 3 to 300 characters (reason_required). The review closes as accepted. A paused marker's piece is then
--- evaluated: rule 3 checks it on its first marks, without a second marking. A sample review leaves the piece and its
+-- evaluated: rule 3 checks it on its first marks, without a second marking; first (Ruling R15) a second pass not yet
+-- submitted ends (its hold ends and its marking in progress is set aside, switched_off; audited marking_second_ended),
+-- second_wanted is kept and a submitted second marking stands. A sample review leaves the piece and its
 -- script as they are. Refused: invalid_input; not_found; forbidden, conflict_of_interest; reason_required; wrong_kind (a
 -- difference is settled instead); marking_approved; conflict with reason settled (the review is closed). Audited
 -- marking_review_accepted. Returns {ok, check_state}.
@@ -689,6 +711,7 @@ declare
   v_u public.marking_units%rowtype;
   v_why text;
   v_state text;
+  v_ended boolean;
 begin
   if p_review is null then
     return jsonb_build_object('ok', false, 'code', 'invalid_input');
@@ -708,10 +731,11 @@ begin
     return jsonb_build_object('ok', false, 'code', 'wrong_kind');
   end if;
 
-  -- Ruling R9: the exam's marking row, the booking's lock, the script's row and its pieces, the markings, the review.
+  -- Ruling R9: the exam's marking row, the booking's lock, the script's row and its pieces, every marking of the piece
+  -- (Ruling R15), the review.
   select * into v_u from public.marking_units u where u.id = v_r.unit_id;
   perform public.marking_script_lock(v_u.script_id);
-  perform 1 from public.markings m where m.id in (v_r.marking_id, v_r.second_marking_id) order by m.id for update;
+  perform 1 from public.markings m where m.unit_id = v_r.unit_id order by m.id for update;
   select * into v_r from public.marking_reviews r where r.id = p_review for update;
   if exists (select 1 from public.exam_marking m where m.exam_id = v_r.exam_id and m.approved_at is not null) then
     return jsonb_build_object('ok', false, 'code', 'marking_approved');
@@ -720,6 +744,27 @@ begin
     return jsonb_build_object('ok', false, 'code', 'conflict', 'reason', 'settled');
   end if;
 
+  -- Ruling R15: a paused marker's piece is checked without a second marking. A second pass not submitted ends: its hold
+  -- ends and its marking in progress is set aside (switched_off; unpaid, Ruling R1). A submitted one stands. Whether a
+  -- second marking is wanted is kept: a later re-mark of the piece is second-marked as it was drawn.
+  if v_r.kind = 'paused_marker' then
+    with ended as (
+      update public.marking_assignments a set ended_at = now(), end_reason = 'switched_off'
+      where a.unit_id = v_r.unit_id and a.kind = 'second' and a.ended_at is null
+      returning a.marker_id
+    ),
+    set_aside as (
+      update public.markings m set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'switched_off'
+      where m.unit_id = v_r.unit_id and m.kind = 'second' and m.status = 'in_progress'
+      returning m.marker_id
+    )
+    select (select count(*) from ended) + (select count(*) from set_aside) > 0 into v_ended;
+    if v_ended then
+      insert into public.audit_log (actor_id, action, target_type, target_id, reason)
+      values (v_actor, 'marking_second_ended', 'marking_unit', v_r.unit_id,
+        'The lead marker accepted a paused marker''s script: its second marking in progress is no longer needed.');
+    end if;
+  end if;
   update public.marking_reviews r
   set state = 'closed', outcome = 'accepted', reason = v_reason, closed_by = v_actor, closed_at = now()
   where r.id = p_review;
@@ -745,7 +790,8 @@ $$;
 -- the piece (of any kind) closes as sent_back first, a second marking stays, and the recheck triggers remove the final
 -- marks (no check state until the first marking is submitted again). Refused, in this order: invalid_input; not_found;
 -- forbidden, conflict_of_interest; reason_required; conflict with reason not_submitted (no submitted first marking) or
--- changed (it changed hands meanwhile); marking_approved. Audited marking_sent_back (to whom and the reason; the note is
+-- changed (it changed hands meanwhile); marking_approved; marking_closed (Ruling R16: nobody could mark it again).
+-- Audited marking_sent_back (to whom and the reason; the note is
 -- never in the audit row). Returns {ok, to}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_send_back(p_unit uuid, p_to text, p_note text, p_reason text)
@@ -800,6 +846,10 @@ begin
   if exists (select 1 from public.exam_marking m where m.exam_id = v_u.exam_id and m.approved_at is not null) then
     return jsonb_build_object('ok', false, 'code', 'marking_approved');
   end if;
+  -- Ruling R16: with marking closed nobody could mark it again.
+  if exists (select 1 from public.exam_marking m where m.exam_id = v_u.exam_id and m.closed_at is not null) then
+    return jsonb_build_object('ok', false, 'code', 'marking_closed');
+  end if;
   perform 1 from public.marking_reviews r where r.unit_id = p_unit and r.state = 'open' order by r.id for update;
 
   -- To the same marker only while they may still mark it.
@@ -841,13 +891,40 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
+-- Internal: the pieces of the exam (p_units: of those only) the routine sample may take of p_marker's work, each with
+-- its submitted live marking and submitted second marking: the piece is submitted, its live marking is p_marker's and
+-- submitted, and no review of that marking stands (one withdrawn does not count); it is not on hold and does not wait
+-- for a second marking (the lead may yet be its second marker); its script is being marked, marked or checked and not
+-- taken back; and the caller, unless an admin, is not refused it (marking_review_refusal).
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_review_sample_pieces(p_exam uuid, p_marker uuid, p_units uuid[])
+returns table (unit_id uuid, marking_id uuid, second_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select u.id, f.id,
+    (select k.id from public.markings k where k.unit_id = u.id and k.kind = 'second' and k.status = 'submitted')
+  from public.marking_units u
+  join public.markings f on f.unit_id = u.id and f.kind = 'live' and f.status = 'submitted' and f.marker_id = p_marker
+  join public.scripts s on s.id = u.script_id
+  where u.exam_id = p_exam and (p_units is null or u.id = any (p_units))
+    and u.state = 'submitted' and not u.on_hold
+    and u.check_state is distinct from 'waiting_second'
+    and s.state in ('marking', 'marked', 'checked') and s.taken_back_at is null
+    and not exists (select 1 from public.marking_reviews r
+                    where r.unit_id = u.id and r.marking_id = f.id and r.outcome is distinct from 'withdrawn')
+    and (public.is_staff_admin() or public.marking_review_refusal(u.id) is null)
+$$;
+
+-- ---------------------------------------------------------------------------------------------
 -- marking_review_sample: the lead's routine sample of one marker's work on an exam (for the subject's lead and
--- admins): p_count (1 to 20) pieces at random whose submitted live marking is p_marker's and which have no review yet of
--- that marking (one withdrawn does not count), each given one open sample review. A piece is skipped while it is on hold
--- or waits for a second marking (the lead may yet be its second marker), its script is withdrawn, void or taken back,
--- and, for a lead, when they are refused it (marking_review_refusal). The pieces' check states and their scripts' states
--- are not touched. Refused: invalid_input; not_found; forbidden; marking_approved. Audited marking_review_sampled when a
--- piece is added. Returns {ok, added}.
+-- admins): p_count (1 to 20) pieces at random of those marking_review_sample_pieces gives, each given one open sample
+-- review. The pieces are held in the standard order (Ruling R16) and read again under the locks, so one whose first
+-- marking was taken back or sent back meanwhile is skipped. The pieces' check states and their scripts' states are not
+-- touched. Refused: invalid_input; not_found; forbidden; marking_approved. Audited marking_review_sampled when a piece is
+-- added. Returns {ok, added}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_review_sample(p_exam uuid, p_marker uuid, p_count int default 5)
 returns jsonb
@@ -859,6 +936,7 @@ declare
   v_actor uuid := auth.uid();
   v_admin boolean := public.is_staff_admin();
   v_subject bigint;
+  v_units uuid[];
   v_n int;
 begin
   if p_exam is null or p_marker is null or p_count is null or p_count not between 1 and 20 then
@@ -879,27 +957,23 @@ begin
   end if;
   perform pg_advisory_xact_lock(hashtextextended('marking_review_sample:' || p_exam::text, 0));
 
-  with picked as (
-    select u.id as unit_id, f.id as marking_id,
-      (select k.id from public.markings k where k.unit_id = u.id and k.kind = 'second' and k.status = 'submitted') as second_id
-    from public.marking_units u
-    join public.markings f on f.unit_id = u.id and f.kind = 'live' and f.status = 'submitted' and f.marker_id = p_marker
-    join public.scripts s on s.id = u.script_id
-    where u.exam_id = p_exam and u.state = 'submitted' and not u.on_hold
-      and u.check_state is distinct from 'waiting_second'
-      and s.state in ('marking', 'marked', 'checked') and s.taken_back_at is null
-      and not exists (select 1 from public.marking_reviews r
-                      where r.unit_id = u.id and r.marking_id = f.id and r.outcome is distinct from 'withdrawn')
-      and (v_admin or public.marking_review_refusal(u.id) is null)
-    order by random()
-    limit p_count
-  ),
-  added as (
-    insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, second_marking_id)
-    select p_exam, p.unit_id, 'sample', p.marking_id, p.second_id from picked p
-    returning 1
-  )
-  select count(*)::int into v_n from added;
+  -- The pieces, at random; then (Ruling R16) the standard order: their scripts' rows in id order and their own
+  -- (marking_units_lock), then their markings. Each is read again under the locks: one whose first marking is no longer
+  -- submitted (taken back or sent back meanwhile) is skipped.
+  select coalesce(array_agg(t.unit_id), '{}') into v_units
+  from (select p.unit_id from public.marking_review_sample_pieces(p_exam, p_marker, null) p order by random() limit p_count) t;
+  v_n := 0;
+  if cardinality(v_units) > 0 then
+    perform public.marking_units_lock(v_units);
+    perform 1 from public.markings m where m.unit_id = any (v_units) order by m.id for share;
+    with added as (
+      insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, second_marking_id)
+      select p_exam, p.unit_id, 'sample', p.marking_id, p.second_id
+      from public.marking_review_sample_pieces(p_exam, p_marker, v_units) p
+      returning 1
+    )
+    select count(*)::int into v_n from added;
+  end if;
   if v_n > 0 then
     insert into public.audit_log (actor_id, action, target_type, target_id, reason)
     values (v_actor, 'marking_review_sampled', 'marker', p_marker,
@@ -1380,6 +1454,106 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------------------------
+-- The reviews of a piece, found by the piece (the one rule below asks whether a piece has any).
+-- ---------------------------------------------------------------------------------------------
+create index marking_reviews_unit_idx on public.marking_reviews (unit_id);
+
+-- ---------------------------------------------------------------------------------------------
+-- Internal: as 20261123000006, the one rule, and (3B Task 7, Ruling R14) a second pass is never given to the subject's
+-- lead marker or a staff admin when the piece has a review of any kind, closed or withdrawn ones included: the lead's
+-- list and the review screen may have shown them its first marking ("a second marker who sees neither the first marks
+-- nor the first layer"). The pieces of the exam (p_unit: that one only) that p_marker may be given as a p_kind pass,
+-- whatever the piece's own state and its live holder. Each piece comes with its group and its script.
+--   Every kind (live, second, practice, seed): the exam's marking is open and not closed, the marker is approved for its
+--   subject and not paused on the exam (read once); the piece is not on hold; its script was not taken back; the marker
+--   has no declared conflict or tutor link with the candidate; they hold no open assignment of another kind on it and
+--   no marking of theirs of another kind stands on it (one pass per marker).
+--   live, second and seed: the marker is cleared for live marking on the exam (marking_marker_cleared).
+--   live: the script is ready to mark or being marked; for Next script only (p_next), they did not see a name on it.
+--   second: the script is being marked, marked or checked; the piece waits for a second marking (check_state); nobody
+--   else holds its second pass and no second marking of another marker is submitted on it; they did not see a name on
+--   it, whoever hands it out; and (Ruling R14) they are not the subject's lead or a staff admin when the piece has a
+--   review (read once per call: whether they are is asked once, the piece's reviews only then).
+--   practice and seed: the script is being marked, marked or checked; the piece is a standard of that use, not retired
+--   and not set by this marker; no attempt of theirs on it is submitted; they never had a marking or a hold of another
+--   kind on it, in any state (one who held the script live would know it again); they did not see a name on it.
+-- Other kinds allow nothing. One piece is found by its key, a practice or seeded one from the exam's standards: the
+-- exam's pieces are scanned only for a live or second pass with p_unit null.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_units_allowed(p_exam uuid, p_marker uuid, p_kind public.marking_kind, p_next boolean,
+  p_unit uuid default null)
+returns table (unit_id uuid, group_id uuid, script_id uuid)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select u.id, u.group_id, u.script_id
+  from (
+    select v.id, v.group_id, v.script_id, v.on_hold, v.check_state from public.marking_units v
+    where p_unit is null and p_kind in ('live', 'second') and v.exam_id = p_exam
+    union all
+    -- A practice or seeded pass is only ever one of the exam's standards: the exam's pieces are not scanned for it.
+    select v.id, v.group_id, v.script_id, v.on_hold, v.check_state
+    from public.marking_standards st join public.marking_units v on v.id = st.unit_id
+    where p_unit is null and p_kind in ('practice', 'seed') and st.exam_id = p_exam and st.use = p_kind::text
+      and st.retired_at is null and v.exam_id = p_exam
+    union all
+    select v.id, v.group_id, v.script_id, v.on_hold, v.check_state from public.marking_units v
+    where v.id = p_unit and v.exam_id = p_exam
+  ) u
+  join public.scripts s on s.id = u.script_id
+  join public.bookings b on b.id = s.booking_id
+  where p_kind in ('live', 'second', 'practice', 'seed')
+    and not u.on_hold
+    and s.taken_back_at is null
+    and case when p_kind = 'live' then s.state in ('ready_to_mark', 'marking')
+             when p_kind = 'second' then s.state in ('marking', 'marked', 'checked') and u.check_state = 'waiting_second'
+                  -- Nobody else has the second pass: no other holder, no other second marking submitted.
+                  and not exists (select 1 from public.marking_assignments x
+                                  where x.unit_id = u.id and x.kind = 'second' and x.ended_at is null and x.marker_id <> p_marker)
+                  and not exists (select 1 from public.markings k
+                                  where k.unit_id = u.id and k.kind = 'second' and k.marker_id <> p_marker
+                                    and k.status = 'submitted')
+                  -- 3B Task 7 (Ruling R14): the subject's lead or a staff admin may have seen its first marking through
+                  -- a review: no second pass for them on a piece with any review.
+                  and not ((select public.is_lead_for(p_marker, e.subject_id)
+                                   or exists (select 1 from public.profiles p where p.id = p_marker and p.role in ('owner', 'admin'))
+                            from public.exams e where e.id = p_exam)
+                           and exists (select 1 from public.marking_reviews r where r.unit_id = u.id))
+             -- 3B Task 5: a practice or seeded pass: the piece is a standard of that use, not retired and not set by
+             -- this marker, and no attempt of theirs on it is submitted (each once per marker); nor did they ever have
+             -- a marking or a hold of another kind on it, in any state (one who held the script live would know it).
+             else s.state in ('marking', 'marked', 'checked')
+                  and exists (select 1 from public.marking_standards st
+                              where st.unit_id = u.id and st.use = p_kind::text and st.retired_at is null and st.set_by <> p_marker)
+                  and not exists (select 1 from public.markings k
+                                  where k.unit_id = u.id and k.marker_id = p_marker and k.kind = p_kind and k.status = 'submitted')
+                  and not exists (select 1 from public.markings k
+                                  where k.unit_id = u.id and k.marker_id = p_marker and k.kind <> p_kind)
+                  and not exists (select 1 from public.marking_assignments x
+                                  where x.unit_id = u.id and x.marker_id = p_marker and x.kind <> p_kind) end
+    -- Read once: the exam's marking is open and not closed, and the marker is approved for its subject; 3B Task 5: they
+    -- are not paused on the exam and, for every kind but practice, are cleared for live marking on it.
+    and exists (select 1 from public.exams e join public.exam_marking m on m.exam_id = e.id
+                where e.id = p_exam and m.opened_at is not null and m.closed_at is null
+                  and public.is_marker_for(p_marker, e.subject_id)
+                  and not public.marking_marker_paused(p_exam, p_marker)
+                  and (p_kind = 'practice' or public.marking_marker_cleared(p_exam, p_marker)))
+    -- marking_marker_blocked: a declared conflict or a tutor link.
+    and not exists (select 1 from public.marker_conflicts c where c.marker_id = p_marker and c.student_id = b.student_id)
+    and not exists (select 1 from public.tutor_students t where t.tutor_id = p_marker and t.student_id = b.student_id)
+    -- A name they saw: Next script never offers the piece; nobody gives them any other kind of pass on it.
+    and not ((p_next or p_kind <> 'live')
+             and exists (select 1 from public.marking_unit_exclusions x where x.unit_id = u.id and x.marker_id = p_marker))
+    -- One pass on a piece per marker: no marking of theirs of another kind stands on it, and they hold no other kind.
+    and not exists (select 1 from public.markings k
+                    where k.unit_id = u.id and k.marker_id = p_marker and k.kind <> p_kind and k.status <> 'set_aside')
+    and not exists (select 1 from public.marking_assignments x
+                    where x.unit_id = u.id and x.marker_id = p_marker and x.kind <> p_kind and x.ended_at is null)
+$$;
+
+-- ---------------------------------------------------------------------------------------------
 -- Privileges. The internal functions are for definer callers only; the review functions for signed-in users (they
 -- check who). Functions made again by create or replace keep theirs (restated).
 -- ---------------------------------------------------------------------------------------------
@@ -1388,6 +1562,8 @@ revoke execute on function public.marking_review_blind(uuid) from public, anon, 
 revoke execute on function public.marking_review_marking(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_lead_marks_refusal(uuid, jsonb, boolean) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_final_marks_lead(uuid, jsonb, text) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_review_sample_pieces(uuid, uuid, uuid[]) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_units_allowed(uuid, uuid, public.marking_kind, boolean, uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_unit_settled(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_check_evaluate(uuid) from public, anon, authenticated, service_role;
 revoke execute on function public.marking_review_list(uuid, text) from public, anon;

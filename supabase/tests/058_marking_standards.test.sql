@@ -887,10 +887,14 @@ select is((select count(*)::int from public.marking_assignments a join public.ma
            where u.exam_id = pg_temp.k('f') and a.kind <> 'live'), 0, 'and nothing but live passes is handed out');
 
 -- ---------------------------------------------------------------------------------------------
--- hand_back_with_changed_pages_leaves_practice_and_seed_attempts_alone: the seed m1 missed second (seed:m1:2) is taken
--- back, its page 1 is turned, and an admin hands it back.
+-- hand_back_with_changed_pages_leaves_practice_and_seed_attempts_alone: a seed m1 missed (seed:m1:2, or seed:m1:4 when
+-- that is seedA, which m1 also gave back once) is taken back, its page 1 is turned, and an admin hands it back. Its
+-- attempt is kept as 'a:hbm'.
 -- ---------------------------------------------------------------------------------------------
-insert into kv values ('a:hb', pg_temp.k('seed:m1:2'));
+insert into kv select 'a:hb', k.id from kv k
+where k.name in ('seed:m1:2', 'seed:m1:4') and k.id <> pg_temp.a('seedA') order by k.name limit 1;
+insert into kv select 'a:hbm', m.id from kv m
+where m.name = (select 'sm:m1:' || right(k.name, 1) from kv k where k.name in ('seed:m1:2', 'seed:m1:4') and k.id = pg_temp.a('hb'));
 insert into res values ('hb_misses', to_jsonb((pg_temp.xm('e', 'm1')).misses));
 insert into res values ('hb_tb', pg_temp.as('admin', format($q$ select public.marking_script_take_back(%L, 'Turn page 1 the right way up.') $q$,
   pg_temp.k(pg_temp.nm(pg_temp.a('hb'))))));
@@ -902,7 +906,7 @@ select is(array[pg_temp.code(pg_temp.r('hb_tb')), pg_temp.code(pg_temp.r('hb_hb'
   'hand_back_with_changed_pages_leaves_practice_and_seed_attempts_alone: the lead''s live marking comes back to them, so the seed is retired');
 select is(array[pg_temp.ms(pg_temp.nm(pg_temp.a('hb')), 'm1'), pg_temp.ended(pg_temp.nm(pg_temp.a('hb')), 'm1'),
     ((pg_temp.xm('e', 'm1')).misses = pg_temp.r('hb_misses')::int)::text,
-    ((select pages_changed_at from public.markings where id = pg_temp.k('sm:m1:2')) is null)::text],
+    ((select pages_changed_at from public.markings where id = pg_temp.a('hbm')) is null)::text],
   array['seed submitted', 'seed submitted', 'true', 'true'],
   'm1''s submitted miss stands, untouched, with no hold for them, and their misses are as they were');
 

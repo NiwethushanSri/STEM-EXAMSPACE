@@ -2076,6 +2076,11 @@ isOneToOne: false
 "marking_review_sample":
 { Args: { "p_count"?: number,"p_exam": string,"p_marker": string }; Returns: Json
                            },
+"marking_review_sample_pieces":
+{ Args: { "p_exam": string,"p_marker": string,"p_units": (string)[] }; Returns: {
+              "marking_id": string,"second_id": string,"unit_id": string
+            }[]
+                           },
 "marking_review_settle":
 { Args: { "p_first_rev": number,"p_marks"?: Json,"p_outcome": string,"p_reason": string,"p_review": string,"p_second_rev": number }; Returns: Json
                            },

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(69);
+select plan(80);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -559,6 +559,19 @@ select is(array[pg_temp.code(pg_temp.sb('lead', 's1', 'elsewhere', 'Please mark 
     pg_temp.sb('lead', 's2', 'same', 'Please mark this one again.', 'Marks look off.') ->> 'reason'],
   array['invalid_input', 'invalid_input', 'invalid_input', 'reason_required', 'conflict', 'not_submitted'],
   'send back needs same or other, a note of 3 to 1,000 characters, a reason, and a submitted first marking');
+-- Ruling R16: while marking is closed nobody could mark it again.
+update public.exam_marking set closed_at = now() where exam_id = pg_temp.k('e');
+insert into res values ('sb_closed', pg_temp.sb('lead', 's1', 'same', 'Please mark this one again.', 'Marks look off.'));
+update public.exam_marking set closed_at = null where exam_id = pg_temp.k('e');
+-- A marker barred from the piece (they saw a name on it) gets nothing back: it goes to another; the name_seen row stays.
+select pg_temp.script('s5', 'e');
+select pg_temp.first('s5', 'm1', array[1, 1, 1]);
+insert into public.marking_unit_exclusions (unit_id, marker_id, reason) values (pg_temp.u('s5'), pg_temp.uid('m1'), 'name_seen');
+insert into res values ('sb_s5', pg_temp.sb('lead', 's5', 'same', 'Please mark this one again.', 'Marks look off.'));
+select is(array[pg_temp.code(pg_temp.r('sb_closed')), pg_temp.ms('s1', 'm1'), pg_temp.r('sb_s5') ->> 'to', pg_temp.ms('s5', 'm1'),
+    pg_temp.excl('s5', 'm1'), pg_temp.us('s5')],
+  array['marking_closed', 'live submitted', 'other', 'live set_aside sent_back', 'name_seen', 'open'],
+  'R16: send back is refused while marking is closed; a marker barred from the piece is answered other, and their name_seen row stays');
 
 -- ---------------------------------------------------------------------------------------------
 -- send_back_keeps_the_second_marking_and_compares_again_on_resubmit
@@ -579,6 +592,40 @@ insert into res values ('resub_d2', pg_temp.mark('m1', pg_temp.u('d2'), array[1,
 select is(array[pg_temp.r('sb_d2') ->> 'to', pg_temp.code(pg_temp.r('resub_d2')), pg_temp.cs('d2'), pg_temp.reviews('d2'), pg_temp.fm('d2')],
   array['same', 'ok', 'to_lead', 'difference closed second_stands,difference open', ''],
   'R9: sent back and submitted again, a settled piece is compared again: the old settle does not cover the new submission');
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R15: a paused marker's piece is accepted without a second marking. m6 first-marks c1 and c2 (both in the
+-- sample); m7 holds c1's second pass and has begun it, m2 holds c2's. The lead pauses m6; m2 submits c2's second marking
+-- while its review waits; the lead accepts both.
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script(x, 'e', 0.01) from unnest(array['c1', 'c2']) x;
+select pg_temp.first(x, 'm6', array[1, 1, 1]) from unnest(array['c1', 'c2']) x;
+select public.marking_unit_take(pg_temp.u('c1'), pg_temp.uid('m7'), 'next', null, now() + interval '2 hours', 'second');
+insert into res values ('c1_open', pg_temp.as('m7', format('select public.marking_unit_open(%L)', pg_temp.u('c1'))));
+insert into kv values ('s:c1', (pg_temp.r('c1_open') #>> '{marking,id}')::uuid);
+select public.marking_unit_take(pg_temp.u('c2'), pg_temp.uid('m2'), 'next', null, now() + interval '2 hours', 'second');
+insert into res values ('pause_m6', pg_temp.as('lead', format($q$ select public.marking_marker_pause(%L, %L, 'Two scripts look generous.') $q$,
+  pg_temp.k('e'), pg_temp.uid('m6'))));
+insert into res values ('c2_second', pg_temp.mark('m2', pg_temp.u('c2'), array[1, 1, 1], 's:c2'));
+insert into res values ('open_c2', pg_temp.open('lead', pg_temp.rv('c2', 'paused_marker')));
+select is(array[pg_temp.code(pg_temp.r('pause_m6')), pg_temp.cs('c1'), pg_temp.reviews('c1'), pg_temp.code(pg_temp.r('c2_second')), pg_temp.cs('c2'),
+    ((select r.second_marking_id = pg_temp.k('s:c2') from public.marking_reviews r where r.id = pg_temp.rv('c2', 'paused_marker')))::text,
+    pg_temp.r('open_c2') #>> '{second,marker_name}', pg_temp.r('open_c2') #>> '{compare,within}'],
+  array['ok', 'to_lead', 'paused_marker open', 'ok', 'to_lead', 'true', 'Bartholomew Secondo', 'true'],
+  'R15: a second marking submitted while a paused marker''s review waits is put on the review, and the lead sees it and the comparison');
+insert into res values ('acc_c1', pg_temp.accept('lead', pg_temp.rv('c1', 'paused_marker')));
+insert into res values ('acc_c2', pg_temp.accept('lead', pg_temp.rv('c2', 'paused_marker')));
+insert into res values ('c1_submit', pg_temp.as('m7', format('select public.marking_submit(%L, %s)', pg_temp.k('s:c1'), pg_temp.rev('s:c1'))));
+select is(array[pg_temp.code(pg_temp.r('acc_c1')), pg_temp.r('acc_c1') ->> 'check_state', pg_temp.ended('c1', 'm7'), pg_temp.ms('c1', 'm7'),
+    pg_temp.wanted('c1'), pg_temp.audits('marking_second_ended', pg_temp.u('c1'))::text, pg_temp.fm('c1'),
+    pg_temp.code(pg_temp.r('c1_submit')), pg_temp.r('c1_submit') ->> 'reason'],
+  array['ok', 'checked', 'second next switched_off', 'second set_aside switched_off', 'true', '1', '1=1 first,2(a)=1 first,2(b)=1 first',
+    'conflict', 'set_aside'],
+  'R15: accepted, a second pass not yet submitted ends (its hold, its marking set aside: switched_off; audited), second_wanted is kept, and that marker''s submit is refused');
+select is(array[pg_temp.code(pg_temp.r('acc_c2')), pg_temp.cs('c2'), pg_temp.ms('c2', 'm2'), pg_temp.audits('marking_second_ended', pg_temp.u('c2'))::text,
+    pg_temp.fm('c2')],
+  array['ok', 'checked', 'second submitted', '0', '1=1 first,2(a)=1 first,2(b)=1 first'],
+  'R15: a submitted second marking stands; the piece is checked on its first marks');
 
 -- ---------------------------------------------------------------------------------------------
 -- sample_review_leaves_check_state_and_script_state_alone, sample_skips_pieces_already_reviewed (exam f)
@@ -641,6 +688,20 @@ select is(array[pg_temp.code(pg_temp.r('fs_f7')), pg_temp.reviews('f7'),
     pg_temp.code(pg_temp.change('f:f7', 'm2', jsonb_build_array(pg_temp.op('f7', '1', 1)), 'A slip on question 1.')), pg_temp.fm('f7')],
   array['ok', 'sample closed lead_marks', 'settled', '1=3 lead,2(a)=2 first,2(b)=2 first'],
   'with no review of the piece, a closed one is recorded: the marker''s change is refused (settled) and the lead''s mark stands');
+-- R16: the lead's change covers the submission it was made on only. k2 (second-marked within tolerance) has a final
+-- mark changed an hour ago; sent back and submitted again outside tolerance, it is compared again.
+select pg_temp.script('k2', 'e', 0.01);
+select pg_temp.first('k2', 'm1', array[1, 1, 1]);
+select pg_temp.second('k2', 'm2', array[1, 1, 1]);
+insert into res values ('fs_k2', pg_temp.fs('lead', 'k2', jsonb_build_array(pg_temp.mk('k2', '1', 2)), 'Question 1 is worth 2.'));
+update public.markings set submitted_at = now() - interval '2 hours' where id in (pg_temp.k('f:k2'), pg_temp.k('s:k2'));
+update public.marking_reviews set opened_at = now() - interval '90 minutes', closed_at = now() - interval '1 hour' where unit_id = pg_temp.u('k2');
+insert into res values ('sb_k2', pg_temp.sb('lead', 'k2', 'same', 'Have another look at question 1.', 'Checking question 1 again.'));
+insert into res values ('resub_k2', pg_temp.mark('m1', pg_temp.u('k2'), array[3, 2, 5], 'f:k2'));
+select is(array[pg_temp.code(pg_temp.r('fs_k2')), pg_temp.r('sb_k2') ->> 'to', pg_temp.code(pg_temp.r('resub_k2')), pg_temp.cs('k2'), pg_temp.fm('k2'),
+    pg_temp.hist('k2', '1'), pg_temp.reviews('k2')],
+  array['ok', 'same', 'ok', 'to_lead', '', '1 first,2 lead,removed', 'sample closed lead_marks,difference open'],
+  'R16: submitted again after the lead changed a final mark, the piece is compared again and the lead''s mark no longer stands (R9)');
 insert into res values ('fs_p1', pg_temp.fs('lead', 'p1', jsonb_build_array(pg_temp.mk('p1', '1', 2)), 'Question 1 is worth 2.'));
 insert into res values ('eval_p1', to_jsonb(public.marking_check_evaluate(pg_temp.u('p1'))));
 select is(array[pg_temp.code(pg_temp.r('fs_p1')), pg_temp.r('eval_p1') #>> '{}', pg_temp.fm('p1')],
@@ -667,6 +728,46 @@ select is(array[pg_temp.code(pg_temp.fs('lead', 'k1', jsonb_build_array(pg_temp.
     pg_temp.fs('lead', 'wt2', jsonb_build_array(pg_temp.mk('wt2', '1', 2)), 'A fairer mark.') ->> 'reason', pg_temp.fm('k1')],
   array['conflict', 'with_lead', 'conflict', 'not_checked', ''],
   'final_set_on_a_piece_with_the_lead_refused: a difference is settled instead; a piece not checked yet is refused too');
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R14: the lead, who may have seen a piece's first marking through a review, is never its second marker.
+-- (1) p1: the lead accepted m3's marking (an hour ago); sent back to m3 and submitted again, it waits for a second
+-- marking (its draw put it in the sample). (2) f4: sampled by the lead, then "Second-mark these".
+-- ---------------------------------------------------------------------------------------------
+update public.markings set submitted_at = now() - interval '2 hours' where id = pg_temp.k('f:p1');
+update public.marking_reviews set opened_at = now() - interval '3 hours', closed_at = now() - interval '1 hour' where unit_id = pg_temp.u('p1');
+insert into res values ('sb_p1', pg_temp.sb('lead', 'p1', 'same', 'Please look at question 1 again.', 'Checking question 1.'));
+insert into res values ('resub_p1', pg_temp.mark('m3', pg_temp.u('p1'), array[1, 1, 1], 'f:p1'));
+insert into res values ('assign_p1', pg_temp.as('admin', format($q$ select public.marking_assign(array[%L]::uuid[], %L, 'Second-mark it yourself.', 'second') $q$,
+  pg_temp.u('p1'), pg_temp.uid('lead'))));
+select is(array[pg_temp.r('sb_p1') ->> 'to', pg_temp.code(pg_temp.r('resub_p1')), pg_temp.cs('p1'), pg_temp.blocked('p1', 'lead', 'second'),
+    (pg_temp.u('p1') in (select a.unit_id from public.marking_units_allowed(pg_temp.k('e'), pg_temp.uid('lead'), 'second', true) a))::text,
+    pg_temp.r('assign_p1') #>> '{skipped,0,code}', pg_temp.blocked('p1', 'm2', 'second')],
+  array['same', 'ok', 'waiting_second', 'not_eligible', 'false', 'not_eligible', 'null'],
+  'R14: after the lead accepted it, p1 waits for a second marker: Next script never offers it to the lead and they cannot be given it; an approved marker can');
+insert into res values ('add_f4', pg_temp.as('lead', format($q$ select public.marking_second_add(array[%L]::uuid[], 'A second look is due.') $q$, pg_temp.u('f4'))));
+select is(array[pg_temp.r('add_f4') ->> 'added', pg_temp.cs('f4'), pg_temp.blocked('f4', 'lead', 'second'), pg_temp.blocked('f4', 'm2', 'second')],
+  array['1', 'waiting_second', 'not_eligible', 'null'],
+  'R14: a piece the lead sampled and then asked to be second-marked goes to another marker, never to the lead');
+
+-- ---------------------------------------------------------------------------------------------
+-- Ruling R16: the sample skips a piece taken back, and rule 1 withdraws an open sample review (m2's f8 and f9 on f).
+-- ---------------------------------------------------------------------------------------------
+select pg_temp.script(x, 'f') from unnest(array['f8', 'f9']) x;
+select pg_temp.first(x, 'm2', array[2, 2, 2]) from unnest(array['f8', 'f9']) x;
+insert into res values ('tb_f8', pg_temp.as('admin', format($q$ select public.marking_take_back(array[%L]::uuid[], 'Check its pages again.') $q$, pg_temp.u('f8'))));
+insert into res values ('smp_m2', pg_temp.sample('lead', 'f', 'm2', 20));
+select is(array[pg_temp.r('tb_f8') ->> 'taken_back', pg_temp.r('smp_m2') ->> 'added', pg_temp.reviews('f6'), pg_temp.reviews('f8'), pg_temp.reviews('f9')],
+  array['1', '2', 'sample open', '-', 'sample open'],
+  'R16: the sample takes m2''s submitted pieces f6 and f9, not f8, taken back (nor f7, whose final mark the lead changed)');
+insert into res values ('tb_f9', pg_temp.as('admin', format($q$ select public.marking_take_back(array[%L]::uuid[], 'Check its pages again.') $q$, pg_temp.u('f9'))));
+insert into res values ('f9_rev1', to_jsonb(pg_temp.reviews('f9')));
+select pg_temp.first('f9', 'm2', array[2, 2, 2]);
+insert into res values ('smp_m2b', pg_temp.sample('lead', 'f', 'm2', 20));
+select is(array[pg_temp.r('f9_rev1') #>> '{}', pg_temp.r('smp_m2b') ->> 'added',
+    (select string_agg(r.state || coalesce(' ' || r.outcome, ''), ',' order by r.state, r.outcome) from public.marking_reviews r where r.unit_id = pg_temp.u('f9'))],
+  array['sample closed withdrawn', '1', 'closed withdrawn,open'],
+  'R16: taken back, f9''s open sample review is withdrawn (rule 1); marked again, it may be sampled again');
 
 -- ---------------------------------------------------------------------------------------------
 -- lead_of_another_subject_and_corrector_forbidden
@@ -703,6 +804,15 @@ insert into res values ('g_clear', pg_temp.as('lead', format($q$ select public.m
 select is(array[pg_temp.nm((pg_temp.r('g_next') ->> 'unit_id')::uuid), pg_temp.r('g_list') #>> '{counts,to_clear}', pg_temp.code(pg_temp.r('g_clear')),
     pg_temp.list('lead', pg_temp.k('g')) #>> '{counts,to_clear}'],
   array['gp1', '1', 'ok', '0'], 'to_clear counts a marker who did every practice script and is not cleared yet');
+-- R16: a marker no longer cleared gets nothing back. Cleared, m7 marks g's live piece gl1; their clearance is then undone.
+insert into res values ('g_next2', pg_temp.next('m7', 'g'));
+select pg_temp.mark('m7', (pg_temp.r('g_next2') ->> 'unit_id')::uuid, array[1, 1, 1], 'f:gl1');
+update public.exam_markers set cleared_at = null, cleared_by = null where exam_id = pg_temp.k('g') and marker_id = pg_temp.uid('m7');
+insert into res values ('sb_gl1', pg_temp.sb('lead', 'gl1', 'same', 'Please mark this one again.', 'Marks look off.'));
+select is(array[pg_temp.nm((pg_temp.r('g_next2') ->> 'unit_id')::uuid), pg_temp.code(pg_temp.r('sb_gl1')), pg_temp.r('sb_gl1') ->> 'to',
+    pg_temp.ms('gl1', 'm7'), pg_temp.excl('gl1', 'm7'), pg_temp.us('gl1')],
+  array['gl1', 'ok', 'other', 'live set_aside sent_back', 'sent_back', 'open'],
+  'R16: send back to a marker no longer cleared for live marking is answered other');
 
 -- ---------------------------------------------------------------------------------------------
 -- Ruling R11: seeded scripts or practice turned off mid-exam (subject 'ZZ Rev Small').
@@ -766,12 +876,72 @@ select is(array[
   'marking_my_work: every piece says sent_back, live, second, seeded and practice alike; a seeded piece has a live piece''s keys');
 
 -- ---------------------------------------------------------------------------------------------
+-- Ruling R16: the lead's list in time at 500 open reviews (a timing guard, as 043). Subject 'ZZ Rev Big' (its lead bl,
+-- markers b1 and b2): exam big is marked by question in 5 groups; 100 scripts make 500 pieces, each first-marked by b1
+-- and second-marked by b2 outside tolerance, rows written directly: 500 open differences. The tables are analysed first
+-- (R25), and each call runs under the 2-second statement_timeout it must meet.
+-- ---------------------------------------------------------------------------------------------
+create function pg_temp.timed(p_name text, p_sql text) returns jsonb language plpgsql as $$
+declare
+  v_t0 timestamptz := clock_timestamp();
+  v jsonb;
+begin
+  execute p_sql into v;
+  insert into res values (p_name, jsonb_build_object('ms', round(extract(epoch from clock_timestamp() - v_t0) * 1000)));
+  return v;
+end $$;
+grant execute on function pg_temp.timed(text, text), pg_temp.k(text) to public;
+insert into public.subjects (name, kind) values ('ZZ Rev Big', 'school');
+insert into c values ('bl', tests.marker(pg_temp.subj('ZZ Rev Big'), true)), ('b1', tests.marker(pg_temp.subj('ZZ Rev Big'))),
+  ('b2', tests.marker(pg_temp.subj('ZZ Rev Big')));
+insert into kv values ('big', tests.marking_exam(pg_temp.subj('ZZ Rev Big')));
+insert into public.question_groups (exam_id, label, position) select pg_temp.k('big'), 'G' || i, i from generate_series(1, 5) i;
+insert into public.exam_questions (exam_id, label, position, max_mark, pages, group_id)
+select pg_temp.k('big'), g.position::text, g.position, 5, '{1}', g.id from public.question_groups g where g.exam_id = pg_temp.k('big');
+update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('big');
+do $$ begin for i in 1..100 loop perform tests.verified_script(pg_temp.k('big'), 'home'); end loop; end $$;
+select tests.open_marking(pg_temp.k('big'), '{"double_marking": true, "sample_percent": 10, "seeds": false, "practice": false}');
+insert into public.markings (unit_id, kind, marker_id, status, rev, total, submitted_at)
+select u.id, x.kind::public.marking_kind, pg_temp.uid(x.who), 'submitted', 1, x.total, now()
+from public.marking_units u cross join (values ('live', 'b1', 1), ('second', 'b2', 5)) x(kind, who, total)
+where u.exam_id = pg_temp.k('big');
+update public.marking_units set state = 'submitted', check_state = 'to_lead', second_wanted = true where exam_id = pg_temp.k('big');
+insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, second_marking_id)
+select u.exam_id, u.id, 'difference', f.id, s.id
+from public.marking_units u
+join public.markings f on f.unit_id = u.id and f.kind = 'live'
+join public.markings s on s.unit_id = u.id and s.kind = 'second'
+where u.exam_id = pg_temp.k('big');
+analyze public.marking_reviews, public.markings, public.marking_units, public.marking_assignments, public.marking_unit_exclusions,
+        public.scripts, public.bookings, public.student_details, public.profiles, public.exams, public.exam_marking,
+        public.exam_questions, public.question_groups, public.marker_approvals, public.marker_conflicts, public.tutor_students,
+        public.marking_standards, public.exam_markers, public.script_page_links, public.script_pages;
+select tests.as_user(pg_temp.uid('bl'));
+set local statement_timeout = '2s';
+insert into res values ('big_lead', pg_temp.timed('ms_lead', format('select public.marking_review_list(%L)', pg_temp.k('big'))));
+reset statement_timeout;
+select tests.as_postgres();
+select tests.as_user(pg_temp.uid('admin'));
+set local statement_timeout = '2s';
+insert into res values ('big_admin', pg_temp.timed('ms_admin', 'select public.marking_review_list()'));
+reset statement_timeout;
+select tests.as_postgres();
+select is(array[pg_temp.r('big_lead') #>> '{counts,difference}', jsonb_array_length(pg_temp.r('big_lead') -> 'items')::text,
+    pg_temp.r('big_lead') ->> 'more', ((pg_temp.r('ms_lead') ->> 'ms')::int <= 2000)::text,
+    pg_temp.code(pg_temp.r('big_admin')), ((pg_temp.r('ms_admin') ->> 'ms')::int <= 2000)::text],
+  array['500', '500', 'false', 'true', 'ok', 'true'],
+  'R16: the lead''s list of 500 open reviews, and an admin''s of every exam, each within 2 s');
+select diag('marking_review_list at 500 open reviews: lead ' || (pg_temp.r('ms_lead') ->> 'ms') || ' ms, admin (every exam) '
+  || (pg_temp.r('ms_admin') ->> 'ms') || ' ms');
+
+-- ---------------------------------------------------------------------------------------------
 -- Privileges.
 -- ---------------------------------------------------------------------------------------------
 select is((select array_agg(f order by f) from unnest(array[
     'public.marking_review_refusal(uuid)', 'public.marking_review_blind(uuid)', 'public.marking_review_marking(uuid)',
     'public.marking_lead_marks_refusal(uuid,jsonb,boolean)', 'public.marking_final_marks_lead(uuid,jsonb,text)',
-    'public.marking_unit_settled(uuid)', 'public.marking_check_evaluate(uuid)']) f
+    'public.marking_unit_settled(uuid)', 'public.marking_check_evaluate(uuid)', 'public.marking_review_sample_pieces(uuid,uuid,uuid[])',
+    'public.marking_units_allowed(uuid,uuid,public.marking_kind,boolean,uuid)']) f
   where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')
      or has_function_privilege('service_role', f, 'execute')),
   null, 'the internal functions are revoked from every client role');
@@ -786,9 +956,9 @@ select is((select array_agg(f order by f) from unnest(array[
 select is((select count(*)::int from pg_proc p where p.pronamespace = 'public'::regnamespace
            and p.proname in ('marking_review_list', 'marking_review_open', 'marking_review_settle', 'marking_review_accept', 'marking_send_back',
                              'marking_review_sample', 'marking_final_set', 'marking_review_refusal', 'marking_review_blind', 'marking_review_marking',
-                             'marking_lead_marks_refusal', 'marking_final_marks_lead')
+                             'marking_lead_marks_refusal', 'marking_final_marks_lead', 'marking_review_sample_pieces')
            and p.prosecdef and p.proconfig @> array['search_path=""']),
-  12, 'each is security definer with an empty search path');
+  13, 'each is security definer with an empty search path');
 
 select * from finish();
 rollback;
