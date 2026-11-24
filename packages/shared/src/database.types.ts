@@ -2162,6 +2162,9 @@ isOneToOne: false
 "marking_standards_list":
 { Args: { "p_exam": string }; Returns: Json
                            },
+"marking_stats":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
 "marking_subject_has_lead":
 { Args: { "p_subject": number }; Returns: boolean
                            },

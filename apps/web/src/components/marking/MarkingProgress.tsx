@@ -25,19 +25,22 @@ function status(e: ProgressExam): { text: string; tone: "slate" | "green" | "blu
  * scripts taken and submitted; the alerts open. No candidate name. `scriptsLink` links each exam to its list of
  * scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
  * changed pictures can be released even when the alerts list cannot be loaded. `reviewLink` (3B) links each exam whose
- * marking has opened to the lead marker's review of it. `now` is the server's clock when the page was made. */
+ * marking has opened to the lead marker's review of it, and `statsLink` to its marker statistics on the admin pages.
+ * `now` is the server's clock when the page was made. */
 export function MarkingProgress({
   exams,
   now,
   scriptsLink = false,
   releaseAll = false,
   reviewLink = false,
+  statsLink = false,
 }: {
   exams: ProgressExam[];
   now: string;
   scriptsLink?: boolean;
   releaseAll?: boolean;
   reviewLink?: boolean;
+  statsLink?: boolean;
 }) {
   const at = new Date(now);
   if (exams.length === 0) return <p className="text-sm text-slate-600">No exam has marking set up yet.</p>;
@@ -91,7 +94,7 @@ export function MarkingProgress({
                 rows={e.markers.map((m) => [m.name, m.taken, m.submitted, m.lastSavedAt ? ukDayTime(m.lastSavedAt) : "—"])}
               />
             )}
-            {(scriptsLink || (reviewLink && e.openedAt)) && (
+            {(scriptsLink || ((reviewLink || statsLink) && e.openedAt)) && (
               <div className="flex flex-wrap gap-x-5 gap-y-2">
                 {scriptsLink && (
                   <Link href={`/admin/marking?exam=${e.examId}#scripts`} className="inline-block text-sm font-medium text-blue-700 underline">
@@ -101,6 +104,11 @@ export function MarkingProgress({
                 {reviewLink && e.openedAt && (
                   <Link href={`/marking/review?exam=${e.examId}`} className="inline-block text-sm font-medium text-blue-700 underline">
                     Review the marking of {e.title}
+                  </Link>
+                )}
+                {statsLink && e.openedAt && (
+                  <Link href={`/admin/marking/${e.examId}/statistics`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    Marker statistics for {e.title}
                   </Link>
                 )}
               </div>

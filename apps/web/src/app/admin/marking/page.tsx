@@ -88,7 +88,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
   return (
     <div className="space-y-6">
       <Card title="Progress">
-        <MarkingProgress exams={progress} now={now} scriptsLink releaseAll reviewLink />
+        <MarkingProgress exams={progress} now={now} scriptsLink releaseAll reviewLink statsLink />
       </Card>
       {exam && (
         <div id="scripts">
