@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { assertNoOwner, cleanup, clearLoginAttempts, countTestUsers, signInUI, svc } from "./admin";
-import { pieceState, remaskStates, removeMarkingExam, seedStaffMarkingExam, setPaperHiddenAreas, type Login, type SeededScript } from "./marking";
+import { clearMarker, pieceState, remaskStates, removeMarkingExam, seedStaffMarkingExam, setPaperHiddenAreas, type Login, type SeededScript } from "./marking";
 import { requireProcessor, waitForDb } from "./scripts";
 
 // The staff side of marking (Phase 3A Task 13) against the local stack and the running processing server (npm run
@@ -126,6 +126,9 @@ test("admin_sets_a_deadline_and_opens_marking", async ({ page }) => {
 });
 
 test("admin_assigns_two_scripts_and_takes_one_back", async ({ page }) => {
+  // Practice is on (the exam's default checks), so a marker gets live work only once cleared (3B Task 5): the lead
+  // marker clears them, through the function, as their own page will.
+  await clearMarker(seed.lead, seed.examId, seed.marker.id);
   await signIn(page, seed.admin);
   await page.goto(`/admin/marking?exam=${seed.examId}`);
   const scripts = page.getByRole("region", { name: `Scripts: ${seed.title} (Paper 1)`, exact: true });
