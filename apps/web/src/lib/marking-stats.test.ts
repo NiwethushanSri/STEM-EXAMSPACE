@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { agreementText, differenceText, parseStats, percentText, secondsText, statsNote } from "./marking-stats";
+import {
+  agreementText,
+  comparisonText,
+  differenceText,
+  gapText,
+  NO_OTHERS_TEXT,
+  parseStats,
+  percentText,
+  secondsText,
+  statsNote,
+} from "./marking-stats";
 
 const M1 = "11111111-1111-4111-8111-111111111111";
 const M2 = "22222222-2222-4222-8222-222222222222";
@@ -39,6 +49,22 @@ describe("the table's words", () => {
     expect(differenceText(null)).toBe("");
   });
 
+  it("comparison_text_cases", () => {
+    expect(NO_OTHERS_TEXT).toBe("No other markers to compare with.");
+    expect(comparisonText({ difference: 0, cohortHasOthers: false })).toBe("No other markers to compare with.");
+    expect(comparisonText({ difference: 0, cohortHasOthers: true })).toBe("The same as the others");
+    expect(comparisonText({ difference: -4.5, cohortHasOthers: true })).toBe("4.5 points below the others");
+    expect(comparisonText({ difference: null, cohortHasOthers: false })).toBe("");
+  });
+
+  it("gap_text_cases", () => {
+    expect(gapText(1)).toBe("Totals 1 mark apart on average");
+    expect(gapText(1.5)).toBe("Totals 1.5 marks apart on average");
+    expect(gapText(0)).toBe("Totals 0 marks apart on average");
+    expect(gapText(0.96)).toBe("Totals 1 mark apart on average");
+    expect(gapText(3.64)).toBe("Totals 3.6 marks apart on average");
+  });
+
   it("agreement_and_percent_text_cases", () => {
     expect(agreementText(18, 20)).toBe("18 of 20 within tolerance");
     expect(agreementText(0, 1)).toBe("0 of 1 within tolerance");
@@ -62,6 +88,7 @@ describe("parseStats", () => {
           pieces: 12,
           mean_percent: 70,
           cohort_mean_percent: 60,
+          cohort_has_others: true,
           difference: 10,
           second: { compared: 3, within: 2, mean_gap: 1.5 },
           seeds: { done: 2, within: 1 },
@@ -87,6 +114,7 @@ describe("parseStats", () => {
             pieces: 12,
             meanPercent: 70,
             cohortMeanPercent: 60,
+            cohortHasOthers: true,
             difference: 10,
             second: { compared: 3, within: 2, meanGap: 1.5 },
             seeds: { done: 2, within: 1 },
@@ -101,6 +129,7 @@ describe("parseStats", () => {
             pieces: 0,
             meanPercent: null,
             cohortMeanPercent: null,
+            cohortHasOthers: false,
             difference: null,
             second: { compared: 0, within: 0, meanGap: null },
             seeds: { done: 0, within: 0 },

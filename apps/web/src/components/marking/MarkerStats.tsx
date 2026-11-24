@@ -1,4 +1,4 @@
-import { agreementText, differenceText, percentText, secondsText, statsNote, type ExamStats } from "@/lib/marking-stats";
+import { agreementText, comparisonText, gapText, percentText, secondsText, statsNote, type ExamStats } from "@/lib/marking-stats";
 
 const HEAD = [
   "Marker",
@@ -11,14 +11,11 @@ const HEAD = [
   "Sent back",
 ];
 
-/** The mean gap between the first and second markers' totals of the pieces compared. */
-const gapText = (gap: number) => `Totals ${Math.round(gap * 10) / 10} ${gap === 1 ? "mark" : "marks"} apart on average`;
-
 /** An exam's marker statistics (marking_stats): above the table, what the figures are for; then the exam's scripts
  * marked, average mark and usual time; then one row per marker: scripts marked, average mark beside the other markers'
- * of the same questions, agreement with the second marker, with seeded scripts and with practice, usual time per script
- * and scripts sent back, and under the row any note, headed "Worth a look". Markers' names only; nothing of a
- * candidate. */
+ * of the same questions (or that there are none), agreement with the second marker, with seeded scripts and with
+ * practice, usual time per script and scripts sent back, and under the row any note, headed "Worth a look". Markers'
+ * names only; nothing of a candidate. */
 export function MarkerStats({ stats }: { stats: ExamStats }) {
   const { exam, markers } = stats;
   return (
@@ -53,7 +50,7 @@ export function MarkerStats({ stats }: { stats: ExamStats }) {
                   <td className="py-2.5 pr-4">{m.pieces}</td>
                   <td className="py-2.5 pr-4">
                     {percentText(m.meanPercent)}
-                    {m.difference !== null && <span className="block text-xs text-slate-600">{differenceText(m.difference)}</span>}
+                    {m.difference !== null && <span className="block text-xs text-slate-600">{comparisonText(m)}</span>}
                   </td>
                   <td className="py-2.5 pr-4">
                     {agreementText(m.second.within, m.second.compared)}

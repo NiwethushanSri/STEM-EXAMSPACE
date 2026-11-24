@@ -15,12 +15,19 @@
 --   mean_percent: the mean of total / the piece's maximum (marking_unit_max_total) x 100 over their pieces.
 --   cohort_mean_percent: the same over every marker's pieces of each question group this marker marked, weighted by
 --     this marker's pieces per group, so a marker of a hard group is compared with that group. difference is the two
---     subtracted (each rounded to one place first, so the figures on screen add up).
+--     subtracted (each rounded to one place first, so the figures on screen add up). Added to the brief's shape:
+--     cohort_has_others, whether another marker's piece is in that cohort (false for a marker who is the only one of
+--     every group they marked, whose difference is 0 by construction: the screen then says there is no one to compare
+--     with).
 --   second: the pieces where the marker was the first or the second marker and both markings are submitted: how many,
 --     how many within tolerance (marking_compare: Task 4's rule, greatest(1, percent x maximum), per question and on the
 --     total), and the mean absolute gap between the two totals.
 --   seeds, practice: their submitted seeded and practice attempts, and how many are within tolerance of the lead's
---     frozen marks (marking_standard_compare).
+--     frozen marks. A seed counts as the submit judged it (Ruling R20): the miss it recorded (feedback_at, set by
+--     marking_after_submit only for a seed outside tolerance) is what counted towards a pause, and what the Markers tab
+--     (marking_exam_markers) and the practice and seeded scripts tab (marking_standards_list) count, so a seed is
+--     within when its feedback_at is null. Practice is compared now (marking_standard_compare), as those tabs do: every
+--     practice submit sets feedback_at.
 --   median_seconds: the median active_seconds of their submitted live and second markings; the exam's is the same over
 --     every marker's.
 --   sent_back: their live markings ever sent back. A send-back closes a review only when one is open, so this is not
@@ -29,7 +36,8 @@
 --   notes, only for a marker with 10 pieces or more, in this order: fast (their median under one third of the exam's),
 --     full_marks (30% or more of their pieces at the maximum), mean_apart (the difference, either way, above the exam's
 --     tolerance percentage).
--- The exam's tolerance is its check setting (Task 2; 10 when never saved), and comparisons read it now.
+-- The exam's tolerance is its check setting (Task 2; 10 when never saved); second markings and practice are compared
+-- under it now.
 --
 -- Added: marking_stats(p_exam). No earlier function is changed. It only reads, and takes no lock.
 
@@ -39,8 +47,8 @@
 -- marker). A marker is listed when they have a piece, a submitted second marking, a submitted attempt or a live marking
 -- sent back, in name order. Figures with nothing to count are null (counts are 0). Returns {ok, tolerance_percent,
 -- exam:{pieces, mean_percent, median_seconds}, markers:[{marker_id, name, pieces, mean_percent, cohort_mean_percent,
--- difference, second:{compared, within, mean_gap}, seeds:{done, within}, practice:{done, within}, median_seconds,
--- sent_back, notes:[text]}]}; percentages and the gap to one place, seconds whole.
+-- cohort_has_others, difference, second:{compared, within, mean_gap}, seeds:{done, within}, practice:{done, within},
+-- median_seconds, sent_back, notes:[text]}]}; percentages and the gap to one place, seconds whole.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_stats(p_exam uuid)
 returns jsonb
@@ -78,7 +86,7 @@ begin
   -- The exam's markings, on scripts that are not withdrawn or void.
   mk as materialized (
     select m.id, m.unit_id, m.kind, m.marker_id, m.status, m.total, m.active_seconds, m.sent_back_note is not null as sent_back,
-      u.group_id, x.max_total
+      m.feedback_at is not null as feedback_shown, u.group_id, x.max_total
     from public.marking_units u
     join public.scripts s on s.id = u.script_id
     join public.markings m on m.unit_id = u.id
@@ -95,10 +103,10 @@ begin
     from live l group by l.marker_id
   ),
   group_mean as (
-    select l.group_id, avg(l.pct) as mean from live l group by l.group_id
+    select l.group_id, avg(l.pct) as mean, count(distinct l.marker_id) as markers from live l group by l.group_id
   ),
   cohort as (
-    select b.marker_id, sum(b.n * g.mean) / nullif(sum(b.n), 0) as mean
+    select b.marker_id, sum(b.n * g.mean) / nullif(sum(b.n), 0) as mean, bool_or(g.markers > 1) as has_others
     from (select l.marker_id, l.group_id, count(l.pct) as n from live l group by l.marker_id, l.group_id) b
     join group_mean g on g.group_id is not distinct from b.group_id
     group by b.marker_id
@@ -117,9 +125,12 @@ begin
           select p.second_id, p.gap, p.within from pairs p) r
     group by r.marker_id
   ),
+  -- A seed as its submit judged it (no feedback shown: within); practice compared now.
   attempts as materialized (
     select k.marker_id, k.kind, count(*)::int as done,
-      count(*) filter (where coalesce((public.marking_standard_compare(k.id) ->> 'within')::boolean, false))::int as within
+      count(*) filter (where case when k.kind = 'seed' then not k.feedback_shown
+                                  else coalesce((public.marking_standard_compare(k.id) ->> 'within')::boolean, false)
+                             end)::int as within
     from mk k where k.kind in ('seed', 'practice') and k.status = 'submitted'
     group by k.marker_id, k.kind
   ),
@@ -143,7 +154,8 @@ begin
     select w.marker_id,
       nullif(btrim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), '') as name,
       coalesce(ps.n, 0) as pieces, coalesce(ps.at_max, 0) as at_max,
-      round(ps.mean, 1) as mean_percent, round(c.mean, 1) as cohort_mean_percent, round(ps.mean, 1) - round(c.mean, 1) as difference,
+      round(ps.mean, 1) as mean_percent, round(c.mean, 1) as cohort_mean_percent,
+      coalesce(c.has_others, false) as cohort_has_others, round(ps.mean, 1) - round(c.mean, 1) as difference,
       a.compared, a.within, round(a.gap, 1) as mean_gap,
       sd.done as seeds_done, sd.within as seeds_within, pr.done as practice_done, pr.within as practice_within,
       sp.median, coalesce(sb.n, 0) as sent_back
@@ -167,7 +179,8 @@ begin
     'markers', coalesce((
       select jsonb_agg(jsonb_build_object(
           'marker_id', r.marker_id, 'name', r.name, 'pieces', r.pieces,
-          'mean_percent', r.mean_percent, 'cohort_mean_percent', r.cohort_mean_percent, 'difference', r.difference,
+          'mean_percent', r.mean_percent, 'cohort_mean_percent', r.cohort_mean_percent, 'cohort_has_others', r.cohort_has_others,
+          'difference', r.difference,
           'second', jsonb_build_object('compared', coalesce(r.compared, 0), 'within', coalesce(r.within, 0), 'mean_gap', r.mean_gap),
           'seeds', jsonb_build_object('done', coalesce(r.seeds_done, 0), 'within', coalesce(r.seeds_within, 0)),
           'practice', jsonb_build_object('done', coalesce(r.practice_done, 0), 'within', coalesce(r.practice_within, 0)),

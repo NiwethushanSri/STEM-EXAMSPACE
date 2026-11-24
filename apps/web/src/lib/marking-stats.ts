@@ -45,6 +45,22 @@ export function differenceText(d: number | null): string {
   return `${n} ${n === "1" ? "point" : "points"} ${d > 0 ? "above" : "below"} the others`;
 }
 
+export const NO_OTHERS_TEXT = "No other markers to compare with.";
+
+/** The line under a marker's average mark: how it stands beside the other markers', or, when no other marker marked
+ * their questions (their difference is then 0 by construction), that there is nobody to compare with; "" when they
+ * have no piece. */
+export function comparisonText(m: Pick<MarkerStat, "difference" | "cohortHasOthers">): string {
+  if (m.difference === null) return "";
+  return m.cohortHasOthers ? differenceText(m.difference) : NO_OTHERS_TEXT;
+}
+
+/** The mean gap between the first and second markers' totals of the pieces compared, to one place. */
+export function gapText(gap: number): string {
+  const n = Math.round(gap * 10) / 10;
+  return `Totals ${n} ${n === 1 ? "mark" : "marks"} apart on average`;
+}
+
 /** "18 of 20 within tolerance"; "—" when nothing was compared. */
 export function agreementText(within: number, done: number): string {
   return done > 0 ? `${within} of ${done} within tolerance` : "—";
@@ -62,6 +78,7 @@ export type MarkerStat = {
   pieces: number;
   meanPercent: number | null;
   cohortMeanPercent: number | null;
+  cohortHasOthers: boolean;
   difference: number | null;
   second: { compared: number; within: number; meanGap: number | null };
   seeds: Agreement;
@@ -101,6 +118,7 @@ export function parseStats(data: unknown): { ok: true; stats: ExamStats } | { ok
         pieces: count(m.pieces),
         meanPercent: num(m.mean_percent),
         cohortMeanPercent: num(m.cohort_mean_percent),
+        cohortHasOthers: m.cohort_has_others === true,
         difference: num(m.difference),
         second: { compared: count(second?.compared), within: count(second?.within), meanGap: num(second?.mean_gap) },
         seeds: agreement(m.seeds),

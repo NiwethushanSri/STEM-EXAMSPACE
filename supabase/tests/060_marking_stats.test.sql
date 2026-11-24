@@ -1,21 +1,27 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(25);
+select plan(31);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
--- Fixtures. Subject 'ZZ Stats': markers a to j and h2 (tests.marker), mk (approved, never marks) and the lead marker;
+-- Fixtures. Subject 'ZZ Stats': markers a to j, h2 and x1 to x5 (tests.marker), mk (approved, marks only a re-mark) and
+-- the lead marker;
 -- corr is a corrector never approved; olead leads 'ZZ Stats Other'. Markings are written directly as postgres (pg_temp.w: the
 -- marks for the piece's questions in paper order, their total and the active seconds), except on exam sb, where the
 -- pieces are marked and sent back through the real functions. marking_stats only reads.
 --   q:  by question, groups A and B, each one question of 10 marks. Group A: a 4 pieces at 8, b 4 at 4, e 3 at 6;
 --       group B: c 4 at 3, d 4 at 1, e 1 at 2. Group A's mean is 60%, group B's 20%, the exam's 42%.
 --   w:  the test structure (1 of 3 marks, 2(a) of 2, 2(b) of 5: out of 10, every tolerance the floor of one mark),
---       first and second markings of w1 to w7 (below).
+--       first and second markings of w1 to w7 (below), and re-markings of w1 (c) and w2 (mk) that count nowhere.
 --   s:  the lead's live markings of s1 to s4; s1 and s2 are seeded scripts, s3 and s4 practice; a, b and c attempt them.
 --   v:  a marks v1 to v6; v3's script is withdrawn, v4's void, v5's marking set aside, v6's in progress.
 --   n:  f marks 9 pieces at full marks; g 10 pieces, 3 at full marks; h 10 pieces, 2 at full marks.
 --   p:  tolerance 20%: h2 marks 10 pieces at 1 of 10 in 10 seconds each; i and j 10 pieces each at 5 in 600 seconds.
+--   r:  the notes' edges: x1 marks 10 pieces at 70% in 199 s, x2 10 at 49.9% in 201 s, x3 to x5 10 each at 60% in
+--       600 s. The exam's median is 600 s (a third: 200) and the cohort 60.0% (2,999 / 50), so x1 is 10.0 points
+--       above (at the tolerance) and x2 10.1 below (over it).
+--   t:  a seeded script t1 (the lead's), attempted by f at tolerance 10% and by d at 50%, each judged by its submit
+--       (marking_after_submit); the tolerance is then raised and lowered.
 --   sb: checks off; pieces marked with tests.mark_piece and sent back by the lead.
 -- A piece is kept as 'u:<script>' (whole script) or 'u:<script>:<group>' (by question); a marking as kv p_key.
 -- ---------------------------------------------------------------------------------------------
@@ -41,6 +47,10 @@ create function pg_temp.f(p_res text, p_marker text, variadic p_path text[]) ret
   select coalesce(trim_scale((pg_temp.mrk(p_res, p_marker) #>> p_path)::numeric)::text, 'null') $$;
 create function pg_temp.e(p_res text, p_key text) returns text language sql stable as $$
   select coalesce(trim_scale((pg_temp.r(p_res) #>> array['exam', p_key])::numeric)::text, 'null') $$;
+-- A marker's seeds outside tolerance on the Markers tab (marking_exam_markers).
+create function pg_temp.tab_out(p_res text, p_marker text) returns text language sql stable as $$
+  select x #>> '{seeds,outside}' from jsonb_array_elements(pg_temp.r(p_res) -> 'markers') x
+  where x ->> 'marker_id' = pg_temp.uid(p_marker)::text $$;
 create function pg_temp.notes(p_res text, p_marker text) returns text language sql stable as $$
   select coalesce((pg_temp.mrk(p_res, p_marker) -> 'notes')::text, 'null') $$;
 -- Signed in as someone: a call's answer.
@@ -119,20 +129,21 @@ end $$;
 insert into public.subjects (name, kind) values ('ZZ Stats', 'school'), ('ZZ Stats Other', 'school'), ('ZZ Stats Big', 'school');
 insert into c values ('admin', tests.create_user('admin', 'active')), ('corr', tests.create_user('corrector', 'active'));
 insert into c select x, tests.marker(pg_temp.subj('ZZ Stats'))
-from unnest(array['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'h2', 'i', 'j', 'mk']) x;
+from unnest(array['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'h2', 'i', 'j', 'mk', 'x1', 'x2', 'x3', 'x4', 'x5']) x;
 insert into c values ('lead', tests.marker(pg_temp.subj('ZZ Stats'), true)), ('olead', tests.marker(pg_temp.subj('ZZ Stats Other'), true));
 update public.profiles set first_name = 'Aurelius', last_name = 'Firstley' where id = pg_temp.uid('a');
 update public.profiles set first_name = 'Bartholomew', last_name = 'Secondo' where id = pg_temp.uid('b');
 
-insert into kv select x, tests.marking_exam(pg_temp.subj('ZZ Stats')) from unnest(array['q', 'w', 's', 'v', 'n', 'p', 'sb']) x;
-select tests.structure(pg_temp.k(x)) from unnest(array['w', 's', 'v', 'n', 'p', 'sb']) x;
+insert into kv select x, tests.marking_exam(pg_temp.subj('ZZ Stats')) from unnest(array['q', 'w', 's', 'v', 'n', 'p', 'sb', 'r', 't']) x;
+select tests.structure(pg_temp.k(x)) from unnest(array['w', 's', 'v', 'n', 'p', 'sb', 'r', 't']) x;
 insert into public.question_groups (exam_id, label, position) values (pg_temp.k('q'), 'A', 1), (pg_temp.k('q'), 'B', 2);
 insert into public.exam_questions (exam_id, label, position, max_mark, pages, group_id)
 select g.exam_id, g.position::text, g.position, 10, '{1}', g.id from public.question_groups g where g.exam_id = pg_temp.k('q');
 update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('q');
 select pg_temp.scripts('q', 'q', 11), pg_temp.scripts('w', 'w', 7), pg_temp.scripts('s', 's', 4), pg_temp.scripts('v', 'v', 6),
-  pg_temp.scripts('n', 'n', 29), pg_temp.scripts('p', 'p', 30), pg_temp.scripts('sb', 'sb', 4);
-select tests.open_marking(pg_temp.k(x)) from unnest(array['q', 'w', 's', 'v', 'n', 'sb']) x;
+  pg_temp.scripts('n', 'n', 29), pg_temp.scripts('p', 'p', 30), pg_temp.scripts('sb', 'sb', 4), pg_temp.scripts('r', 'r', 50),
+  pg_temp.scripts('t', 't', 1);
+select tests.open_marking(pg_temp.k(x)) from unnest(array['q', 'w', 's', 'v', 'n', 'sb', 'r', 't']) x;
 select tests.open_marking(pg_temp.k('p'), '{"tolerance_percent": 20}');
 insert into kv select 'u:' || k.name || coalesce(':' || g.label, ''), u.id
 from kv k join public.marking_units u on u.script_id = k.id left join public.question_groups g on g.id = u.group_id;
@@ -153,6 +164,7 @@ select pg_temp.w('f:w4', 'w4', 'live', 'b', array[2, 2, 2], 50), pg_temp.w('s:w4
 select pg_temp.w('f:w5', 'w5', 'live', 'c', array[3, 2, 5], 70), pg_temp.w('s:w5', 'w5', 'second', 'b', array[0, 0, 0], 50);
 select pg_temp.w('f:w6', 'w6', 'live', 'a', array[1, 1, 1], 1000), pg_temp.w('s:w6', 'w6', 'second', 'c', array[1, 1, 1], 5, 'in_progress');
 select pg_temp.w('f:w7', 'w7', 'live', 'a', array[3, 2, 5], 9999, 'set_aside'), pg_temp.w('s:w7', 'w7', 'second', 'b', array[3, 2, 5], 50);
+select pg_temp.w('r:w1', 'w1', 'remark', 'c', array[3, 2, 5], 99999), pg_temp.w('r:w2', 'w2', 'remark', 'mk', array[3, 2, 5], 99999);
 
 -- Exam s: the lead's live markings, the standards, and the attempts.
 select pg_temp.w('f:s1', 's1', 'live', 'lead', array[1, 1, 1]), pg_temp.w('f:s2', 's2', 'live', 'lead', array[1, 1, 1]),
@@ -181,6 +193,30 @@ select pg_temp.w('f:p' || i, 'p' || i, 'live', 'h2', array[0, 0, 1], 10) from ge
 select pg_temp.w('f:p' || i, 'p' || i, 'live', 'i', array[1, 1, 3], 600) from generate_series(11, 20) i;
 select pg_temp.w('f:p' || i, 'p' || i, 'live', 'j', array[1, 1, 3], 600) from generate_series(21, 30) i;
 
+-- Exam r.
+select pg_temp.w('f:r' || i, 'r' || i, 'live', 'x1', array[2, 2, 3], 199) from generate_series(1, 10) i;
+select pg_temp.w('f:r' || i, 'r' || i, 'live', 'x2', case when i < 20 then array[1, 1, 3] else array[1, 1, 2.9] end, 201)
+from generate_series(11, 20) i;
+select pg_temp.w('f:r' || i, 'r' || i, 'live', 'x' || (3 + (i - 21) / 10), array[2, 1, 3], 600) from generate_series(21, 50) i;
+
+-- Exam t: f's seed attempt is submitted at 10% (outside: a miss is recorded), d's at 50% (within: nothing is). The
+-- statistics and the Markers tab are read at 50% (f's attempt would now be within) and again at 10% (d's would now be
+-- outside).
+select pg_temp.w('f:t1', 't1', 'live', 'lead', array[1, 1, 1]);
+select pg_temp.standard('t1', 'seed');
+select pg_temp.w('a:t1:f', 't1', 'seed', 'f', array[1, 1, 3]);
+insert into res values ('fb_f', jsonb_build_object('fb', public.marking_after_submit(pg_temp.k('a:t1:f'))));
+update public.exam_marking set tolerance_percent = 50 where exam_id = pg_temp.k('t');
+select pg_temp.w('a:t1:d', 't1', 'seed', 'd', array[1, 1, 3]);
+insert into res values ('fb_d', jsonb_build_object('fb', public.marking_after_submit(pg_temp.k('a:t1:d'))));
+insert into res values ('adm:t50', pg_temp.stats('admin', pg_temp.k('t'))),
+  ('tab:t50', pg_temp.as('admin', format('select public.marking_exam_markers(%L)', pg_temp.k('t')))),
+  ('now:t50', jsonb_build_object('f', public.marking_standard_compare(pg_temp.k('a:t1:f')) -> 'within'));
+update public.exam_marking set tolerance_percent = 10 where exam_id = pg_temp.k('t');
+insert into res values ('adm:t10', pg_temp.stats('admin', pg_temp.k('t'))),
+  ('tab:t10', pg_temp.as('admin', format('select public.marking_exam_markers(%L)', pg_temp.k('t')))),
+  ('now:t10', jsonb_build_object('d', public.marking_standard_compare(pg_temp.k('a:t1:d')) -> 'within'));
+
 -- Exam sb, through the real functions: a's sb2 goes into the lead's routine sample and is sent to another marker (its
 -- review closes as sent_back); a's sb1 is sent back to a, with no review open, and a submits it again; b's sb3 is sent to
 -- another marker with no review open; a's sb4 is not sent back; c then marks sb2 afresh.
@@ -196,7 +232,7 @@ insert into kv values ('f:sb4', tests.mark_piece(pg_temp.u('sb4'), pg_temp.uid('
 insert into kv values ('g:sb2', tests.mark_piece(pg_temp.u('sb2'), pg_temp.uid('c'), array[1, 1, 1]));
 
 -- The admin's statistics of every exam, and the lead's of q, after the lead declared a conflict for q1's candidate.
-insert into res select 'adm:' || x, pg_temp.stats('admin', pg_temp.k(x)) from unnest(array['q', 'w', 's', 'v', 'n', 'p', 'sb']) x;
+insert into res select 'adm:' || x, pg_temp.stats('admin', pg_temp.k(x)) from unnest(array['q', 'w', 's', 'v', 'n', 'p', 'sb', 'r']) x;
 insert into public.marker_conflicts (marker_id, student_id, note, recorded_by, recorded_at)
 select pg_temp.uid('lead'), b.student_id, 'Tutors this candidate', pg_temp.uid('admin'), now()
 from public.scripts s join public.bookings b on b.id = s.booking_id where s.id = pg_temp.k('q1');
@@ -222,6 +258,11 @@ select is(array[pg_temp.e('adm:q', 'pieces'), pg_temp.e('adm:q', 'mean_percent')
                 pg_temp.r('adm:q') ->> 'tolerance_percent', pg_temp.code(pg_temp.r('adm:q'))],
   array['20', '42', '60', '10', 'ok'],
   'the exam: 20 pieces, a mean of 42%, a median of 60 seconds, and the exam''s tolerance');
+select is(array[pg_temp.mrk('adm:q', 'c') ->> 'cohort_has_others', pg_temp.mrk('adm:q', 'e') ->> 'cohort_has_others',
+                pg_temp.mrk('adm:s', 'lead') ->> 'cohort_has_others', pg_temp.f('adm:s', 'lead', 'difference'),
+                pg_temp.mrk('adm:v', 'a') ->> 'cohort_has_others', pg_temp.mrk('adm:s', 'b') ->> 'cohort_has_others'],
+  array['true', 'true', 'false', '0', 'false', 'false'],
+  'cohort_has_others: c and e share their groups; the lead (exam s) and a (exam v) are the only markers of their pieces, so their 0 compares with nobody; b has no piece');
 
 -- ---------------------------------------------------------------------------------------------
 -- agreement_counts_first_and_second_roles
@@ -234,6 +275,12 @@ select is(array[pg_temp.f('adm:w', 'a', 'second', 'compared'), pg_temp.f('adm:w'
 select is(array[pg_temp.f('adm:w', 'a', 'pieces'), pg_temp.f('adm:w', 'b', 'pieces'), pg_temp.f('adm:w', 'c', 'pieces'), pg_temp.e('adm:w', 'pieces')],
   array['4', '1', '1', '6'],
   'a second marking in progress (w6) or against a first marking set aside (w7) is not compared; only submitted first markings are pieces');
+select is(array[pg_temp.f('adm:w', 'c', 'pieces'), pg_temp.f('adm:w', 'c', 'mean_percent'), pg_temp.f('adm:w', 'c', 'median_seconds'),
+                pg_temp.f('adm:w', 'c', 'second', 'compared'), pg_temp.e('adm:w', 'mean_percent'), pg_temp.e('adm:w', 'median_seconds'),
+                (select count(*)::text from jsonb_array_elements(pg_temp.r('adm:w') -> 'markers') x
+                 where x ->> 'marker_id' = pg_temp.uid('mk')::text)],
+  array['1', '100', '70', '1', '46.7', '60', '0'],
+  're-markings count in no figure: c''s re-marking of w1 at 10 of 10 in 99,999 s changes none of c''s or the exam''s figures, and mk, who only re-marked, is not listed');
 
 -- ---------------------------------------------------------------------------------------------
 -- seed_and_practice_agreement
@@ -250,6 +297,14 @@ select is(array[pg_temp.f('adm:s', 'a', 'pieces'), pg_temp.f('adm:s', 'a', 'mean
                 pg_temp.f('adm:s', 'lead', 'pieces'), pg_temp.e('adm:s', 'pieces')],
   array['0', 'null', 'null', '4', '4'],
   'practice and seeded attempts are not pieces and not timed: the lead''s own live markings are');
+select is(array[coalesce(pg_temp.r('fb_f') ->> 'fb', 'none'), pg_temp.r('now:t50') ->> 'f', pg_temp.f('adm:t50', 'f', 'seeds', 'done'),
+                pg_temp.f('adm:t50', 'f', 'seeds', 'within'), pg_temp.tab_out('tab:t50', 'f')],
+  array['seed', 'true', '1', '0', '1'],
+  'a seed missed at submit stays a miss when the tolerance is raised (it would now be within), as the Markers tab counts it');
+select is(array[coalesce(pg_temp.r('fb_d') ->> 'fb', 'none'), pg_temp.r('now:t10') ->> 'd', pg_temp.f('adm:t10', 'd', 'seeds', 'done'),
+                pg_temp.f('adm:t10', 'd', 'seeds', 'within'), pg_temp.tab_out('tab:t10', 'd'), pg_temp.r('adm:t10') ->> 'tolerance_percent'],
+  array['none', 'false', '1', '1', '0', '10'],
+  'a seed judged within at submit stays within when the tolerance is lowered (it would now be outside), as the Markers tab counts it');
 
 -- ---------------------------------------------------------------------------------------------
 -- speed_is_the_median_of_active_seconds
@@ -281,6 +336,11 @@ select is(array[pg_temp.notes('adm:p', 'h2'), pg_temp.notes('adm:p', 'i'), pg_te
                 pg_temp.f('adm:p', 'i', 'difference'), pg_temp.e('adm:p', 'median_seconds'), pg_temp.r('adm:p') ->> 'tolerance_percent'],
   array['["fast", "mean_apart"]', '[]', '[]', '-26.7', '13.3', '600', '20'],
   'h2 is fast (10 s against the exam''s 600) and far from the others (26.7 points, over the 20% tolerance); i and j, 13.3 points apart, are not');
+select is(array[pg_temp.e('adm:r', 'median_seconds'), pg_temp.f('adm:r', 'x1', 'median_seconds'), pg_temp.f('adm:r', 'x1', 'difference'),
+                pg_temp.notes('adm:r', 'x1'), pg_temp.f('adm:r', 'x2', 'median_seconds'), pg_temp.f('adm:r', 'x2', 'difference'),
+                pg_temp.notes('adm:r', 'x2'), pg_temp.notes('adm:r', 'x3'), pg_temp.r('adm:r') ->> 'tolerance_percent'],
+  array['600', '199', '10', '["fast"]', '201', '-10.1', '["mean_apart"]', '[]', '10'],
+  'the notes'' edges: 199 s is under a third of 600 (fast), 201 s is not; 10.0 points is at the 10% tolerance (no note), 10.1 over it (mean_apart)');
 
 -- ---------------------------------------------------------------------------------------------
 -- sent_back counts every send-back of a marker's live marking, by the record it leaves on the marking (not reviews):
@@ -322,9 +382,9 @@ select is(array[pg_temp.keys(pg_temp.r('adm:w')), pg_temp.keys(pg_temp.r('adm:w'
                 pg_temp.keys(pg_temp.mrk('adm:w', 'a') -> 'second'), pg_temp.keys(pg_temp.mrk('adm:w', 'a') -> 'seeds'),
                 pg_temp.keys(pg_temp.mrk('adm:w', 'a') -> 'practice')],
   array['exam,markers,ok,tolerance_percent', 'mean_percent,median_seconds,pieces',
-        'cohort_mean_percent,difference,marker_id,mean_percent,median_seconds,name,notes,pieces,practice,second,seeds,sent_back',
+        'cohort_has_others,cohort_mean_percent,difference,marker_id,mean_percent,median_seconds,name,notes,pieces,practice,second,seeds,sent_back',
         'compared,mean_gap,within', 'done,within', 'done,within'],
-  'only the figures of the brief: per marker and per piece, nothing of a script');
+  'only the figures of the brief (and cohort_has_others): per marker and per piece, nothing of a script');
 select is((select count(*)::int from res r cross join jsonb_array_elements(r.j -> 'markers') x
            where (r.name like 'adm:%' or r.name like 'lead:%') and pg_temp.keys(x) <> pg_temp.keys(pg_temp.mrk('adm:w', 'a'))),
   0, 'every marker of every answer has the same keys');
@@ -351,13 +411,23 @@ select is(array[has_function_privilege('authenticated', 'public.marking_stats(uu
                 has_function_privilege('anon', 'public.marking_stats(uuid)', 'execute'),
                 (select p.prosecdef and p.proconfig @> array['search_path=""'] from pg_proc p where p.oid = 'public.marking_stats(uuid)'::regprocedure)],
   array[true, false, true], 'marking_stats is for signed-in users, security definer with an empty search path');
+update public.profiles set status = 'suspended' where id = pg_temp.uid('lead');
+insert into res values ('lead_suspended', pg_temp.stats('lead', pg_temp.k('q')));
+update public.profiles set status = 'active' where id = pg_temp.uid('lead');
+insert into res values ('lead_back', pg_temp.stats('lead', pg_temp.k('q')));
+update public.marker_approvals set lead = false where marker_id = pg_temp.uid('lead');
+insert into res values ('lead_removed', pg_temp.stats('lead', pg_temp.k('q')));
+select is(array[pg_temp.code(pg_temp.r('lead_suspended')), pg_temp.code(pg_temp.r('lead_back')), pg_temp.code(pg_temp.r('lead_removed'))],
+  array['forbidden', 'ok', 'forbidden'],
+  'a lead whose account is suspended, or who is no longer the subject''s lead marker, is refused');
 
 -- ---------------------------------------------------------------------------------------------
 -- stats_in_time_at_1500_pieces (a timing guard, as 057, Phase 3A Ruling R25: the fixture tables are analysed first).
 -- Subject 'ZZ Stats Big' (its lead bl, markers b1 to b5): exam big is marked by question in 5 groups (one question of 5
--- marks each) and has 300 scripts. Each of the 1,500 pieces is first-marked, every tenth second-marked, and 5 seeded and
--- 5 practice scripts are attempted by the 4 markers who did not mark them live; rows written directly. The lead's call
--- runs under the 4-second limit of a list.
+-- marks each) and has 300 scripts. Each of the 1,500 pieces is first-marked; 10 of them are made 5 seeded and 5 practice
+-- scripts, attempted by the 4 markers who did not mark them live, and every other piece is second-marked (the worst case
+-- the sample allows: 1,490 comparisons); rows written directly. The lead's call runs under the 4-second limit of a
+-- list.
 -- ---------------------------------------------------------------------------------------------
 create function pg_temp.timed(p_name text, p_sql text) returns jsonb language plpgsql as $$
 declare
@@ -377,13 +447,14 @@ insert into public.exam_questions (exam_id, label, position, max_mark, pages, gr
 select g.exam_id, g.position::text, g.position, 5, '{1}', g.id from public.question_groups g where g.exam_id = pg_temp.k('big');
 update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('big');
 do $$ begin for i in 1..300 loop perform tests.verified_script(pg_temp.k('big'), 'home'); end loop; end $$;
-select tests.open_marking(pg_temp.k('big'), '{"double_marking": true, "sample_percent": 10, "seeds": true, "practice": true}');
+select tests.open_marking(pg_temp.k('big'), '{"double_marking": true, "sample_percent": 100, "seeds": true, "practice": true}');
 create temp table bigu as
 select u.id, u.group_id, row_number() over (order by u.id) as n from public.marking_units u where u.exam_id = pg_temp.k('big');
 insert into public.markings (unit_id, kind, marker_id, status, rev, total, active_seconds, submitted_at)
 select b.id, 'live', pg_temp.uid('b' || (b.n % 5 + 1)), 'submitted', 1, b.n % 6, 60 + b.n % 240, now() from bigu b;
 insert into public.markings (unit_id, kind, marker_id, status, rev, total, active_seconds, submitted_at)
-select b.id, 'second', pg_temp.uid('b' || ((b.n + 1) % 5 + 1)), 'submitted', 1, (b.n + 1) % 6, 60 + b.n % 200, now() from bigu b where b.n % 10 = 0;
+select b.id, 'second', pg_temp.uid('b' || ((b.n + 1) % 5 + 1)), 'submitted', 1, (b.n + 1) % 6, 60 + b.n % 200, now() from bigu b
+where b.n not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11);
 insert into public.marking_standards (exam_id, unit_id, use, set_by)
 select pg_temp.k('big'), b.id, case when b.n <= 5 then 'seed' else 'practice' end, pg_temp.uid('bl') from bigu b
 where b.n in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11);
@@ -410,8 +481,8 @@ select is(array[pg_temp.code(pg_temp.r('big')), pg_temp.e('big', 'pieces'), json
                 (select sum((x #>> '{second,compared}')::int)::text from jsonb_array_elements(pg_temp.r('big') -> 'markers') x),
                 (select sum((x #>> '{seeds,done}')::int + (x #>> '{practice,done}')::int)::text from jsonb_array_elements(pg_temp.r('big') -> 'markers') x),
                 ((pg_temp.r('ms_big') ->> 'ms')::int <= 4000)::text],
-  array['ok', '1500', '5', '300', '40', 'true'],
-  'stats_in_time_at_1500_pieces: the lead''s statistics of 1,500 pieces (150 second-marked, 40 attempts) within 4 s');
+  array['ok', '1500', '5', '2980', '40', 'true'],
+  'stats_in_time_at_1500_pieces: the lead''s statistics of 1,500 pieces (1,490 second-marked, 40 attempts) within 4 s');
 select diag('marking_stats at 1,500 pieces: ' || (pg_temp.r('ms_big') ->> 'ms') || ' ms');
 
 select * from finish();
