@@ -4,7 +4,7 @@
  * within its maximum and step, a note of 3 to 1,000 characters). Each parser keeps only the fields it knows, so nothing
  * else reaches a page: the functions give the script number, the index number and the markers' names, never a
  * candidate's name. The database checks every rule again. */
-import { reviewMessageFor } from "@stem/shared";
+import { markingMessageFor, reviewMessageFor } from "@stem/shared";
 import { markText } from "@/lib/marking-feedback";
 import { validMark } from "@/lib/marking-marks";
 import type { SavedAnnotation } from "@/lib/marking-model";
@@ -41,12 +41,35 @@ export function secondMarkerText(second: { markerName: string; state: string } |
   return `${second.markerName} (${where})`;
 }
 
-/** Above the review's tabs, when pieces wait for a second marker whom nobody can be (Review Focus 2). */
-export function stuckText(n: number): string {
+/** Above the review's tabs, when pieces wait for a second marker whom nobody can be (Review Focus 2), in the words of
+ * the caller's role (Ruling R18): an admin or the owner assigns or releases them on the Marking page; a lead marker,
+ * who cannot open that page, asks an admin to. */
+export function stuckText(n: number, role: string): string {
+  const admin = role === "admin" || role === "owner";
   if (n === 1) {
-    return "1 script waits for a second marker and nobody can take it. Assign one on the Marking page, or release it with a reason.";
+    return admin
+      ? "1 script waits for a second marker and nobody can take it. Assign one on the Marking page, or release it with a reason."
+      : "1 script waits for a second marker and nobody can take it. Ask an admin to assign one or release it on the Marking page.";
   }
-  return `${n} scripts wait for a second marker and nobody can take them. Assign one on the Marking page, or release them with a reason.`;
+  return admin
+    ? `${n} scripts wait for a second marker and nobody can take them. Assign one on the Marking page, or release them with a reason.`
+    : `${n} scripts wait for a second marker and nobody can take them. Ask an admin to assign one or release them on the Marking page.`;
+}
+
+/** Why "Second-mark these" or "Release from second marking" skipped a script (marking_second_add, marking_second_drop),
+ * in one sentence each: the exam settings' words for the codes they share, and the script's own for the rest. */
+export function secondSkipMessage(code: string): string {
+  if (code === "not_found") return "This script could not be found. Refresh the page.";
+  if (code === "conflict_of_interest") return "You cannot change this script because of a declared conflict.";
+  return markingMessageFor(code);
+}
+
+const TAB_OF: Record<ReviewKind, string> = { difference: "difference", paused_marker: "paused", sample: "sample" };
+
+/** The way back from a review to the list: the review's tab, and the exam the list was narrowed to, when it was. */
+export function reviewBackHref(kind: ReviewKind | null, exam: string | null): string {
+  const q = [kind ? `tab=${TAB_OF[kind]}` : null, exam ? `exam=${exam}` : null].filter(Boolean).join("&");
+  return `/marking/review${q ? `?${q}` : ""}`;
 }
 
 /** What a review row says when the caller is one of its two markers. */
@@ -310,14 +333,12 @@ export function readMarks(
   return { ok: true, marks };
 }
 
-/** Of the marks of the page, those that differ from the marks they started from (the final marks, or the first marks
- * while there are none): only these are sent as a final mark change, so the others keep where they came from. */
-export function changedMarks(marks: MarkInput[], from: ReviewMark[]): MarkInput[] {
-  const was = new Map(from.map((m) => [m.questionId, m]));
-  return marks.filter((m) => {
-    const w = was.get(m.question_id);
-    return !w || w.na !== m.na || (!m.na && w.mark !== m.mark);
-  });
+/** Of the marks of the page, those the lead typed (or set NR on): only these are sent as a final mark change, so the
+ * others keep where they came from and a change someone else made meanwhile is not written over. A typed mark is sent
+ * even when it equals the mark the page started from (Ruling R18): the page may be stale (marking_final_set takes no
+ * rev), and a mark the lead typed must never be dropped as "unchanged". */
+export function typedMarks(marks: MarkInput[], typed: ReadonlySet<string>): MarkInput[] {
+  return marks.filter((m) => typed.has(m.question_id));
 }
 
 /** A note to a marker, or on a practice or seeded script: 3 to 1,000 characters once trimmed. `required` false: it may

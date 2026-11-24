@@ -7,7 +7,7 @@ import { createContext, useContext, useState, type ReactNode } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 /** The signed-in user, provided once per staff area by its server layout (which has already checked the role). */
-export type ShellUser = { name: string; roleLabel: string };
+export type ShellUser = { name: string; roleLabel: string; /** 3B: the marker leads a subject (their menu shows Review). */ lead?: boolean };
 const ShellUserContext = createContext<ShellUser | null>(null);
 export function ShellUserProvider({ user, children }: { user: ShellUser; children: ReactNode }) {
   return <ShellUserContext.Provider value={user}>{children}</ShellUserContext.Provider>;
@@ -147,14 +147,14 @@ export function AppShell({
 }: {
   role: keyof typeof roleNav;
   title: string;
-  /** The signed-in marker leads a subject: their menu shows Review under Marking. */
+  /** The signed-in marker leads a subject: their menu shows Review under Marking (also when the area's layout says so). */
   lead?: boolean;
   children: ReactNode;
 }) {
   const pathname = usePathname();
   const section = roleNav[role];
-  const items = navItems(role, lead);
   const user = useContext(ShellUserContext);
+  const items = navItems(role, lead || user?.lead === true);
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900">

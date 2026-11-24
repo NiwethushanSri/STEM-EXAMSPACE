@@ -9,8 +9,21 @@ const marker = (m: ReviewMarker | null, max: number | null) => (m ? `${m.name}: 
 
 /** The open reviews of one kind, oldest first: script number, index number, both markers and their totals, and "Open"
  * (the review screen). A review of a script the caller marked says so. `showExam`: the list covers every exam the caller
- * may review, so each row says its exam. `more`: the list was cut short at 500. No candidate name. */
-export function ReviewList({ items, showExam, more, empty }: { items: ReviewItem[]; showExam: boolean; more: boolean; empty: string }) {
+ * may review, so each row says its exam. `exam`: the exam the list is narrowed to, kept for the review screen's way
+ * back. `more`: the list was cut short at 500. No candidate name. */
+export function ReviewList({
+  items,
+  showExam,
+  exam,
+  more,
+  empty,
+}: {
+  items: ReviewItem[];
+  showExam: boolean;
+  exam: string | null;
+  more: boolean;
+  empty: string;
+}) {
   if (items.length === 0) return <p className="text-sm text-slate-600">{empty}</p>;
   return (
     <div className="overflow-x-auto">
@@ -42,7 +55,7 @@ export function ReviewList({ items, showExam, more, empty }: { items: ReviewItem
               <td className="py-2.5 pr-4 tabular-nums">{marker(r.second, r.maxTotal)}</td>
               <td className="py-2.5 pr-4">{r.openedAt ? ukDayTime(r.openedAt) : "—"}</td>
               <td className="py-2.5 pr-4">
-                <Link href={`/marking/review/${r.reviewId}`} className={QUIET} aria-label={`Open script ${r.scriptNumber}`}>
+                <Link href={`/marking/review/${r.reviewId}${exam ? `?exam=${exam}` : ""}`} className={QUIET} aria-label={`Open script ${r.scriptNumber}`}>
                   Open
                 </Link>
               </td>

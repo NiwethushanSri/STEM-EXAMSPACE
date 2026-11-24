@@ -207,7 +207,7 @@ describe("the lead's review actions", () => {
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(rpc).toHaveBeenLastCalledWith("marking_final_set", { p_unit: UNIT, p_marks: marks, p_reason: "Misread 1(a)" });
   });
-  it("change a final mark of a paused marker's script: accepted first, then changed", async () => {
+  it("change a final mark of a paused marker's or a sample's script: its review accepted first, then changed", async () => {
     rpc
       .mockResolvedValueOnce({ data: { ok: true, check_state: "checked" }, error: null })
       .mockResolvedValueOnce({ data: { ok: true, total: 9 }, error: null });
@@ -259,6 +259,11 @@ describe("an admin's second-marking actions", () => {
       message: "1 script will be second-marked. 1 not added: This script is with the lead marker.",
     });
     expect(rpc).toHaveBeenLastCalledWith("marking_second_add", { p_units: [UNIT, GROUP], p_reason: "A second look" });
+    answer({ ok: true, added: 0, skipped: [{ unit_id: UNIT, code: "not_found" }] });
+    expect(await addSecond([UNIT], "A second look")).toEqual({
+      ok: true,
+      message: "0 scripts will be second-marked. 1 not added: This script could not be found. Refresh the page.",
+    });
   });
   it("release from second marking", async () => {
     answer({ ok: true, dropped: 2, skipped: [] });

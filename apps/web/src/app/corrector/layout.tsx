@@ -4,5 +4,5 @@ import type { ReactNode } from "react";
 import { StaffLayout } from "@/lib/staff-gate";
 
 export default function Layout({ children }: { children: ReactNode }) {
-  return <StaffLayout allowed={["corrector"]}>{children}</StaffLayout>;
+  return <StaffLayout allowed={["corrector"]} markingMenu>{children}</StaffLayout>;
 }

@@ -30,6 +30,12 @@ export function ExamMarkers({ examId, markers, selfId }: { examId: string; marke
     setDone({ ok: r.ok, text: r.ok ? (r.message ?? said) : r.message });
     router.refresh();
   };
+  /** A new dialog starts with no old refusal shown (Ruling R18). */
+  const open = (s: Step) => {
+    setError(null);
+    setDone(null);
+    setStep(s);
+  };
   const sample = (m: ExamMarker) =>
     start(async () => {
       setDone(null);
@@ -67,12 +73,12 @@ export function ExamMarkers({ examId, markers, selfId }: { examId: string; marke
               {!self && (
                 <div className="flex flex-wrap gap-2">
                   {(!m.cleared || m.paused) && (
-                    <button type="button" className={QUIET} disabled={pending} onClick={() => setStep({ kind: "clear", marker: m })}>
+                    <button type="button" className={QUIET} disabled={pending} onClick={() => open({ kind: "clear", marker: m })}>
                       Clear for live marking
                     </button>
                   )}
                   {!m.paused && (
-                    <button type="button" className={QUIET} disabled={pending} onClick={() => setStep({ kind: "pause", marker: m })}>
+                    <button type="button" className={QUIET} disabled={pending} onClick={() => open({ kind: "pause", marker: m })}>
                       Pause
                     </button>
                   )}

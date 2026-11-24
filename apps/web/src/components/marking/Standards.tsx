@@ -35,6 +35,12 @@ export function Standards({ standards, canAdd, more }: { standards: Standard[]; 
     setDone(r.message ?? said);
     router.refresh();
   };
+  /** A new dialog starts with no old refusal shown (Ruling R18). */
+  const open = (st: Step) => {
+    setError(null);
+    setDone(null);
+    setStep(st);
+  };
   const cancel = () => {
     setStep(null);
     setError(null);
@@ -57,10 +63,10 @@ export function Standards({ standards, canAdd, more }: { standards: Standard[]; 
                     <span className="ml-2 tabular-nums text-slate-700">Your total: {totalText(p.total, null)}</span>
                   </span>
                   <span className="flex flex-wrap gap-2">
-                    <button type="button" className={QUIET} disabled={pending} onClick={() => setStep({ kind: "use", use: "practice", piece: p })}>
+                    <button type="button" className={QUIET} disabled={pending} onClick={() => open({ kind: "use", use: "practice", piece: p })}>
                       Use for practice
                     </button>
-                    <button type="button" className={QUIET} disabled={pending} onClick={() => setStep({ kind: "use", use: "seed", piece: p })}>
+                    <button type="button" className={QUIET} disabled={pending} onClick={() => open({ kind: "use", use: "seed", piece: p })}>
                       Use as a seeded script
                     </button>
                   </span>
@@ -93,7 +99,7 @@ export function Standards({ standards, canAdd, more }: { standards: Standard[]; 
                   {s.note && <p className="whitespace-pre-wrap text-slate-600">Why these marks: {s.note}</p>}
                 </div>
                 {!s.retired && (
-                  <button type="button" className={QUIET} disabled={pending} onClick={() => setStep({ kind: "retire", standard: s })}>
+                  <button type="button" className={QUIET} disabled={pending} onClick={() => open({ kind: "retire", standard: s })}>
                     Stop using
                   </button>
                 )}

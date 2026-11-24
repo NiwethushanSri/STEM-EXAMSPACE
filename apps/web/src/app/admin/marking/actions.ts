@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { allocationMessageFor, markingMessageFor } from "@stem/shared";
+import { allocationMessageFor } from "@stem/shared";
 import { reasonProblem } from "@/lib/exception-queue";
+import { secondSkipMessage } from "@/lib/marking-review";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/uuid";
@@ -87,7 +88,7 @@ export async function addSecond(unitIds: string[], reason: string): Promise<Allo
   if (!goodUnits(unitIds)) return { ok: false, message: INVALID };
   return call("marking_second_add", { p_units: unitIds }, reason, (a) => {
     const n = count(a.added);
-    return `${scripts(n)} will be second-marked.${skippedText(a.skipped, "added", markingMessageFor)}`;
+    return `${scripts(n)} will be second-marked.${skippedText(a.skipped, "added", secondSkipMessage)}`;
   });
 }
 
@@ -96,7 +97,7 @@ export async function dropSecond(unitIds: string[], reason: string): Promise<All
   await requireStaff(["admin", "owner"]);
   if (!goodUnits(unitIds)) return { ok: false, message: INVALID };
   return call("marking_second_drop", { p_units: unitIds }, reason, (a) =>
-    `${scripts(count(a.dropped))} released from second marking.${skippedText(a.skipped, "released", markingMessageFor)}`,
+    `${scripts(count(a.dropped))} released from second marking.${skippedText(a.skipped, "released", secondSkipMessage)}`,
   );
 }
 

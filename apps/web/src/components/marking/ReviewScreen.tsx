@@ -14,7 +14,6 @@ import { reasonProblem } from "@/lib/exception-queue";
 import { totalText } from "@/lib/marking-feedback";
 import { unitTotal } from "@/lib/marking-marks";
 import {
-  changedMarks,
   noteProblem,
   PARTY_TEXT,
   readMarks,
@@ -24,6 +23,7 @@ import {
   type ReviewKind,
   type ReviewMark,
   type ReviewMarking,
+  typedMarks,
 } from "@/lib/marking-review";
 import { formatMark } from "@/lib/marking-screen";
 
@@ -59,7 +59,10 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
   const [layer, setLayer] = useState<Layer>("first");
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [form, setForm] = useState<Form | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /** What the page's own checks found, shown in the open dialog or form. */
+  const [problem, setProblem] = useState<string | null>(null);
+  /** The server's refusal, shown with Reload. */
+  const [refusal, setRefusal] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
@@ -74,24 +77,48 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
   }, [data.questions, data.optionGroups, data.final]);
   /** What "Change a final mark" starts from: the final marks, or the first marks while there are none. */
   const baseline: ReviewMark[] = data.final.length > 0 ? data.final : first.marks;
+  /** A sample's final marks can be changed only once its script is checked (it has final marks then). */
+  const canChange = review.kind === "paused_marker" || data.final.length > 0;
 
   const shown: ReviewMarking | null = layer === "first" ? first : layer === "second" ? second : null;
   const overlay = (pageId: string) =>
     shown ? <AnnotationLayer annotations={shown.annotations.filter((a) => a.page_id === pageId)} readOnly /> : null;
 
-  /** After the server answered: a refusal closes the dialog or the form and is shown with Reload (a marker may have
-   * changed the script meanwhile); a success says what happened, and the page is read again. */
-  const finish = (r: ReviewActionResult, said: string) => {
+  /** A new dialog or form, and Reload, start with no old refusal or problem shown (Ruling R18). */
+  const clear = () => {
+    setProblem(null);
+    setRefusal(null);
+  };
+  const openDialog = (d: Dialog) => {
+    clear();
+    setDialog(d);
+  };
+  const openForm = (f: Form) => {
+    clear();
+    setForm(f);
+  };
+  const closeAll = () => {
+    clear();
     setDialog(null);
     setForm(null);
-    if (!r.ok) return setError(r.message);
-    setError(null);
+  };
+  const reload = () => {
+    clear();
+    router.refresh();
+  };
+  /** After the server answered: a refusal closes a dialog and is shown with Reload (a marker may have changed the script
+   * meanwhile), while an open form stays open with the marks the lead typed; a success says what happened, and the page
+   * is read again. */
+  const finish = (r: ReviewActionResult, said: string) => {
+    setDialog(null);
+    if (!r.ok) return setRefusal(r.message);
+    closeAll();
     setDone(r.message ?? said);
     router.refresh();
   };
   const run = (action: () => Promise<ReviewActionResult>, said: string) =>
     start(async () => {
-      setError(null);
+      clear();
       finish(await action(), said);
     });
 
@@ -203,37 +230,36 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
         questions={leaves}
         start={form === "final" ? baseline : []}
         busy={pending}
-        error={error}
-        onCancel={() => {
-          setForm(null);
-          setError(null);
-        }}
-        onSave={(boxes, reason) => {
-          const problem = reasonProblem(reason, true);
-          if (problem) return setError(problem);
+        error={problem}
+        onCancel={closeAll}
+        onSave={(boxes, typed, reason) => {
+          setProblem(null);
+          const bad = reasonProblem(reason, true);
+          if (bad) return setProblem(bad);
           const read = readMarks(leaves, boxes);
-          if (!read.ok) return setError(read.message);
+          if (!read.ok) return setProblem(read.message);
           if (form === "lead_marks") {
             if (!second) return;
             return run(() => settleReview(review.id, "lead_marks", first.rev, second.rev, reason, read.marks), "Settled. Your marks stand.");
           }
-          const changed = changedMarks(read.marks, baseline);
-          if (changed.length === 0) return setError("Change at least one mark first.");
-          // A paused marker's script is not checked yet: the one action accepts it first, then changes the marks.
-          run(() => setFinalMarks(unit.id, changed, reason, review.kind === "paused_marker" ? review.id : undefined), "Final marks changed.");
+          const sending = typedMarks(read.marks, typed);
+          if (sending.length === 0) return setProblem("Change at least one mark first.");
+          // One action (Rulings R17, R18): the review is accepted first, then the marks change, so a paused marker's
+          // script is checked and a sample's review closes.
+          run(() => setFinalMarks(unit.id, sending, reason, review.id), "Final marks changed.");
         }}
       />
     );
   } else if (review.kind === "difference") {
     actions = (
       <div className="flex flex-col gap-2">
-        <button type="button" className={PRIMARY} disabled={pending || !second} onClick={() => setDialog({ kind: "first_stands" })}>
+        <button type="button" className={PRIMARY} disabled={pending || !second} onClick={() => openDialog({ kind: "first_stands" })}>
           First marks stand
         </button>
-        <button type="button" className={PRIMARY} disabled={pending || !second} onClick={() => setDialog({ kind: "second_stands" })}>
+        <button type="button" className={PRIMARY} disabled={pending || !second} onClick={() => openDialog({ kind: "second_stands" })}>
           Second marks stand
         </button>
-        <button type="button" className={QUIET} disabled={pending || !second} onClick={() => setForm("lead_marks")}>
+        <button type="button" className={QUIET} disabled={pending || !second} onClick={() => openForm("lead_marks")}>
           Set my own marks
         </button>
       </div>
@@ -241,13 +267,17 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
   } else {
     actions = (
       <div className="flex flex-col gap-2">
-        <button type="button" className={PRIMARY} disabled={pending} onClick={() => setDialog({ kind: "accept" })}>
+        <button type="button" className={PRIMARY} disabled={pending} onClick={() => openDialog({ kind: "accept" })}>
           Accept
         </button>
-        <button type="button" className={QUIET} disabled={pending} onClick={() => setForm("final")}>
-          Change a final mark
-        </button>
-        <button type="button" className={QUIET} disabled={pending} onClick={() => setDialog({ kind: "send_back" })}>
+        {canChange ? (
+          <button type="button" className={QUIET} disabled={pending} onClick={() => openForm("final")}>
+            Change a final mark
+          </button>
+        ) : (
+          <p className="text-sm text-slate-600">This script is not checked yet, so its final marks cannot be changed.</p>
+        )}
+        <button type="button" className={QUIET} disabled={pending} onClick={() => openDialog({ kind: "send_back" })}>
           Send back
         </button>
       </div>
@@ -307,7 +337,7 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
           >
             {notes}
             {actions}
-            {error && !form && !dialog && <Refusal message={error} onReload={() => router.refresh()} />}
+            {refusal && !done && <Refusal message={refusal} onReload={reload} />}
           </aside>
         </div>
       </div>
@@ -317,11 +347,8 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
           title={dialog.kind === "first_stands" ? "First marks stand" : "Second marks stand"}
           confirmLabel={dialog.kind === "first_stands" ? "First marks stand" : "Second marks stand"}
           busy={pending}
-          error={error}
-          onCancel={() => {
-            setDialog(null);
-            setError(null);
-          }}
+          error={problem}
+          onCancel={closeAll}
           onConfirm={(reason) => onSettle(dialog.kind as "first_stands" | "second_stands", reason)}
         >
           <p className="text-sm text-slate-700">
@@ -334,11 +361,7 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
         <AcceptDialog
           paused={review.kind === "paused_marker"}
           busy={pending}
-          error={error}
-          onCancel={() => {
-            setDialog(null);
-            setError(null);
-          }}
+          onCancel={closeAll}
           onConfirm={(reason) => run(() => acceptReview(review.id, reason || undefined), "Accepted.")}
         />
       )}
@@ -347,12 +370,9 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
           paused={review.kind === "paused_marker"}
           markerName={first.markerName}
           busy={pending}
-          error={error}
-          onError={setError}
-          onCancel={() => {
-            setDialog(null);
-            setError(null);
-          }}
+          error={problem}
+          onError={setProblem}
+          onCancel={closeAll}
           onConfirm={(to, note, reason) => run(() => sendBack(unit.id, to, note, reason), "Sent back.")}
         />
       )}
@@ -395,7 +415,9 @@ function Refusal({ message, onReload }: { message: string; onReload: () => void 
   );
 }
 
-/** A mark box and NR per question, then a reason. `start`: the marks the boxes start with. */
+/** A mark box and NR per question, then a reason. `start`: the marks the boxes start with, read from the page as it is
+ * now, so a box the lead has not typed into follows the page when it is read again; a box they typed into keeps what
+ * they typed (Ruling R18), through a refusal and Reload. onSave gets every box and the questions typed into. */
 function MarksForm({
   title,
   questions,
@@ -410,21 +432,23 @@ function MarksForm({
   start: ReviewMark[];
   busy: boolean;
   error: string | null;
-  onSave: (boxes: Record<string, MarkBox>, reason: string) => void;
+  onSave: (boxes: Record<string, MarkBox>, typed: ReadonlySet<string>, reason: string) => void;
   onCancel: () => void;
 }) {
   const reasonId = useId();
-  const [boxes, setBoxes] = useState<Record<string, MarkBox>>(() =>
-    Object.fromEntries(start.map((m) => [m.questionId, { text: m.na || m.mark === null ? "" : formatMark(m.mark), na: m.na }])),
-  );
+  const [typed, setTyped] = useState<Record<string, MarkBox>>({});
   const [reason, setReason] = useState("");
-  const set = (id: string, box: MarkBox) => setBoxes((b) => ({ ...b, [id]: box }));
+  const from: Record<string, MarkBox> = Object.fromEntries(
+    start.map((m) => [m.questionId, { text: m.na || m.mark === null ? "" : formatMark(m.mark), na: m.na }]),
+  );
+  const boxes: Record<string, MarkBox> = { ...from, ...typed };
+  const set = (id: string, box: MarkBox) => setTyped((b) => ({ ...b, [id]: box }));
   return (
     <form
       className="space-y-4"
       onSubmit={(e) => {
         e.preventDefault();
-        onSave(boxes, reason.trim());
+        onSave(boxes, new Set(Object.keys(typed)), reason.trim());
       }}
     >
       <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
@@ -482,13 +506,11 @@ function MarksForm({
 function AcceptDialog({
   paused,
   busy,
-  error,
   onConfirm,
   onCancel,
 }: {
   paused: boolean;
   busy: boolean;
-  error: string | null;
   onConfirm: (reason: string) => void;
   onCancel: () => void;
 }) {
@@ -511,15 +533,15 @@ function AcceptDialog({
       }}
     >
       <div className="space-y-3 text-sm">
-        <p className="text-slate-700">{paused ? "The script is checked on the first marks." : "The final marks stay as they are."}</p>
+        <p className="text-slate-700">{paused ? "The script is checked on the first marks." : "The review closes. The script and its marks stay as they are."}</p>
         <label htmlFor={id} className="block font-medium text-slate-800">
           Reason (optional)
         </label>
         <textarea id={id} value={reason} maxLength={300} rows={2} onChange={(e) => setReason(e.target.value)} className="w-full rounded border border-slate-300 px-3 py-2" />
         <p className="text-xs text-slate-500">If you give one, 3 to 300 characters.</p>
-        {(problem ?? error) && (
+        {problem && (
           <p role="alert" className="text-red-700">
-            {problem ?? error}
+            {problem}
           </p>
         )}
       </div>
@@ -576,9 +598,11 @@ function SendBackDialog({
         </label>
       </fieldset>
       <label htmlFor={noteId} className="block text-sm">
-        <span className="font-medium text-slate-700">Note to the marker</span>
+        <span className="font-medium text-slate-700">{to === "same" ? "Note to the marker" : "Note for the record (no marker reads it)"}</span>
         <textarea id={noteId} value={note} maxLength={1000} rows={3} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm" />
-        <span className="text-xs text-slate-500">3 to 1,000 characters.</span>
+        <span className="text-xs text-slate-500">
+          {to === "same" ? "3 to 1,000 characters. The marker reads it on the script." : "3 to 1,000 characters. It is kept with the marking that is set aside."}
+        </span>
       </label>
     </ReasonDialog>
   );

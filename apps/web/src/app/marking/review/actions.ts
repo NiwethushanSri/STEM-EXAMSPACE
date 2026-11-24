@@ -133,9 +133,10 @@ export async function sampleMarker(examId: string, markerId: string, n: number):
   return { ok: true, message: added === 0 ? "None of their scripts could be added to your sample." : `${scripts(added)} added to your sample.` };
 }
 
-/** "Change a final mark": the changed marks (each a mark or NR) of a checked script, with a reason; a marker's own marks
- * never change. acceptFirst: the open review of a paused marker's script, which is not checked yet: it is accepted
- * first, with the same reason, and then the marks are changed. */
+/** "Change a final mark": the marks the lead typed (each a mark or NR), with a reason; a marker's own marks never
+ * change. acceptFirst: the open review the change is made from (Rulings R17, R18): a paused marker's script, which is
+ * not checked yet, or a script of the routine sample, whose review would otherwise stay open. It is accepted first, with
+ * the same reason, and then the marks are changed; a refused second step says the script was accepted. */
 export async function setFinalMarks(unitId: string, marks: MarkInput[], reason: string, acceptFirst?: string): Promise<ReviewActionResult> {
   await requireStaff(MARKING_ROLES);
   const problem = reasonProblem(reason ?? "", true);

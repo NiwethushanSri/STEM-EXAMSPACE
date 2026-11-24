@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { markingMessageFor } from "@stem/shared";
+import { parseProgress, parseUnits } from "./marking-lists";
 import {
   checkStateText,
   clearanceText,
-  changedMarks,
   noteProblem,
   parseExamMarkers,
   parseReviewList,
   parseReviewOpen,
   parseStandards,
   readMarks,
+  reviewBackHref,
   reviewRows,
+  secondSkipMessage,
   stuckText,
+  typedMarks,
   type ReviewCompare,
 } from "./marking-review";
 
@@ -100,9 +104,23 @@ describe("parseReviewList", () => {
     expect(JSON.stringify(r)).not.toContain("Quarterfield");
     expect(parseReviewList({ ok: false, code: "forbidden" })).toEqual({ ok: false, code: "forbidden" });
   });
-  it("the stuck line counts the scripts", () => {
-    expect(stuckText(3)).toBe("3 scripts wait for a second marker and nobody can take them. Assign one on the Marking page, or release them with a reason.");
-    expect(stuckText(1)).toBe("1 script waits for a second marker and nobody can take it. Assign one on the Marking page, or release it with a reason.");
+  it("the stuck line counts the scripts, in the words of an admin or the owner", () => {
+    for (const role of ["admin", "owner"]) {
+      expect(stuckText(3, role)).toBe("3 scripts wait for a second marker and nobody can take them. Assign one on the Marking page, or release them with a reason.");
+      expect(stuckText(1, role)).toBe("1 script waits for a second marker and nobody can take it. Assign one on the Marking page, or release it with a reason.");
+    }
+  });
+  it("the stuck line asks an admin, for a lead marker, who cannot open the Marking page", () => {
+    for (const role of ["corrector", "teacher"]) {
+      expect(stuckText(3, role)).toBe("3 scripts wait for a second marker and nobody can take them. Ask an admin to assign one or release them on the Marking page.");
+      expect(stuckText(1, role)).toBe("1 script waits for a second marker and nobody can take it. Ask an admin to assign one or release it on the Marking page.");
+    }
+  });
+  it("the way back from a review keeps its tab and the exam chosen", () => {
+    expect(reviewBackHref("paused_marker", "e1")).toBe("/marking/review?tab=paused&exam=e1");
+    expect(reviewBackHref("sample", null)).toBe("/marking/review?tab=sample");
+    expect(reviewBackHref(null, "e1")).toBe("/marking/review?exam=e1");
+    expect(reviewBackHref(null, null)).toBe("/marking/review");
   });
 });
 
@@ -121,7 +139,7 @@ const marking = (id: string, marks: unknown[], extra: Record<string, unknown> = 
 const opened = (second: unknown, compareSet: unknown) => ({
   ok: true,
   review: { id: "r1", kind: second ? "difference" : "paused_marker", state: "open", outcome: null, party: false },
-  unit: { id: "u1", exam_title: "Physics mock", paper: "Paper 1", script_number: "P1-0007", index_number: "SE-2026-0001", group_label: null, first_name: "Jo" },
+  unit: { id: "u1", exam_title: "Physics mock", paper: "Paper 1", script_number: "P1-0007", index_number: "SE-2026-0001", group_label: null, first_name: "Zarathustra" },
   structure: {
     questions: [
       { id: "top", parent_id: null, label: "1", position: 1, max_mark: null, mark_step: 1, option_group_id: null },
@@ -161,7 +179,7 @@ describe("parseReviewOpen", () => {
     expect(r.review.compare.questions.map((q) => q.out)).toEqual([false, true]);
     expect(r.review.questions.filter((q) => q.leaf).map((q) => q.label)).toEqual(["1(a)", "1(b)"]);
     expect(r.review.first.annotations[0]).toEqual({ id: "a1", page_id: "p1", kind: "tick", x: 0.5, y: 0.5, question_id: Q1 });
-    expect(JSON.stringify(r)).not.toContain("Jo");
+    expect(JSON.stringify(r)).not.toContain("Zarathustra");
   });
   it("without a second marking, the rows come from the first marks alone", () => {
     const r = parseReviewOpen(opened(null, null));
@@ -204,13 +222,18 @@ describe("the page's own checks before the server is asked", () => {
     });
     expect(readMarks(questions, { [Q1]: { text: "1", na: false }, [Q2]: { text: "2.5", na: false } }).ok).toBe(true);
   });
-  it("only the marks that change are sent as a final mark change", () => {
+  it("only the marks the lead typed are sent as a final mark change, even one typed back to where it started", () => {
     const marks = [
       { question_id: Q1, mark: 3, na: false },
       { question_id: Q2, mark: null, na: true },
+      { question_id: Q3, mark: 4, na: false },
     ];
-    expect(changedMarks(marks, [{ questionId: Q1, mark: 3, na: false }, { questionId: Q2, mark: 2, na: false }])).toEqual([{ question_id: Q2, mark: null, na: true }]);
-    expect(changedMarks(marks, [{ questionId: Q1, mark: 3, na: false }, { questionId: Q2, mark: null, na: true }])).toEqual([]);
+    // Q2 was set NR; Q3 was typed back to the 4 the page showed (the page may be stale): both go. Q1 was not touched.
+    expect(typedMarks(marks, new Set([Q2, Q3]))).toEqual([
+      { question_id: Q2, mark: null, na: true },
+      { question_id: Q3, mark: 4, na: false },
+    ]);
+    expect(typedMarks(marks, new Set())).toEqual([]);
   });
   it("a note is 3 to 1,000 characters, and optional only where it may be left out", () => {
     expect(noteProblem("", false)).toBeNull();
@@ -269,5 +292,184 @@ describe("the markers and the practice and seeded scripts", () => {
     // An admin's list has no can_add.
     const a = parseStandards({ ok: true, standards: [] });
     expect(a.ok && a.canAdd).toBeNull();
+  });
+});
+
+describe("why Second-mark these or Release from second marking skipped a script", () => {
+  it("every skip code has its own sentence", () => {
+    const generic = markingMessageFor("internal");
+    const codes = ["not_found", "forbidden", "conflict_of_interest", "marking_closed", "not_submitted", "settled", "with_lead", "already", "not_waiting"];
+    for (const code of codes) expect(secondSkipMessage(code), code).not.toBe(generic);
+    expect(secondSkipMessage("not_found")).toBe("This script could not be found. Refresh the page.");
+    expect(secondSkipMessage("conflict_of_interest")).toBe("You cannot change this script because of a declared conflict.");
+    expect(secondSkipMessage("with_lead")).toBe("This script is with the lead marker.");
+  });
+});
+
+// Ruling R18 (M9): what every new page receives is read through these parsers. A candidate's first name, last name,
+// email, booking id or student id planted anywhere in the answers never comes out of them.
+describe("no candidate name reaches a page", () => {
+  const NAMES = {
+    first_name: "Zarathustra",
+    last_name: "Quillfeather",
+    email: "zarathustra.quillfeather@example.com",
+    booking_id: "b0000000-0000-4000-8000-00000000b00c",
+    student_id: "5000000a-0000-4000-8000-00000000057d",
+  };
+  const planted = Object.values(NAMES);
+  const plant = <T extends Record<string, unknown>>(o: T) => ({ ...o, ...NAMES, candidate: { ...NAMES } });
+  const clean = (what: string, out: unknown) => {
+    const text = JSON.stringify(out);
+    for (const v of planted) expect(text, `${what}: ${v}`).not.toContain(v);
+  };
+
+  it("the check itself finds a name that got through", () => {
+    expect(() => clean("a leak", { name: NAMES.last_name })).toThrow();
+  });
+  it("the review lists (/marking/review)", () => {
+    clean(
+      "marking_review_list",
+      parseReviewList(
+        plant({
+          ok: true,
+          counts: plant({ difference: 1, paused_marker: 0, sample: 0, to_clear: 0, stuck_second: 0 }),
+          items: [
+            plant({
+              review_id: "r1",
+              kind: "difference",
+              exam_id: "e1",
+              exam_title: "Physics mock",
+              unit_id: "u1",
+              script_number: "P1-0007",
+              index_number: "SE-2026-0001",
+              group_label: null,
+              first: plant({ marker_id: "m1", name: "Ann Marker", total: 9 }),
+              second: plant({ marker_id: "m2", name: "Bob Marker", total: 14 }),
+              max_total: 20,
+              opened_at: "2026-12-01T10:00:00Z",
+              party: false,
+            }),
+          ],
+          more: false,
+        }),
+      ),
+    );
+  });
+  it("the exams to choose from (/marking/review)", () => {
+    clean(
+      "marking_progress",
+      parseProgress(
+        plant({
+          ok: true,
+          exams: [
+            plant({
+              exam_id: "e1",
+              title: "Physics mock",
+              paper: "Paper 1",
+              subject: "Physics",
+              mode: "whole",
+              scripts: plant({ waiting: 0, ready_to_mark: 1, marking: 0, marked: 0 }),
+              units: plant({ open: 1, taken: 0, submitted: 0, on_hold: 0 }),
+              markers: [plant({ marker_id: "m1", name: "Ann Marker", taken: 0, submitted: 0, last_saved_at: null })],
+              alerts_open: 0,
+            }),
+          ],
+        }),
+      ),
+    );
+  });
+  it("the markers and the practice and seeded scripts (/marking/review)", () => {
+    clean(
+      "marking_exam_markers",
+      parseExamMarkers(
+        plant({
+          ok: true,
+          markers: [
+            plant({
+              marker_id: "m1",
+              name: "Ann Marker",
+              lead: false,
+              cleared: false,
+              paused: false,
+              misses: 0,
+              practice: [plant({ standard_id: "s1", script_number: "P1-0001", total: 11, lead_total: 12, max_total: 20, within: true })],
+              practice_left: 1,
+              seeds: plant({ done: 0, outside: 0 }),
+              to_review: 0,
+            }),
+          ],
+        }),
+      ),
+    );
+    clean(
+      "marking_standards_list",
+      parseStandards(
+        plant({
+          ok: true,
+          standards: [
+            plant({
+              id: "st1",
+              unit_id: "u1",
+              use: "seed",
+              script_number: "P1-0003",
+              index_number: "SE-2026-0003",
+              group_label: null,
+              total: 12,
+              max_total: 20,
+              note: "Generous on 2.",
+              retired: false,
+              attempts: plant({ done: 1, outside: 0 }),
+            }),
+          ],
+          can_add: [plant({ unit_id: "u9", script_number: "P1-0009", index_number: "SE-2026-0009", group_label: null, total: 15 })],
+          more: false,
+        }),
+      ),
+    );
+  });
+  it("one review (/marking/review/[reviewId])", () => {
+    const raw = opened(marking("s1", [{ question_id: Q1, mark: 3, na: false }], { marker_name: "Bob Marker" }), {
+      within: false,
+      total_a: 4,
+      total_b: 3,
+      max_total: 10,
+      questions: [plant({ question_id: Q1, label: "1(a)", max: 4, a: 3, a_na: false, b: 3, b_na: false, out: false })],
+    });
+    const deep = plant({
+      ...raw,
+      review: plant(raw.review),
+      unit: plant(raw.unit),
+      structure: plant({ ...raw.structure, questions: raw.structure.questions.map(plant), option_groups: [plant({ id: "o1", label: "A", choose: 1 })] }),
+      pages: raw.pages.map(plant),
+      first: plant({ ...raw.first, marks: raw.first.marks.map((m) => plant(m as Record<string, unknown>)), annotations: raw.first.annotations.map(plant) }),
+      second: plant(raw.second as Record<string, unknown>),
+      compare: plant(raw.compare as Record<string, unknown>),
+      final: [plant({ question_id: Q1, mark: 3, na: false, source: "first" })],
+    });
+    const r = parseReviewOpen(deep);
+    expect(r.ok).toBe(true);
+    clean("marking_review_open", r);
+  });
+  it("the admin's check columns (/admin/marking)", () => {
+    clean(
+      "marking_units_list",
+      parseUnits(
+        plant({
+          ok: true,
+          units: [
+            plant({
+              unit_id: "u1",
+              script_number: "P1-0007",
+              index_number: "SE-2026-0001",
+              state: "submitted",
+              marker_id: "m1",
+              marker_name: "Ann Marker",
+              check_state: "waiting_second",
+              second: plant({ marker_id: "m2", marker_name: "Bob Marker", state: "taken", how: "next" }),
+            }),
+          ],
+        }),
+      ),
+    );
   });
 });

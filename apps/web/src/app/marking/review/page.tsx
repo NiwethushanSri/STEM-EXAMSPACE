@@ -62,7 +62,21 @@ async function ExamTab({ tab, exam, selfId }: { tab: "markers" | "standards"; ex
 /** The stuck line, the exam to show, the tabs and the chosen tab. The review lists are of every exam the caller may
  * review, or of the exam asked for; the markers and the practice and seeded scripts are of one exam (the one asked for,
  * else the first whose marking is open, else the first). No candidate name. */
-function Body({ tab, asked, list, exams, selfId }: { tab: Tab; asked: string | null; list: ReviewListData; exams: ProgressExam[]; selfId: string }) {
+function Body({
+  tab,
+  asked,
+  list,
+  exams,
+  selfId,
+  role,
+}: {
+  tab: Tab;
+  asked: string | null;
+  list: ReviewListData;
+  exams: ProgressExam[];
+  selfId: string;
+  role: string;
+}) {
   const perExam = !tab.kind;
   const exam = exams.find((e) => e.examId === asked) ?? (perExam ? (exams.find((e) => e.openedAt && !e.closedAt) ?? exams[0] ?? null) : null);
   const { counts } = list;
@@ -70,7 +84,7 @@ function Body({ tab, asked, list, exams, selfId }: { tab: Tab; asked: string | n
     <div className="space-y-6">
       {counts.stuckSecond > 0 && (
         <p role="alert" className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-          {stuckText(counts.stuckSecond)}
+          {stuckText(counts.stuckSecond, role)}
         </p>
       )}
       <form method="get" action="/marking/review" aria-label="Choose the exam" className="flex flex-wrap items-end gap-3 text-sm">
@@ -107,7 +121,7 @@ function Body({ tab, asked, list, exams, selfId }: { tab: Tab; asked: string | n
       </nav>
       <Card>
         {tab.kind ? (
-          <ReviewList items={list.items.filter((i) => i.kind === tab.kind)} showExam={!asked} more={list.more} empty={tab.empty ?? ""} />
+          <ReviewList items={list.items.filter((i) => i.kind === tab.kind)} showExam={!asked} exam={asked} more={list.more} empty={tab.empty ?? ""} />
         ) : exam ? (
           <Suspense fallback={LOADING}>
             <ExamTab tab={tab.id as "markers" | "standards"} exam={exam} selfId={selfId} />
@@ -142,7 +156,7 @@ async function Shell({ searchParams }: { searchParams: Promise<Params> }) {
       ) : !list.ok ? (
         <p className="text-sm text-slate-700">{reviewMessageFor(list.code)}</p>
       ) : (
-        <Body tab={tab} asked={asked} list={list.list} exams={exams} selfId={me.id} />
+        <Body tab={tab} asked={asked} list={list.list} exams={exams} selfId={me.id} role={me.role} />
       )}
     </AppShell>
   );
