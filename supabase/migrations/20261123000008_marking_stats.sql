@@ -21,7 +21,9 @@
 --     with).
 --   second: the pieces where the marker was the first or the second marker and both markings are submitted: how many,
 --     how many within tolerance (marking_compare: Task 4's rule, greatest(1, percent x maximum), per question and on the
---     total), and the mean absolute gap between the two totals.
+--     total), and the mean absolute gap between the two totals. (Replaced in 20261123000009, Ruling R23: the pairs the
+--     check compared, and those within, as it recorded them, through marking_second_pairs, as the approval page counts
+--     them; no longer compared again here.)
 --   seeds, practice: their submitted seeded and practice attempts, and how many are within tolerance of the lead's
 --     frozen marks. A seed counts as the submit judged it (Ruling R20): the miss it recorded (feedback_at, set by
 --     marking_after_submit only for a seed outside tolerance) is what counted towards a pause, and what the Markers tab

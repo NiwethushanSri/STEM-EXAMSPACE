@@ -30,12 +30,12 @@
 -- never block. A script in the state final (after results, Phase 4) counts as checked.
 --
 -- What the checks found (figures), on the same scripts:
---   pieces; second_marked: pieces whose first and second markings are both submitted; within_tolerance: of those, the
---     pairs the check did not find to differ, as it recorded it (Ruling R22, as R20 for seeds): no difference review
---     of that first and second marking stands (one withdrawn does not count). The check opens one exactly when a
---     second marking is outside tolerance (Task 4's rule 5), so this is the comparison made then, with the tolerance
---     of that time; nothing is compared again here (marking_compare per pair was too slow at 1,500 pairs). A paused
---     marker's piece accepted with a submitted second marking (Ruling R15) was never compared, and counts as within;
+--   pieces; second_marked and within_tolerance: the second-marked pairs the check compared, and those of them within
+--     tolerance, as it recorded them (Ruling R23: marking_second_pairs, which the marker statistics use too): a pair
+--     sent back and marked again within tolerance is within; a paused marker's piece accepted with a second marking
+--     submitted while the lead was looking (Ruling R15) was never compared and counts in neither; a later tolerance
+--     change moves neither (as R20 for seeds). Nothing is compared again here (marking_compare per pair was too slow
+--     at 1,500 pairs);
 --   settled: difference reviews closed as first_stands, second_stands or lead_marks (a lead's change of a final mark is
 --     recorded as a closed sample review with outcome lead_marks, 20261123000007, and is not a settle);
 --   settled_by_a_party: those settled by one of the piece's two markers (the party flag of the lead's list);
@@ -56,6 +56,7 @@
 -- Added:
 --   marking_exam_frozen(p_exam) (internal): the exam's marking is approved.
 --   marking_approval_blocks(p_exam) (internal): what blocks approval, above.
+--   marking_second_pairs(p_exam) (internal, Ruling R23): each second-marked pair's outcome as the check recorded it.
 --   marking_approval_get(p_exam), marking_approve(p_exam, p_note), marking_approval_withdraw(p_exam, p_reason): admins.
 --   Indexes: audit_log_final_mark_changed_idx (the figure above), final_marks_question_idx (the maximum rule below).
 -- Changed, each from its latest definition, adding only the freeze (refused marking_approved while the exam's marking
@@ -67,8 +68,11 @@
 --   marking_script_hand_back (20261123000004) and marking_standard_retire (20261123000006);
 --   exam_structure_save (20261123000005): frozen too, and a maximum cannot go below a final mark or a practice or
 --     seeded script's mark either (final_marks, marking_standard_marks), as it cannot go below a marker's.
---   marking_tick (20261123000006): the pauses not applied yet, on closed exams that are not approved too (above);
---     marking_exam_sync still runs on open exams only.
+--   marking_tick (20261123000006): the pauses not applied yet, on closed exams that are not approved too (above),
+--     visiting a closed exam only when it has one (Ruling R23); marking_exam_sync still runs on open exams only.
+--   marking_pause_apply (20261123000006): nothing is done on an approved exam (Ruling R23).
+--   marking_stats (20261123000008): second (compared, within, mean_gap) from marking_second_pairs (Ruling R23), so the
+--     statistics and the approval page count the same pairs alike; mean_gap is still from the two totals.
 -- Already frozen since 20261123000007, so not made again: marking_review_settle, marking_review_accept,
 -- marking_send_back, marking_review_sample, marking_final_set. A marker's save after approval is refused marking_closed
 -- (approval closes marking). Looked at and left alone (Ruling R22, the review's M4): marking_alert_release and
@@ -169,6 +173,62 @@ as $$
 $$;
 
 -- ---------------------------------------------------------------------------------------------
+-- Internal (Ruling R23): the exam's second-marked pairs, each with its outcome as the check recorded it
+-- (marking_check_evaluate, 20261123000007), for the approval page and the marker statistics alike. A pair is a piece's
+-- submitted first (live) marking and its submitted second marking, on a script that is not withdrawn or void.
+--   outside: a difference review of these two markings stands for their current submissions. The check opens one
+--     exactly when a second marking is outside tolerance (Task 4's rule 5); a closed one counts only when closed at or
+--     after both current submissions, as the check bounds a settle (a submission made again is compared again). A
+--     withdrawn one, or one closed when the piece was sent back, does not: a sent-back first marking submitted again is
+--     compared again, and a new review is opened if it still differs.
+--   compared: outside, or the check found the pair within tolerance: the piece is checked and wanted a second marking,
+--     with no paused marker's review of the first marking's current submission. When there is one (rule 4, open or
+--     accepted), the pair was compared only if the second marking was submitted before that review was opened; one
+--     submitted while the lead was looking (Ruling R15: accepted without a comparison) is compared in neither sense.
+--   within: compared and not outside.
+-- So the figure is the check's judgement with the tolerance of its time: a later tolerance change does not move it (as
+-- Ruling R20 for seeds). Totals are given for the gap.
+-- ---------------------------------------------------------------------------------------------
+create function public.marking_second_pairs(p_exam uuid)
+returns table (unit_id uuid, first_id uuid, first_marker_id uuid, first_total numeric, second_id uuid, second_marker_id uuid,
+  second_total numeric, compared boolean, within boolean)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with p as materialized (
+    select u.id as unit_id, u.check_state, u.second_wanted,
+      f.id as first_id, f.marker_id as first_marker_id, f.total as first_total, f.submitted_at as first_at,
+      k.id as second_id, k.marker_id as second_marker_id, k.total as second_total, k.submitted_at as second_at
+    from public.marking_units u
+    join public.scripts s on s.id = u.script_id
+    join public.markings f on f.unit_id = u.id and f.kind = 'live' and f.status = 'submitted'
+    join public.markings k on k.unit_id = u.id and k.kind = 'second' and k.status = 'submitted'
+    where u.exam_id = p_exam and s.state not in ('withdrawn', 'void')
+  ),
+  o as materialized (
+    select p.*,
+      exists (select 1 from public.marking_reviews r
+              where r.exam_id = p_exam and r.unit_id = p.unit_id and r.kind = 'difference'
+                and r.marking_id = p.first_id and r.second_marking_id = p.second_id
+                and coalesce(r.outcome, '') not in ('withdrawn', 'sent_back')
+                and (r.state = 'open' or r.closed_at >= greatest(p.first_at, p.second_at))) as outside,
+      (select max(r.opened_at) from public.marking_reviews r
+       where r.exam_id = p_exam and r.unit_id = p.unit_id and r.kind = 'paused_marker' and r.marking_id = p.first_id
+         and (r.state = 'open' or (r.outcome = 'accepted' and r.closed_at >= p.first_at))) as paused_at
+    from p
+  )
+  select o.unit_id, o.first_id, o.first_marker_id, o.first_total, o.second_id, o.second_marker_id, o.second_total,
+    o.outside or c.found_within, not o.outside and c.found_within
+  from o
+  cross join lateral (
+    select case when o.paused_at is not null then o.second_at <= o.paused_at
+                else o.check_state = 'checked' and coalesce(o.second_wanted, false) end as found_within
+  ) c
+$$;
+
+-- ---------------------------------------------------------------------------------------------
 -- marking_approval_get: the exam's approval page (see the header). Admins only (forbidden otherwise); invalid_input (no
 -- exam); not_found. can_approve: marking has opened and nothing blocks. stale (Ruling R22): the exam is approved and
 -- something blocks (a script arrived after the approval, or a name was reported, a picture changed or an alert was
@@ -220,14 +280,9 @@ begin
   u as materialized (
     select u.id from public.marking_units u join s on s.id = u.script_id where u.exam_id = p_exam
   ),
-  -- Ruling R22 (as R20 for seeds): within as the check recorded it, not compared again here.
+  -- Ruling R23: the pairs as the check recorded them (marking_second_pairs), as the marker statistics count them.
   pairs as materialized (
-    select not exists (select 1 from public.marking_reviews r
-                       where r.unit_id = u.id and r.kind = 'difference' and r.marking_id = f.id and r.second_marking_id = k.id
-                         and r.outcome is distinct from 'withdrawn') as within
-    from u
-    join public.markings f on f.unit_id = u.id and f.kind = 'live' and f.status = 'submitted'
-    join public.markings k on k.unit_id = u.id and k.kind = 'second' and k.status = 'submitted'
+    select p.compared, p.within from public.marking_second_pairs(p_exam) p
   ),
   rv as materialized (
     select r.kind, r.outcome,
@@ -242,7 +297,7 @@ begin
   )
   select jsonb_build_object(
     'pieces', (select count(*)::int from u),
-    'second_marked', (select count(*)::int from pairs),
+    'second_marked', (select count(*)::int from pairs p where p.compared),
     'within_tolerance', (select count(*)::int from pairs p where p.within),
     'settled', jsonb_build_object(
       'first_stands', (select count(*)::int from rv where rv.kind = 'difference' and rv.state = 'closed' and rv.outcome = 'first_stands'),
@@ -1687,9 +1742,14 @@ declare
   r record;
   v_marker uuid;
 begin
-  -- 3B Task 10 (Ruling R22): every exam whose marking has opened and is not approved, a closed one too (its pauses only).
+  -- 3B Task 10 (Rulings R22, R23): every exam whose marking is open, and every closed one that is not approved and has a
+  -- pause not applied yet (its pauses only).
   for r in select m.exam_id, m.closed_at is null as is_open from public.exam_marking m
-           where m.opened_at is not null and m.approved_at is null order by m.exam_id loop
+           where m.opened_at is not null and m.approved_at is null
+             and (m.closed_at is null
+                  or exists (select 1 from public.exam_markers x
+                             where x.exam_id = m.exam_id and x.paused_at is not null and x.pause_applied_at is null))
+           order by m.exam_id loop
     -- One exam's failure is its own: what it did is undone, the others still run, and the next minute tries it again.
     -- The log line names the exam and the error's SQLSTATE only: an error's message can quote a row.
     begin
@@ -1710,6 +1770,228 @@ begin
     end;
   end loop;
   perform public.marking_holds_expire(null);
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- marking_stats: as 20261123000008, and (3B Task 10, Ruling R23) second (compared, within, mean_gap) counts the pairs
+-- as the check recorded them (marking_second_pairs): a pair is compared when the check evaluated both of its current
+-- submissions, and within unless a difference review of them stands; mean_gap is still from the two totals, of the
+-- pairs compared. marking_compare is no longer called per pair. Nothing else in it changed.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_stats(p_exam uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_admin boolean := public.is_staff_admin();
+  v_subject bigint;
+  v_tol int;
+  v_out jsonb;
+begin
+  if p_exam is null then
+    return jsonb_build_object('ok', false, 'code', 'invalid_input');
+  end if;
+  select e.subject_id into v_subject from public.exams e where e.id = p_exam;
+  if not found then
+    return jsonb_build_object('ok', false, 'code', case when v_admin then 'not_found' else 'forbidden' end);
+  end if;
+  if not v_admin and not public.is_lead_for(auth.uid(), v_subject) then
+    return jsonb_build_object('ok', false, 'code', 'forbidden');
+  end if;
+  v_tol := coalesce((select m.tolerance_percent from public.exam_marking m where m.exam_id = p_exam), 10);
+
+  with
+  -- What a piece is out of, once per question group: every piece of a group holds the same questions. Materialized, so
+  -- the maximum is worked out once per group, not once per marking it is joined to.
+  maxes as materialized (
+    select g.group_id, public.marking_unit_max_total(g.id) as max_total
+    from (select distinct on (u.group_id) u.group_id, u.id from public.marking_units u
+          where u.exam_id = p_exam order by u.group_id, u.id) g
+  ),
+  -- The exam's markings, on scripts that are not withdrawn or void.
+  mk as materialized (
+    select m.id, m.unit_id, m.kind, m.marker_id, m.status, m.total, m.active_seconds, m.sent_back_note is not null as sent_back,
+      m.feedback_at is not null as feedback_shown, u.group_id, x.max_total
+    from public.marking_units u
+    join public.scripts s on s.id = u.script_id
+    join public.markings m on m.unit_id = u.id
+    join maxes x on x.group_id is not distinct from u.group_id
+    where u.exam_id = p_exam and s.state not in ('withdrawn', 'void')
+  ),
+  -- The pieces: submitted live markings, each as a percentage of its maximum.
+  live as materialized (
+    select k.marker_id, k.group_id, k.total * 100.0 / nullif(k.max_total, 0) as pct, k.total >= k.max_total as at_max
+    from mk k where k.kind = 'live' and k.status = 'submitted'
+  ),
+  piece_stats as (
+    select l.marker_id, count(*)::int as n, avg(l.pct) as mean, count(*) filter (where l.at_max)::int as at_max
+    from live l group by l.marker_id
+  ),
+  group_mean as (
+    select l.group_id, avg(l.pct) as mean, count(distinct l.marker_id) as markers from live l group by l.group_id
+  ),
+  cohort as (
+    select b.marker_id, sum(b.n * g.mean) / nullif(sum(b.n), 0) as mean, bool_or(g.markers > 1) as has_others
+    from (select l.marker_id, l.group_id, count(l.pct) as n from live l group by l.marker_id, l.group_id) b
+    join group_mean g on g.group_id is not distinct from b.group_id
+    group by b.marker_id
+  ),
+  -- First and second markings of a piece, both submitted, that the check compared, as it recorded them (3B Task 10,
+  -- Ruling R23: marking_second_pairs, as the approval page counts them); the gap is still from the two totals.
+  pairs as materialized (
+    select p.first_marker_id as first_id, p.second_marker_id as second_id, abs(p.first_total - p.second_total) as gap,
+      p.within
+    from public.marking_second_pairs(p_exam) p
+    where p.compared
+  ),
+  agreement as (
+    select r.marker_id, count(*)::int as compared, count(*) filter (where r.within)::int as within, avg(r.gap) as gap
+    from (select p.first_id as marker_id, p.gap, p.within from pairs p
+          union all
+          select p.second_id, p.gap, p.within from pairs p) r
+    group by r.marker_id
+  ),
+  -- A seed as its submit judged it (no feedback shown: within); practice compared now.
+  attempts as materialized (
+    select k.marker_id, k.kind, count(*)::int as done,
+      count(*) filter (where case when k.kind = 'seed' then not k.feedback_shown
+                                  else coalesce((public.marking_standard_compare(k.id) ->> 'within')::boolean, false)
+                             end)::int as within
+    from mk k where k.kind in ('seed', 'practice') and k.status = 'submitted'
+    group by k.marker_id, k.kind
+  ),
+  speed as (
+    select k.marker_id, percentile_cont(0.5) within group (order by k.active_seconds) as median
+    from mk k where k.kind in ('live', 'second') and k.status = 'submitted'
+    group by k.marker_id
+  ),
+  exam_speed as (
+    select percentile_cont(0.5) within group (order by k.active_seconds) as median
+    from mk k where k.kind in ('live', 'second') and k.status = 'submitted'
+  ),
+  sent as (
+    select k.marker_id, count(*)::int as n from mk k where k.kind = 'live' and k.sent_back group by k.marker_id
+  ),
+  who as (
+    select distinct k.marker_id from mk k
+    where (k.status = 'submitted' and k.kind in ('live', 'second', 'seed', 'practice')) or (k.kind = 'live' and k.sent_back)
+  ),
+  per_marker as (
+    select w.marker_id,
+      nullif(btrim(coalesce(p.first_name, '') || ' ' || coalesce(p.last_name, '')), '') as name,
+      coalesce(ps.n, 0) as pieces, coalesce(ps.at_max, 0) as at_max,
+      round(ps.mean, 1) as mean_percent, round(c.mean, 1) as cohort_mean_percent,
+      coalesce(c.has_others, false) as cohort_has_others, round(ps.mean, 1) - round(c.mean, 1) as difference,
+      a.compared, a.within, round(a.gap, 1) as mean_gap,
+      sd.done as seeds_done, sd.within as seeds_within, pr.done as practice_done, pr.within as practice_within,
+      sp.median, coalesce(sb.n, 0) as sent_back
+    from who w
+    join public.profiles p on p.id = w.marker_id
+    left join piece_stats ps on ps.marker_id = w.marker_id
+    left join cohort c on c.marker_id = w.marker_id
+    left join agreement a on a.marker_id = w.marker_id
+    left join attempts sd on sd.marker_id = w.marker_id and sd.kind = 'seed'
+    left join attempts pr on pr.marker_id = w.marker_id and pr.kind = 'practice'
+    left join speed sp on sp.marker_id = w.marker_id
+    left join sent sb on sb.marker_id = w.marker_id
+  )
+  select jsonb_build_object(
+    'ok', true,
+    'tolerance_percent', v_tol,
+    'exam', jsonb_build_object(
+      'pieces', (select count(*)::int from live),
+      'mean_percent', (select round(avg(l.pct), 1) from live l),
+      'median_seconds', (select round(e.median)::int from exam_speed e)),
+    'markers', coalesce((
+      select jsonb_agg(jsonb_build_object(
+          'marker_id', r.marker_id, 'name', r.name, 'pieces', r.pieces,
+          'mean_percent', r.mean_percent, 'cohort_mean_percent', r.cohort_mean_percent, 'cohort_has_others', r.cohort_has_others,
+          'difference', r.difference,
+          'second', jsonb_build_object('compared', coalesce(r.compared, 0), 'within', coalesce(r.within, 0), 'mean_gap', r.mean_gap),
+          'seeds', jsonb_build_object('done', coalesce(r.seeds_done, 0), 'within', coalesce(r.seeds_within, 0)),
+          'practice', jsonb_build_object('done', coalesce(r.practice_done, 0), 'within', coalesce(r.practice_within, 0)),
+          'median_seconds', round(r.median)::int,
+          'sent_back', r.sent_back,
+          'notes', to_jsonb(array_remove(array[
+            case when r.pieces >= 10 and r.median < (select e.median from exam_speed e) / 3 then 'fast' end,
+            case when r.pieces >= 10 and r.at_max * 10 >= r.pieces * 3 then 'full_marks' end,
+            case when r.pieces >= 10 and abs(r.difference) > v_tol then 'mean_apart' end], null)))
+        order by r.name nulls last, r.marker_id)
+      from per_marker r), '[]'::jsonb))
+  into v_out;
+  return v_out;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------------------------
+-- Internal: as 20261123000006, and (3B Task 10, Ruling R23) nothing is done on an approved exam (0), read once the
+-- exam's marking row is held: an approval and a pause never pass each other.
+-- ---------------------------------------------------------------------------------------------
+create or replace function public.marking_pause_apply(p_exam uuid, p_marker uuid)
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_units uuid[];
+  v_scripts uuid[];
+  v_id uuid;
+begin
+  perform pg_advisory_xact_lock(hashtextextended('marker:' || p_marker::text, 0));
+  perform 1 from public.exam_marking m where m.exam_id = p_exam for share;
+  -- 3B Task 10: nothing about an approved exam's marking changes until an admin withdraws the approval.
+  if public.marking_exam_frozen(p_exam) then
+    return 0;
+  end if;
+  if not public.marking_marker_paused(p_exam, p_marker) then
+    return 0;
+  end if;
+
+  -- The pieces of the exam it touches: those the marker holds, has a marking in progress on, or has submitted a live or
+  -- second marking of.
+  select coalesce(array_agg(u.id order by u.id), '{}'), coalesce(array_agg(distinct u.script_id), '{}') into v_units, v_scripts
+  from public.marking_units u
+  where u.exam_id = p_exam
+    and (exists (select 1 from public.marking_assignments a where a.unit_id = u.id and a.marker_id = p_marker and a.ended_at is null)
+         or exists (select 1 from public.markings m where m.unit_id = u.id and m.marker_id = p_marker
+                    and (m.status = 'in_progress' or (m.status = 'submitted' and m.kind in ('live', 'second')))));
+  -- Ruling R9: the scripts' rows in id order, then the pieces' rows in id order.
+  perform 1 from public.scripts s where s.id = any (v_scripts) order by s.id for no key update;
+  perform 1 from public.marking_units u where u.id = any (v_units) order by u.id for update;
+
+  -- Their holds end and their markings in progress are set aside: those pieces are free.
+  with ended as (
+    update public.marking_assignments a set ended_at = now(), end_reason = 'paused'
+    where a.unit_id = any (v_units) and a.marker_id = p_marker and a.ended_at is null
+    returning a.unit_id, a.kind
+  )
+  update public.marking_units u set state = 'open'
+  from ended where u.id = ended.unit_id and ended.kind = 'live' and u.state = 'taken';
+  update public.markings m set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'paused'
+  where m.unit_id = any (v_units) and m.marker_id = p_marker and m.status = 'in_progress';
+  -- Their second markings no review settled: set aside; each piece waits for another second marker.
+  update public.markings m set status = 'set_aside', set_aside_at = now(), set_aside_reason = 'paused'
+  where m.unit_id = any (v_units) and m.marker_id = p_marker and m.kind = 'second' and m.status = 'submitted'
+    and not public.marking_unit_settled(m.unit_id);
+  -- Their first markings the lead has not settled: to the lead.
+  for v_id in
+    select m.unit_id from public.markings m
+    where m.unit_id = any (v_units) and m.marker_id = p_marker and m.kind = 'live' and m.status = 'submitted'
+      and not public.marking_unit_settled(m.unit_id)
+    order by m.unit_id
+  loop
+    perform public.marking_check_evaluate(v_id);
+  end loop;
+  for v_id in select x from unnest(v_scripts) x order by 1 loop
+    perform public.marking_script_state(v_id);
+  end loop;
+  update public.exam_markers x set pause_applied_at = now() where x.exam_id = p_exam and x.marker_id = p_marker;
+  return cardinality(v_units);
 end;
 $$;
 
@@ -1737,6 +2019,10 @@ revoke execute on function public.marking_marker_pause(uuid, uuid, text) from pu
 revoke execute on function public.marking_script_hand_back(uuid, text) from public, anon;
 revoke execute on function public.marking_standard_retire(uuid, text) from public, anon;
 revoke execute on function public.marking_tick() from public, anon, authenticated, service_role;
+revoke execute on function public.marking_second_pairs(uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_pause_apply(uuid, uuid) from public, anon, authenticated, service_role;
+revoke execute on function public.marking_stats(uuid) from public, anon;
+grant execute on function public.marking_stats(uuid) to authenticated;
 grant execute on function public.marking_approval_get(uuid) to authenticated;
 grant execute on function public.marking_approve(uuid, text) to authenticated;
 grant execute on function public.marking_approval_withdraw(uuid, text) to authenticated;

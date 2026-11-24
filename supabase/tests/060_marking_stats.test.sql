@@ -8,7 +8,9 @@ select tests.assert_no_owner();
 -- the lead marker;
 -- corr is a corrector never approved; olead leads 'ZZ Stats Other'. Markings are written directly as postgres (pg_temp.w: the
 -- marks for the piece's questions in paper order, their total and the active seconds), except on exam sb, where the
--- pieces are marked and sent back through the real functions. marking_stats only reads.
+-- pieces are marked and sent back through the real functions. A second-marked pair counts as the check recorded it
+-- (Ruling R23: marking_second_pairs), so what the check would record is written too: a checked piece, or a difference
+-- review. marking_stats only reads.
 --   q:  by question, groups A and B, each one question of 10 marks. Group A: a 4 pieces at 8, b 4 at 4, e 3 at 6;
 --       group B: c 4 at 3, d 4 at 1, e 1 at 2. Group A's mean is 60%, group B's 20%, the exam's 42%.
 --   w:  the test structure (1 of 3 marks, 2(a) of 2, 2(b) of 5: out of 10, every tolerance the floor of one mark),
@@ -165,6 +167,13 @@ select pg_temp.w('f:w5', 'w5', 'live', 'c', array[3, 2, 5], 70), pg_temp.w('s:w5
 select pg_temp.w('f:w6', 'w6', 'live', 'a', array[1, 1, 1], 1000), pg_temp.w('s:w6', 'w6', 'second', 'c', array[1, 1, 1], 5, 'in_progress');
 select pg_temp.w('f:w7', 'w7', 'live', 'a', array[3, 2, 5], 9999, 'set_aside'), pg_temp.w('s:w7', 'w7', 'second', 'b', array[3, 2, 5], 50);
 select pg_temp.w('r:w1', 'w1', 'remark', 'c', array[3, 2, 5], 99999), pg_temp.w('r:w2', 'w2', 'remark', 'mk', array[3, 2, 5], 99999);
+-- What the check recorded of each submitted pair (Ruling R23: the statistics count pairs as the check judged them): w1, w2
+-- and w4 within tolerance (checked), w3 and w5 outside (a difference waits for the lead).
+update public.marking_units set second_wanted = true, check_state = 'checked'
+where id in (pg_temp.u('w1'), pg_temp.u('w2'), pg_temp.u('w4'));
+update public.marking_units set second_wanted = true, check_state = 'to_lead' where id in (pg_temp.u('w3'), pg_temp.u('w5'));
+insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, second_marking_id)
+select pg_temp.k('w'), pg_temp.u(x), 'difference', pg_temp.k('f:' || x), pg_temp.k('s:' || x) from unnest(array['w3', 'w5']) x;
 
 -- Exam s: the lead's live markings, the standards, and the attempts.
 select pg_temp.w('f:s1', 's1', 'live', 'lead', array[1, 1, 1]), pg_temp.w('f:s2', 's2', 'live', 'lead', array[1, 1, 1]),
@@ -182,6 +191,8 @@ select pg_temp.w('f:v1', 'v1', 'live', 'a', array[1, 1, 1], 100), pg_temp.w('f:v
   pg_temp.w('f:v5', 'v5', 'live', 'a', array[3, 2, 5], 5000, 'set_aside'), pg_temp.w('f:v6', 'v6', 'live', 'a', array[3, 2, 5], 5000, 'in_progress');
 select pg_temp.w('s:v1', 'v1', 'second', 'b', array[1, 1, 1], 50), pg_temp.w('s:v3', 'v3', 'second', 'b', array[3, 2, 5], 50),
   pg_temp.w('s:v4', 'v4', 'second', 'c', array[3, 2, 5], 50);
+update public.marking_units set second_wanted = true, check_state = 'checked'
+where id in (pg_temp.u('v1'), pg_temp.u('v3'), pg_temp.u('v4'));
 update public.scripts set state = 'withdrawn' where id = pg_temp.k('v3');
 update public.scripts set state = 'void' where id = pg_temp.k('v4');
 
@@ -426,9 +437,10 @@ select is(array[pg_temp.code(pg_temp.r('lead_suspended')), pg_temp.code(pg_temp.
 -- Subject 'ZZ Stats Big' (its lead bl, markers b1 to b5): exam big is marked by question in 5 groups (one question of 5
 -- marks each) and has 300 scripts. Each of the 1,500 pieces is first-marked; 10 of them are made 5 seeded and 5 practice
 -- scripts, attempted by the 4 markers who did not mark them live, and every other piece is second-marked (the worst case
--- the sample allows: 1,490 comparisons); rows written directly. The lead's call runs under a 6-second limit (Ruling
--- R21): the limit a user meets is the 8-second statement timeout of a signed-in call (as Phase 3A Ruling R25), and
--- this worst case took about 3.4 s in a full run here, too close to a list's 4 s.
+-- the sample allows: 1,490 pairs, each checked as the check records it, one in six with a settled difference: Ruling
+-- R23); rows written directly. The lead's call runs under a 6-second limit (Ruling R21): the limit a user meets is the
+-- 8-second statement timeout of a signed-in call (as Phase 3A Ruling R25), and this worst case took about 3.4 s in a
+-- full run here, when each pair was compared again, too close to a list's 4 s.
 -- ---------------------------------------------------------------------------------------------
 create function pg_temp.timed(p_name text, p_sql text) returns jsonb language plpgsql as $$
 declare
@@ -469,10 +481,20 @@ select m.id, q.id, m.total from public.markings m join bigu b on b.id = m.unit_i
 insert into public.marking_standard_marks (standard_id, question_id, mark)
 select st.id, q.id, 3 from public.marking_standards st join bigu b on b.id = st.unit_id join public.exam_questions q on q.group_id = b.group_id;
 update public.marking_units set state = 'submitted' where exam_id = pg_temp.k('big');
+-- What the check recorded of the 1,490 pairs (Ruling R23): each checked; the pairs whose totals are 5 apart (one in six)
+-- had their difference settled by the lead.
+update public.marking_units u set second_wanted = true, check_state = 'checked'
+from bigu b where b.id = u.id and b.n not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 11);
+insert into public.marking_reviews (exam_id, unit_id, kind, marking_id, second_marking_id, state, outcome, reason, closed_by, closed_at)
+select pg_temp.k('big'), b.id, 'difference', f.id, k.id, 'closed', 'first_stands', 'The first marks are right.', pg_temp.uid('bl'), now()
+from bigu b
+join public.markings f on f.unit_id = b.id and f.kind = 'live'
+join public.markings k on k.unit_id = b.id and k.kind = 'second'
+where b.n % 6 = 5;
 update public.scripts set state = 'marked' where exam_id = pg_temp.k('big');
 analyze public.scripts, public.marking_units, public.markings, public.question_marks, public.marking_standards,
         public.marking_standard_marks, public.exam_questions, public.question_groups, public.exam_option_groups,
-        public.exam_marking, public.exams, public.marker_approvals, public.profiles;
+        public.exam_marking, public.exams, public.marker_approvals, public.profiles, public.marking_reviews;
 select tests.as_user(pg_temp.uid('bl'));
 set local statement_timeout = '6s';
 insert into res values ('big', pg_temp.timed('ms_big', format('select public.marking_stats(%L)', pg_temp.k('big'))));

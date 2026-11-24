@@ -2145,6 +2145,11 @@ isOneToOne: false
 "marking_second_drop":
 { Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
+"marking_second_pairs":
+{ Args: { "p_exam": string }; Returns: {
+              "compared": boolean,"first_id": string,"first_marker_id": string,"first_total": number,"second_id": string,"second_marker_id": string,"second_total": number,"unit_id": string,"within": boolean
+            }[]
+                           },
 "marking_second_release":
 { Args: { "p_reason": string,"p_unit": string }; Returns: undefined
                            },
