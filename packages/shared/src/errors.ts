@@ -342,10 +342,13 @@ export function scriptMessageFor(code: string | null | undefined, reason?: strin
 export type StructureContext = "save" | "file";
 
 const STRUCTURE_LOCKED = "Marking has started, so this can no longer be changed.";
+/** 3B Task 10: any change to an approved exam's marking (its questions, checks, scripts, reviews and markers). */
+const MARKING_APPROVED = "This exam's marking has been approved. An admin must withdraw the approval first.";
 
 const structureMessages: Record<StructureContext, Record<string, string>> = {
   save: {
     structure_locked: STRUCTURE_LOCKED,
+    marking_approved: MARKING_APPROVED,
     structure_incomplete: "Finish the questions and their marks first.",
     forbidden: FORBIDDEN,
     reason_required: "Give a reason of 3 to 300 characters.",
@@ -403,7 +406,8 @@ const TOO_MANY = "There are already 10 of these for this exam.";
  * 5), for the lead's and the admin's pages: the pieces a second marking request skips (marking_second_add,
  * marking_second_drop), practice and seeded scripts (marking_standard_set, as standardMessageFor says them), a marker
  * not cleared or paused, and the codes only a marker meets (practice_wait, practice_not_ready, locked), in the words
- * the marker reads. */
+ * the marker reads; and (Task 10) the codes of approving an exam's marking (marking_approval_get, marking_approve,
+ * marking_approval_withdraw). */
 const markingMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   reason_required: "Give a reason of 3 to 300 characters.",
@@ -418,7 +422,9 @@ const markingMessages: Record<string, string> = {
   not_small_subject: "These checks can only be turned off when the subject has one approved marker.",
   needs_two_markers: "Double marking needs two approved markers. Approve another, or turn it off with a reason.",
   no_lead: "Choose a lead marker for this subject first.",
-  marking_approved: "This exam's marking has been approved. An admin must withdraw the approval first.",
+  marking_approved: MARKING_APPROVED,
+  // 3B Task 10: approving an exam's marking while something still blocks it (marking_approve).
+  not_all_checked: "Not every script is checked yet.",
   // 3B Task 3: a second pass is never given to a marker who saw a name on the script.
   name_seen: NAME_SEEN,
   // 3B Task 4: the pieces "Second-mark these" (marking_second_add) or a drop (marking_second_drop) skipped.
@@ -481,6 +487,8 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     // 3B: a marker not cleared after practice, or paused on the exam, is given no live work.
     practice_first: PRACTICE_FIRST,
     paused: MARKER_PAUSED,
+    // 3B Task 10: nothing is assigned or taken back on an approved exam.
+    marking_approved: MARKING_APPROVED,
   },
 };
 
@@ -549,6 +557,8 @@ const standardMessages: Record<string, string> = {
   not_yours: NOT_YOURS,
   too_many: TOO_MANY,
   on_hold: "This script is on hold.",
+  // 3B Task 10: no practice or seeded script is made, and no marker cleared or paused, on an approved exam.
+  marking_approved: MARKING_APPROVED,
 };
 const standardConflicts: Record<string, string> = {
   switched_off: "This check is turned off for this exam.",
@@ -579,7 +589,7 @@ const reviewMessages: Record<string, string> = {
   wrong_kind: "That action does not fit this review.",
   incomplete: "Give every question a mark, or NR.",
   mark_out_of_range: "That mark is not allowed for this question.",
-  marking_approved: "This exam's marking has been approved. An admin must withdraw the approval first.",
+  marking_approved: MARKING_APPROVED,
   // Ruling R16: a send-back while marking is closed.
   marking_closed: "Marking has closed for this exam, so nobody could mark this script again.",
 };

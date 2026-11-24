@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
@@ -23,7 +24,8 @@ const FIELD = "mt-1 rounded border border-slate-300 px-3 py-2 text-sm disabled:b
 type Dialog = "open" | "close" | "reopen" | "deadline";
 
 /** How the exam is marked, its marking deadline, the checks on the marking, what opening waits for, and Open, Close
- * and Reopen. */
+ * and Reopen. 3B Task 10: once marking has opened, a link to the exam's approval page ("Approve marking", or
+ * "Approved"); an approved exam says so and offers no Reopen until an admin withdraws the approval. */
 export function ExamMarkingPanel({
   examId,
   view,
@@ -82,6 +84,8 @@ function Panel({
 
   const opened = view.openedAt !== null;
   const closed = view.closedAt !== null;
+  // 3B Task 10: an approved exam's marking cannot be reopened until an admin withdraws the approval.
+  const approved = checks?.approved === true;
 
   function show(d: Dialog) {
     setDialogError(null);
@@ -132,6 +136,14 @@ function Panel({
           <>
             <Badge tone="slate">Not open</Badge>
             <span className="ml-2">Marking has not opened for this exam.</span>
+          </>
+        ) : approved ? (
+          <>
+            <Badge tone="green">Approved</Badge>
+            <span className="ml-2">
+              This exam&apos;s marking is approved. Marking closed on {formatLondon(view.closedAt ?? "")} (UK time), and nothing about it can
+              change until an admin withdraws the approval.
+            </span>
           </>
         ) : closed ? (
           <>
@@ -224,10 +236,18 @@ function Panel({
               Close marking
             </button>
           )}
-          {opened && closed && (
+          {opened && closed && !approved && (
             <button type="button" disabled={busy} onClick={() => show("reopen")} className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
               Reopen marking
             </button>
+          )}
+          {opened && (
+            <Link
+              href={`/admin/marking/${examId}/approval`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+            >
+              {approved ? "Approved" : "Approve marking"}
+            </Link>
           )}
         </div>
       </div>

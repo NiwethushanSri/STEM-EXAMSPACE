@@ -26,7 +26,9 @@ function status(e: ProgressExam): { text: string; tone: "slate" | "green" | "blu
  * scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
  * changed pictures can be released even when the alerts list cannot be loaded. `reviewLink` (3B) links each exam whose
  * marking has opened to the lead marker's review of it, and `statsLink` to its marker statistics on the admin pages.
- * `now` is the server's clock when the page was made. */
+ * `approved` (3B Task 10), when given, links each exam whose marking has opened to its approval page on the admin pages:
+ * "Approve marking", or "Approved" once its marking is (the ids of the approved exams). `now` is the server's clock when
+ * the page was made. */
 export function MarkingProgress({
   exams,
   now,
@@ -34,6 +36,7 @@ export function MarkingProgress({
   releaseAll = false,
   reviewLink = false,
   statsLink = false,
+  approved,
 }: {
   exams: ProgressExam[];
   now: string;
@@ -41,6 +44,7 @@ export function MarkingProgress({
   releaseAll?: boolean;
   reviewLink?: boolean;
   statsLink?: boolean;
+  approved?: ReadonlySet<string>;
 }) {
   const at = new Date(now);
   if (exams.length === 0) return <p className="text-sm text-slate-600">No exam has marking set up yet.</p>;
@@ -94,7 +98,7 @@ export function MarkingProgress({
                 rows={e.markers.map((m) => [m.name, m.taken, m.submitted, m.lastSavedAt ? ukDayTime(m.lastSavedAt) : "—"])}
               />
             )}
-            {(scriptsLink || ((reviewLink || statsLink) && e.openedAt)) && (
+            {(scriptsLink || ((reviewLink || statsLink || approved) && e.openedAt)) && (
               <div className="flex flex-wrap gap-x-5 gap-y-2">
                 {scriptsLink && (
                   <Link href={`/admin/marking?exam=${e.examId}#scripts`} className="inline-block text-sm font-medium text-blue-700 underline">
@@ -109,6 +113,12 @@ export function MarkingProgress({
                 {statsLink && e.openedAt && (
                   <Link href={`/admin/marking/${e.examId}/statistics`} className="inline-block text-sm font-medium text-blue-700 underline">
                     Marker statistics for {e.title}
+                  </Link>
+                )}
+                {approved && e.openedAt && (
+                  <Link href={`/admin/marking/${e.examId}/approval`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    {approved.has(e.examId) ? "Approved" : "Approve marking"}
+                    <span className="sr-only"> for {e.title}</span>
                   </Link>
                 )}
               </div>

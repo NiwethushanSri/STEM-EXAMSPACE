@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -257,6 +257,16 @@ describe("markingMessageFor", () => {
     expect(markingMessageFor("needs_two_markers")).toBe("Double marking needs two approved markers. Approve another, or turn it off with a reason.");
     expect(markingMessageFor("no_lead")).toBe("Choose a lead marker for this subject first.");
     expect(markingMessageFor("marking_approved")).toBe("This exam's marking has been approved. An admin must withdraw the approval first.");
+  });
+  it("says why an exam's marking cannot be approved yet (3B Task 10)", () => {
+    expect(markingMessageFor("not_all_checked")).toBe("Not every script is checked yet.");
+  });
+  it("says an approved exam's marking is frozen wherever staff meet it (3B Task 10)", () => {
+    const approved = "This exam's marking has been approved. An admin must withdraw the approval first.";
+    expect(allocationMessageFor("marking_approved", "admin")).toBe(approved);
+    expect(standardMessageFor("marking_approved")).toBe(approved);
+    expect(structureMessageFor("marking_approved", "save")).toBe(approved);
+    expect(reviewMessageFor("marking_approved")).toBe(approved);
   });
   it("maps every staff code of the checks on the marking (3B Tasks 2 to 5)", () => {
     expect(markingMessageFor("name_seen")).toBe("This marker may have seen a name on this script, so they cannot mark it.");

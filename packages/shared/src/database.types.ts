@@ -1930,6 +1930,18 @@ isOneToOne: false
 "marking_alerts_release_all":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
+"marking_approval_blocks":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_approval_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_approval_withdraw":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_approve":
+{ Args: { "p_exam": string,"p_note"?: string }; Returns: Json
+                           },
 "marking_assign":
 { Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
@@ -1959,6 +1971,9 @@ isOneToOne: false
                            },
 "marking_dashboard":
 { Args: { "p_now"?: string }; Returns: Json
+                           },
+"marking_exam_frozen":
+{ Args: { "p_exam": string }; Returns: boolean
                            },
 "marking_exam_get":
 { Args: { "p_exam": string,"p_now"?: string }; Returns: Json

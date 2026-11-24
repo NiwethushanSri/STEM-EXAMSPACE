@@ -171,6 +171,18 @@ describe("marking actions", () => {
     expect(state.calls.every((c) => c.join() === "corrector,teacher,admin,owner")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
   });
+  it("the approval ones are refused for a teacher and a corrector (a lead marker too) and touch nothing", async () => {
+    const a = await import("./admin/marking/[examId]/approval/actions");
+    for (const role of ["teacher", "corrector"]) {
+      state.role = role;
+      await expect(a.approveMarking(UUID, "Every script is checked.")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(a.approveMarking(UUID, "")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(a.withdrawApproval(UUID, "A script was marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    }
+    expect(state.calls).toHaveLength(6);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
   it("the admin second-marking ones are refused for a corrector (a lead marker too) and touch nothing", async () => {
     state.role = "corrector";
     const a = await import("./admin/marking/actions");
