@@ -65,23 +65,10 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
 const KINDS = new Set<string>(ANNOTATION_KINDS);
 const isPoint = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === "number" && Number.isFinite(n));
 
-/** marking_unit_open's answer: the piece, or the code it was refused with ("internal" when the answer makes no sense). */
-export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | { ok: false; code: string } {
-  const d = obj(data);
-  if (!d) return { ok: false, code: "internal" };
-  if (d.ok !== true) return { ok: false, code: str(d.code) ?? "internal" };
-  const u = obj(d.unit);
-  const m = obj(d.marking);
-  const s = obj(d.structure);
-  const unitId = str(u?.id);
-  const markingId = str(m?.id);
-  const rev = num(m?.rev);
-  const status = str(m?.status);
-  if (!u || !m || !s || !unitId || !markingId || rev === null || (status !== "in_progress" && status !== "submitted" && status !== "set_aside")) {
-    return { ok: false, code: "internal" };
-  }
-
-  const rows = list(s.questions).filter((q) => str(q.id) && str(q.label));
+/** The questions of a structure as marking_unit_open and marking_review_open give them (structure.questions), with
+ * full labels ("2(b)(i)") and which of them carry marks. A row without an id or a label is left out. */
+export function parseQuestions(raw: unknown): ScreenQuestion[] {
+  const rows = list(raw).filter((q) => str(q.id) && str(q.label));
   const byId = new Map(rows.map((q) => [q.id as string, q]));
   const hasChild = new Set(rows.flatMap((q) => (str(q.parent_id) ? [q.parent_id as string] : [])));
   const fullLabel = (q: Obj): { label: string; depth: number } => {
@@ -95,7 +82,7 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
     }
     return { label: chain[0] + chain.slice(1).map((l) => `(${l})`).join(""), depth: chain.length - 1 };
   };
-  const questions: ScreenQuestion[] = rows.map((q) => {
+  return rows.map((q) => {
     const { label, depth } = fullLabel(q);
     const pages = Array.isArray(q.pages) ? q.pages.filter((p): p is number => typeof p === "number" && Number.isInteger(p)) : [];
     return {
@@ -119,6 +106,48 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
       }),
     };
   });
+}
+
+/** A marking's annotations as marking_unit_open and marking_review_open give them: a kind it does not know, or one
+ * without its place, is left out. */
+export function parseAnnotations(raw: unknown): NonNullable<OpenedMarking["annotations"]> {
+  return list(raw).flatMap((a) => {
+    const id = str(a.id);
+    const pageId = str(a.page_id);
+    const kind = str(a.kind);
+    const x = num(a.x);
+    const y = num(a.y);
+    if (!id || !pageId || !kind || !KINDS.has(kind) || x === null || y === null) return [];
+    return [{
+      id,
+      page_id: pageId,
+      kind: kind as AnnotationKind,
+      x,
+      y,
+      points: Array.isArray(a.points) && a.points.every(isPoint) ? (a.points as [number, number][]) : null,
+      text: str(a.text),
+      question_id: str(a.question_id),
+    }];
+  });
+}
+
+/** marking_unit_open's answer: the piece, or the code it was refused with ("internal" when the answer makes no sense). */
+export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | { ok: false; code: string } {
+  const d = obj(data);
+  if (!d) return { ok: false, code: "internal" };
+  if (d.ok !== true) return { ok: false, code: str(d.code) ?? "internal" };
+  const u = obj(d.unit);
+  const m = obj(d.marking);
+  const s = obj(d.structure);
+  const unitId = str(u?.id);
+  const markingId = str(m?.id);
+  const rev = num(m?.rev);
+  const status = str(m?.status);
+  if (!u || !m || !s || !unitId || !markingId || rev === null || (status !== "in_progress" && status !== "submitted" && status !== "set_aside")) {
+    return { ok: false, code: "internal" };
+  }
+
+  const questions = parseQuestions(s.questions);
 
   const pages: ScreenPage[] = list(d.pages).flatMap((p) => {
     const pageId = str(p.page_id);
@@ -133,24 +162,7 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
       const q = str(x.question_id);
       return q ? [{ question_id: q, mark: num(x.mark), na: x.na === true }] : [];
     }),
-    annotations: list(d.annotations).flatMap((a) => {
-      const id = str(a.id);
-      const pageId = str(a.page_id);
-      const kind = str(a.kind);
-      const x = num(a.x);
-      const y = num(a.y);
-      if (!id || !pageId || !kind || !KINDS.has(kind) || x === null || y === null) return [];
-      return [{
-        id,
-        page_id: pageId,
-        kind: kind as AnnotationKind,
-        x,
-        y,
-        points: Array.isArray(a.points) && a.points.every(isPoint) ? (a.points as [number, number][]) : null,
-        text: str(a.text),
-        question_id: str(a.question_id),
-      }];
-    }),
+    annotations: parseAnnotations(d.annotations),
   };
 
   const file = obj(s.mark_scheme_file);

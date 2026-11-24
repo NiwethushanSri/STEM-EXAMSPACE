@@ -24,18 +24,20 @@ function status(e: ProgressExam): { text: string; tone: "slate" | "green" | "blu
 /** What is left per exam and per marker: the scripts waiting, ready to mark, being marked and marked; each marker's
  * scripts taken and submitted; the alerts open. No candidate name. `scriptsLink` links each exam to its list of
  * scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
- * changed pictures can be released even when the alerts list cannot be loaded. `now` is the server's clock when the
- * page was made. */
+ * changed pictures can be released even when the alerts list cannot be loaded. `reviewLink` (3B) links each exam whose
+ * marking has opened to the lead marker's review of it. `now` is the server's clock when the page was made. */
 export function MarkingProgress({
   exams,
   now,
   scriptsLink = false,
   releaseAll = false,
+  reviewLink = false,
 }: {
   exams: ProgressExam[];
   now: string;
   scriptsLink?: boolean;
   releaseAll?: boolean;
+  reviewLink?: boolean;
 }) {
   const at = new Date(now);
   if (exams.length === 0) return <p className="text-sm text-slate-600">No exam has marking set up yet.</p>;
@@ -89,10 +91,19 @@ export function MarkingProgress({
                 rows={e.markers.map((m) => [m.name, m.taken, m.submitted, m.lastSavedAt ? ukDayTime(m.lastSavedAt) : "—"])}
               />
             )}
-            {scriptsLink && (
-              <Link href={`/admin/marking?exam=${e.examId}#scripts`} className="inline-block text-sm font-medium text-blue-700 underline">
-                Show the scripts of {e.title}
-              </Link>
+            {(scriptsLink || (reviewLink && e.openedAt)) && (
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                {scriptsLink && (
+                  <Link href={`/admin/marking?exam=${e.examId}#scripts`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    Show the scripts of {e.title}
+                  </Link>
+                )}
+                {reviewLink && e.openedAt && (
+                  <Link href={`/marking/review?exam=${e.examId}`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    Review the marking of {e.title}
+                  </Link>
+                )}
+              </div>
             )}
           </li>
         );

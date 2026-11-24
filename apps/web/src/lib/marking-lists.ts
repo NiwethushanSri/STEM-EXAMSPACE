@@ -285,6 +285,11 @@ export type UnitRow = {
   total: number | null;
   /** What holds a piece not yet submitted back (marking_script_blocked), or null. */
   waiting: string | null;
+  /** 3B: the piece's check (waiting_second, to_lead, checked), or null. */
+  checkState: string | null;
+  /** 3B: who has the piece's second pass and where it stands (taken while they hold it, submitted once their second
+   * marking is, else open), or null when nobody does. */
+  second: { markerId: string; markerName: string; state: "taken" | "submitted" | "open" } | null;
 };
 
 /** marking_units_list's pieces, or null when the answer is not one. */
@@ -313,9 +318,21 @@ export function parseUnits(data: unknown): UnitRow[] | null {
       submittedAt: time(u.submitted_at),
       total: typeof u.total === "number" ? u.total : null,
       waiting: str(u.waiting),
+      checkState: str(u.check_state),
+      second: secondOf(u.second),
     });
   }
   return out;
+}
+
+const SECOND_STATES = ["taken", "submitted", "open"] as const;
+
+/** A piece's second pass as marking_units_list gives it, or null. */
+function secondOf(v: unknown): UnitRow["second"] {
+  const s = obj(v);
+  const markerId = str(s?.marker_id);
+  const state = pick(s?.state, SECOND_STATES);
+  return s && markerId && state ? { markerId, markerName: str(s.marker_name) ?? "Marker", state } : null;
 }
 
 const ALERT_KINDS = ["picture_changed", "picture_missing", "name_visible", "pages_set_aside", "pages_changed"] as const;

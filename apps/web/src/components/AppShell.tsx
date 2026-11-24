@@ -129,17 +129,31 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
   },
 };
 
+/** 3B: the lead marker's review, under Marking in the menu of a role that marks. */
+const REVIEW_ITEM: NavItem = { href: "/marking/review", label: "Review" };
+
+/** The role's menu; for a lead marker (`lead`, which the page learns from the database), Review just under Marking. */
+function navItems(role: keyof typeof roleNav, lead: boolean): (NavItem & { sub?: boolean })[] {
+  const items = roleNav[role].items;
+  if (!lead) return items;
+  return items.flatMap((item) => (item.href === "/marking" ? [item, { ...REVIEW_ITEM, sub: true }] : [item]));
+}
+
 export function AppShell({
   role,
   title,
+  lead = false,
   children,
 }: {
   role: keyof typeof roleNav;
   title: string;
+  /** The signed-in marker leads a subject: their menu shows Review under Marking. */
+  lead?: boolean;
   children: ReactNode;
 }) {
   const pathname = usePathname();
   const section = roleNav[role];
+  const items = navItems(role, lead);
   const user = useContext(ShellUserContext);
 
   return (
@@ -152,13 +166,13 @@ export function AppShell({
           {section.name}
         </p>
         <nav className="flex flex-col gap-1 px-3">
-          {section.items.map((item) => {
+          {items.map((item) => {
             const active = pathname === item.href;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded px-3 py-2 text-sm transition ${
+                className={`rounded px-3 py-2 text-sm transition ${item.sub ? "ml-4" : ""} ${
                   active ? "bg-white text-blue-700 font-medium" : "hover:bg-blue-600"
                 }`}
               >
@@ -193,7 +207,7 @@ export function AppShell({
           </div>
           {/* Phone navigation: the sidebar is hidden below md */}
           <nav className="mt-3 flex gap-2 overflow-x-auto md:hidden">
-            {section.items.map((item) => (
+            {items.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}

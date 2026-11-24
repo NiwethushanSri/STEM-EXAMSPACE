@@ -152,6 +152,36 @@ describe("marking actions", () => {
     expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
   });
+  it("the lead's review ones are refused for a tutor and touch nothing", async () => {
+    state.role = "tutor";
+    const r = await import("./marking/review/actions");
+    const marks = [{ question_id: UUID, mark: 1, na: false }];
+    await expect(r.settleReview(UUID, "first_stands", 1, 1, "Agreed with the first")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.settleReview(UUID, "lead_marks", 1, 1, "My own view", marks)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.acceptReview(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.sendBack(UUID, "same", "Look at 2(b) again.", "Too generous")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.sampleMarker(UUID, UUID, 5)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.setFinalMarks(UUID, marks, "Misread 1(a)")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.setFinalMarks(UUID, marks, "Misread 1(a)", UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.clearMarker(UUID, UUID, "Practice is good")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.pauseMarker(UUID, UUID, "Too many misses")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.setStandard(UUID, "practice")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.retireStandard(UUID, "No longer fair")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(11);
+    expect(state.calls.every((c) => c.join() === "corrector,teacher,admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the admin second-marking ones are refused for a corrector (a lead marker too) and touch nothing", async () => {
+    state.role = "corrector";
+    const a = await import("./admin/marking/actions");
+    await expect(a.addSecond([UUID], "A second look")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.dropSecond([UUID], "Nobody can take it")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.assignSecond([UUID], UUID, "Cover for Ann")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.takeBackSecond([UUID], "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(4);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
 });
 
 describe("attendance actions called by a student or parent", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/AppShell";
 import { FOCUS } from "@/components/marking/ToolBar";
 import { fetchPictureLinks, PICTURE_LINK_SECONDS } from "@/lib/marking-pictures";
@@ -17,16 +17,20 @@ type Problem = "refused" | "failed";
  * releasing it. It opens on `highlight` (the changed page, marked "Changed") and asks for each page's link when it is
  * shown, through the marking-pictures function: the database decides, as the signed-in user, whether they may see the
  * pages now. A page with has_picture false has no marking picture yet: it says so, and nothing is asked for it. Nothing
- * on it names the candidate; it draws nothing and changes nothing.
+ * on it names the candidate; it changes nothing, and draws nothing but the overlay it is given (3B Task 8: the lead's
+ * review lays a marker's marks over the page, read only).
  */
 export function PagesViewer({
   unitId,
   pages,
   highlight,
+  overlay,
 }: {
   unitId: string;
   pages: { n: number; page_id: string; has_picture?: boolean }[];
   highlight?: string;
+  /** 3B Task 8: drawn over the shown page's picture, exactly on it (the lead's review shows a marker's marks there). */
+  overlay?: (pageId: string) => ReactNode;
 }) {
   const [index, setIndex] = useState(() => Math.max(0, pages.findIndex((p) => p.page_id === highlight)));
   const [links, setLinks] = useState<Record<string, { url: string; at: number }>>({});
@@ -87,6 +91,20 @@ export function PagesViewer({
       <div data-testid="pages-viewer-page" className="flex h-[65vh] items-center justify-center overflow-hidden rounded border border-slate-200 bg-slate-100">
         {noPicture ? (
           <p className="p-6 text-center text-sm text-slate-700">This page has no marking picture yet.</p>
+        ) : link && !problem && overlay ? (
+          // The picture at its own shape, as large as fits, with the overlay laid exactly on it.
+          <div className="relative inline-block max-h-full max-w-full">
+            {/* eslint-disable-next-line @next/next/no-img-element -- a 120-second signed link to a private picture, not optimisable */}
+            <img
+              key={link.url}
+              src={link.url}
+              alt={`Page ${page.n}`}
+              draggable={false}
+              className="block h-auto max-h-[calc(65vh-2px)] w-auto max-w-full"
+              onError={() => setProblems((m) => ({ ...m, [page.page_id]: "failed" }))}
+            />
+            {overlay(page.page_id)}
+          </div>
         ) : link && !problem ? (
           // eslint-disable-next-line @next/next/no-img-element -- a 120-second signed link to a private picture, not optimisable
           <img

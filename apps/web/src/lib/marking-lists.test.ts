@@ -279,7 +279,19 @@ describe("parseProgress and parseUnits", () => {
       ],
     });
     expect(u![0]).toMatchObject({ unitId: "u1", indexNumber: "SE-2026-0001", markerName: "Ann Marker", how: "assigned", waiting: "picture_unchecked" });
+    expect(u![0]).toMatchObject({ checkState: null, second: null });
     expect(JSON.stringify(u)).not.toContain("Quarterfield");
+  });
+  it("3B: reads each piece's check and who has its second pass", () => {
+    const u = parseUnits({
+      ok: true,
+      units: [
+        { unit_id: "u1", script_number: "P1-0007", state: "submitted", check_state: "waiting_second", second: { marker_id: "m2", marker_name: "Bob Marker", state: "taken", how: "next" } },
+        { unit_id: "u2", script_number: "P1-0008", state: "submitted", check_state: "checked", second: { marker_id: "m2", state: "lost" } },
+      ],
+    });
+    expect(u![0]).toMatchObject({ checkState: "waiting_second", second: { markerId: "m2", markerName: "Bob Marker", state: "taken" } });
+    expect(u![1]).toMatchObject({ checkState: "checked", second: null });
   });
 });
 
