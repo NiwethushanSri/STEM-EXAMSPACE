@@ -31,6 +31,7 @@ async function call(fn: string, args: Record<string, unknown>): Promise<Record<s
 
 const codeOf = (a: Record<string, unknown>) => (typeof a.code === "string" ? a.code : null);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const isCount = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 
 /** An exam's pay rates, whole pence from 0 to 100,000 each: one with no group for an exam marked as whole scripts, one
  * per question group otherwise. Once a piece of the exam is in a fixed statement a change needs a reason (3 to 300
@@ -42,7 +43,7 @@ export async function setRates(examId: string, rates: { groupId: string | null; 
     if (!r || typeof r !== "object" || (r.groupId !== null && !isUuid(r.groupId))) return { ok: false, message: GENERIC };
     if (!Number.isSafeInteger(r.pence) || r.pence < 0 || r.pence > RATE_MAX) return { ok: false, message: paymentMessageFor("invalid_input") };
   }
-  const why = (reason ?? "").trim();
+  const why = typeof reason === "string" ? reason.trim() : "";
   const problem = reasonProblem(why, false);
   if (problem) return { ok: false, message: problem, reasonRequired: true };
   const a = await call("marker_rates_set", {
@@ -67,9 +68,9 @@ export async function fixMonth(month: string): Promise<PayActionResult> {
   revalidatePath("/admin/marking/payments");
   if (!a) return { ok: false, message: GENERIC };
   if (a.ok === true) {
-    const statements = typeof a.statements === "number" ? a.statements : 0;
-    const pieces = typeof a.pieces === "number" ? a.pieces : 0;
-    const total = typeof a.total_pence === "number" ? a.total_pence : 0;
+    const { statements, pieces, total_pence: total } = a;
+    // Figures it cannot read are not guessed: no "£0.00" for an amount it does not know.
+    if (!isCount(statements) || !isCount(pieces) || !isCount(total)) return { ok: true, message: "The statements are fixed." };
     return {
       ok: true,
       message:
@@ -87,16 +88,18 @@ export async function fixMonth(month: string): Promise<PayActionResult> {
   return { ok: false, message: paymentMessageFor(code) };
 }
 
-/** The month's statements ("2027-03") as a CSV, fixed or not. Every download is recorded first; when that fails there
- * is no CSV. */
+/** The month's statements ("2027-03") as a CSV, fixed or not. Every export is recorded (Ruling R26): the CSV is made
+ * first, then the export is recorded, and the CSV is given only when that succeeds. So no CSV leaves without its audit
+ * row, and no row is written for an export that delivered nothing. */
 export async function exportCsv(month: string): Promise<CsvResult> {
   await requireStaff(["admin", "owner"]);
   if (!isMonth(month)) return { ok: false, message: GENERIC };
-  const recorded = await call("marker_statement_exported", { p_month: `${month}-01` });
-  if (!recorded) return { ok: false, message: GENERIC };
-  if (recorded.ok !== true) return { ok: false, message: paymentMessageFor(codeOf(recorded)) };
   const got = parseStatements(await call("marker_statements_get", { p_month: `${month}-01` }));
   if (!got) return { ok: false, message: GENERIC };
   if (!got.ok) return { ok: false, message: paymentMessageFor(got.code) };
-  return { ok: true, filename: `marker-statements-${month}.csv`, csv: statementCsv(got.statements) };
+  const csv = statementCsv(got.statements);
+  const recorded = await call("marker_statement_exported", { p_month: `${month}-01` });
+  if (!recorded) return { ok: false, message: GENERIC };
+  if (recorded.ok !== true) return { ok: false, message: paymentMessageFor(codeOf(recorded)) };
+  return { ok: true, filename: `marker-statements-${month}.csv`, csv };
 }

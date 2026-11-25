@@ -38,6 +38,12 @@ describe("setRates", () => {
     expect(rpc).not.toHaveBeenCalled();
   });
 
+  it("reads a reason that is not text as no reason, without failing", async () => {
+    answer({ ok: true, changed: true });
+    expect(await setRates(EXAM, [{ groupId: null, pence: 1 }], 42 as unknown as string)).toEqual({ ok: true, message: "Pay rates saved." });
+    expect(rpc).toHaveBeenLastCalledWith("marker_rates_set", { p_exam: EXAM, p_rates: [{ group_id: null, pence: 1 }], p_reason: null });
+  });
+
   it("asks for a reason once pieces are fixed", async () => {
     answer({ ok: false, code: "reason_required" });
     expect(await setRates(EXAM, [{ groupId: null, pence: 1 }])).toEqual({
@@ -55,6 +61,19 @@ describe("fixMonth", () => {
     expect(rpc).toHaveBeenLastCalledWith("marker_statements_fix", { p_month: "2027-03-01" });
     answer({ ok: true, statements: 0, pieces: 0, total_pence: 0 });
     expect(await fixMonth("2027-03")).toEqual({ ok: true, message: "Nothing was left to fix for March 2027." });
+  });
+
+  it("says only that the statements are fixed when the figures cannot be read", async () => {
+    for (const a of [
+      { ok: true },
+      { ok: true, statements: "2", pieces: 41, total_pence: 51250 },
+      { ok: true, statements: 1, pieces: 1.5, total_pence: 100 },
+      { ok: true, statements: 1, pieces: 1, total_pence: null },
+      { ok: true, statements: 0, pieces: 0, total_pence: -1 },
+    ]) {
+      answer(a);
+      expect(await fixMonth("2027-03")).toEqual({ ok: true, message: "The statements are fixed." });
+    }
   });
 
   it("names the earlier month to fix first", async () => {
@@ -81,20 +100,37 @@ describe("fixMonth", () => {
 });
 
 describe("exportCsv", () => {
-  it("records the download first, then gives the month's CSV", async () => {
+  const month = { ok: true, month: "2027-03-01", ended: true, fixed: false, rate_missing: [], markers: [] };
+
+  it("makes the CSV first, then records the export, then gives the CSV", async () => {
+    answer(month);
     answer({ ok: true });
-    answer({ ok: true, month: "2027-03-01", ended: true, fixed: false, rate_missing: [], markers: [] });
     const r = await exportCsv("2027-03");
     expect(r).toEqual({ ok: true, filename: "marker-statements-2027-03.csv", csv: expect.stringContaining("Month,Marker,Exam") });
-    expect(rpc.mock.calls.map((c) => c[0])).toEqual(["marker_statement_exported", "marker_statements_get"]);
-    expect(rpc).toHaveBeenNthCalledWith(1, "marker_statement_exported", { p_month: "2027-03-01" });
+    expect(rpc.mock.calls).toEqual([
+      ["marker_statements_get", { p_month: "2027-03-01" }],
+      ["marker_statement_exported", { p_month: "2027-03-01" }],
+    ]);
   });
 
-  it("gives no CSV when the download cannot be recorded", async () => {
+  it("gives no CSV when the export cannot be recorded", async () => {
+    answer(month);
     answer({ ok: false, code: "forbidden" });
     expect(await exportCsv("2027-03")).toEqual({ ok: false, message: "You do not have permission to do that." });
+    answer(month);
+    rpc.mockResolvedValueOnce({ data: null, error: { message: "down" } });
+    expect(await exportCsv("2027-03")).toEqual({ ok: false, message: "Something went wrong. Please try again." });
+    expect(rpc.mock.calls.map((c) => c[0])).toEqual(["marker_statements_get", "marker_statement_exported", "marker_statements_get", "marker_statement_exported"]);
+  });
+
+  it("records nothing when the statements cannot be loaded", async () => {
     rpc.mockResolvedValueOnce({ data: null, error: { message: "down" } });
     expect((await exportCsv("2027-03")).ok).toBe(false);
-    expect(rpc.mock.calls.map((c) => c[0])).toEqual(["marker_statement_exported", "marker_statement_exported"]);
+    answer({ ok: false, code: "forbidden" });
+    expect(await exportCsv("2027-03")).toEqual({ ok: false, message: "You do not have permission to do that." });
+    // A line it cannot read makes the whole answer unreadable: no CSV of figures that do not add up.
+    answer({ ...month, markers: [{ marker_id: "m1", name: "A", fixed_at: null, pieces: 1, total_pence: 10, lines: [] }] });
+    expect((await exportCsv("2027-03")).ok).toBe(false);
+    expect(rpc.mock.calls.map((c) => c[0])).toEqual(["marker_statements_get", "marker_statements_get", "marker_statements_get"]);
   });
 });

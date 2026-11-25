@@ -9,12 +9,16 @@ import {
   parseStatements,
   penceToPounds,
   pickerMonths,
+  rateTexts,
+  ratesKey,
   readRates,
   statementCsv,
   type Statements,
 } from "./marker-pay";
 
 const HEADER = "Month,Marker,Exam,Paper,Question group,Kind,Scripts,Rate (£),Amount (£),Fixed";
+/** The UTF-8 byte-order mark, written out here so the test does not lean on the source's own. */
+const BOM = "\uFEFF";
 
 const statements: Statements = {
   month: "2027-03",
@@ -62,7 +66,28 @@ describe("money", () => {
     expect(parsePounds(" £ 7 ")).toBe(700);
     expect(parsePounds("0.05")).toBe(5);
     expect(parsePounds("1,000")).toBe(100000);
-    for (const bad of ["1.999", "1.995", "0.001", "-1", "", "   ", "£", "abc", "1e3", "12.", ".5", "1,00", "+3", "3£", "99999999999999999999"]) {
+    for (const bad of [
+      "1.999",
+      "1.995",
+      "0.001",
+      "-1",
+      "",
+      "   ",
+      "£",
+      "abc",
+      "1e3",
+      "12.",
+      ".5",
+      "1,00",
+      "+3",
+      "3£",
+      "99999999999999999999",
+      // A thousands group with a leading zero is a comma decimal (0,500 is half a pound to three places), not £500.
+      "0,500",
+      "00,100",
+      "000,999",
+      "0,050",
+    ]) {
       expect(parsePounds(bad), bad).toBeNull();
     }
   });
@@ -128,9 +153,15 @@ describe("csv", () => {
     expect(statementCsv(statements)).not.toMatch(/(^|,)"=HYPERLINK/m);
   });
 
+  it("csv_cell_starting_with_a_tab_or_carriage_return_is_neutralised", () => {
+    expect(csvCell("\t=1+1")).toBe(`"'\t=1+1"`);
+    expect(csvCell("\r=1+1")).toBe(`"'\r=1+1"`);
+    expect(csvCell("a\tb")).toBe('"a\tb"');
+  });
+
   it("csv_has_a_total_row_per_marker_and_says_not_fixed", () => {
     const csv = statementCsv(statements);
-    expect(csv.startsWith("﻿")).toBe(true);
+    expect(csv.startsWith(BOM)).toBe(true);
     expect(csv.endsWith("\r\n")).toBe(true);
     expect(csv.replace(/\r\n/g, "")).not.toMatch(/[\r\n]/);
     const rows = csv.slice(1).split("\r\n").slice(0, -1);
@@ -150,7 +181,7 @@ describe("csv", () => {
   });
 
   it("csv_of_an_empty_month_is_the_header_alone", () => {
-    expect(statementCsv({ ...statements, markers: [] })).toBe(`﻿${HEADER}\r\n`);
+    expect(statementCsv({ ...statements, markers: [] })).toBe(`${BOM}${HEADER}\r\n`);
   });
 });
 
@@ -180,7 +211,6 @@ describe("parsers", () => {
           email: "a@b.c",
           lines: [
             { exam_id: "e2", exam_title: "Physics", paper: "Paper 2", group_label: null, kind: "live", pieces: 4, rate_pence: null, pence: null, script: "S1" },
-            { exam_id: "e3", exam_title: "Odd", paper: "", group_label: null, kind: "practice", pieces: 1, rate_pence: 10, pence: 10 },
           ],
         },
       ],
@@ -210,6 +240,43 @@ describe("parsers", () => {
     expect(parseStatements({ ok: false, code: "forbidden" })).toEqual({ ok: false, code: "forbidden" });
     expect(parseStatements(null)).toBeNull();
     expect(parseStatements({ ok: true, month: "2027-03-01" })).toBeNull();
+  });
+
+  it("parse_statements_with_a_line_it_cannot_read_is_unreadable", () => {
+    const line = { exam_id: "e1", exam_title: "Maths", paper: "Paper 1", group_label: null, kind: "live", pieces: 2, rate_pence: 1250, pence: 2500 };
+    const marker = { marker_id: "m1", name: "Ann Archer", fixed_at: "2027-04-02T09:00:00Z", pieces: 3, total_pence: 3750 };
+    const answer = (m: Record<string, unknown>) => ({ ok: true, month: "2027-03-01", ended: true, fixed: true, rate_missing: [], markers: [m] });
+    const second = { ...line, kind: "second", pieces: 1, pence: 1250 };
+    // The lines add up: read.
+    expect(parseStatements(answer({ ...marker, lines: [line, second] }))?.ok).toBe(true);
+    // A line of a kind that is not paid, or with no exam: the whole answer is unreadable, not the line dropped.
+    expect(parseStatements(answer({ ...marker, lines: [line, { ...second, kind: "practice" }] }))).toBeNull();
+    expect(parseStatements(answer({ ...marker, lines: [line, { ...second, exam_id: null }] }))).toBeNull();
+    // Lines that do not add up to the marker's scripts or total.
+    expect(parseStatements(answer({ ...marker, lines: [line] }))).toBeNull();
+    expect(parseStatements(answer({ ...marker, total_pence: 3700, lines: [line, second] }))).toBeNull();
+    expect(parseStatements(answer({ ...marker, total_pence: null, lines: [line, second] }))).toBeNull();
+    // An amount that is not the rate times the scripts, or an amount with no rate.
+    expect(parseStatements(answer({ ...marker, lines: [line, { ...second, pence: 1300 }] }))).toBeNull();
+    expect(parseStatements(answer({ ...marker, total_pence: null, lines: [line, { ...second, rate_pence: null }] }))).toBeNull();
+    // A total while a line has no rate, and a fixed time that is not a time.
+    const unrated = { ...second, rate_pence: null, pence: null };
+    expect(parseStatements(answer({ ...marker, total_pence: null, lines: [line, unrated] }))?.ok).toBe(true);
+    expect(parseStatements(answer({ ...marker, total_pence: 2500, lines: [line, unrated] }))).toBeNull();
+    expect(parseStatements(answer({ ...marker, fixed_at: "soon", lines: [line, second] }))).toBeNull();
+    // A marker it cannot read.
+    expect(parseStatements(answer({ ...marker, marker_id: null, lines: [line, second] }))).toBeNull();
+  });
+
+  it("rate_boxes_are_made_from_the_stored_pence", () => {
+    expect(rateTexts([1250, null, 100000, 0])).toEqual(["£12.50", "", "£1,000.00", "£0.00"]);
+    for (const p of [0, 5, 1250, 100000]) expect(parsePounds(rateTexts([p])[0])).toBe(p);
+    const view = { mode: "by_question" as const, rates: [{ groupId: "g1", label: "A", pence: 1250 }], fixedPieces: 0 };
+    // A new stored amount makes the boxes again (they are keyed on it); the same rates keep them.
+    expect(ratesKey(view)).toBe(ratesKey({ ...view, fixedPieces: 3 }));
+    expect(ratesKey(view)).not.toBe(ratesKey({ ...view, rates: [{ groupId: "g1", label: "A", pence: 50000 }] }));
+    expect(ratesKey(view)).not.toBe(ratesKey({ ...view, rates: [{ groupId: "g1", label: "A", pence: null }] }));
+    expect(ratesKey(view)).not.toBe(ratesKey({ ...view, mode: "whole" }));
   });
 
   it("parse_rates_by_mode", () => {

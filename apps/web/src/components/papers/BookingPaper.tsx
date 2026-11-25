@@ -4,17 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { downloadPaperCopy } from "@stem/shared";
 import { clockSkewMs, downloadedLine, nextCheckMs, paperMessage, PAPER_TEXT, type BookingPaperState } from "@/lib/paper-state";
 import { createClient, functionsEndpoint } from "@/lib/supabase/client";
-
-function saveBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
+import { saveBlob } from "@/lib/download";
 
 const BUTTON =
   "rounded-lg bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60";

@@ -41,9 +41,10 @@ function poundsNumber(pence: number): string {
 }
 
 /** Pounds typed by an admin to whole pence: "12.5" -> 1250, "£3" -> 300, "1,000" -> 100000. Null for anything else: a
- * fraction of a penny ("1.999"), a sign ("-1", "+3"), an empty box, or anything that is not an amount. */
+ * fraction of a penny ("1.999"), a sign ("-1", "+3"), an empty box, thousands with a leading zero ("0,500", which is
+ * a comma decimal, not £500), or anything that is not an amount. */
 export function parsePounds(text: string): number | null {
-  const m = /^£?\s*(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?$/.exec(text.trim());
+  const m = /^£?\s*([1-9]\d{0,2}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?$/.exec(text.trim());
   if (!m) return null;
   const pence = Number(m[1].replace(/,/g, "")) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
   return Number.isSafeInteger(pence) ? pence : null;
@@ -152,6 +153,17 @@ export function parseRates(data: unknown): RatesView | null {
   };
 }
 
+/** What the rate boxes are made from: the mode, the groups and the stored pence. When it changes (a save, then the page
+ * refreshing) the boxes are made again from what is stored. */
+export function ratesKey(r: RatesView): string {
+  return `${r.mode}:${r.rates.map((x) => `${x.groupId ?? ""}=${x.pence ?? ""}`).join(",")}`;
+}
+
+/** The rate boxes' text for stored pence: "£12.50", or empty where no rate is set. */
+export function rateTexts(pence: (number | null)[]): string[] {
+  return pence.map((p) => (p === null ? "" : penceToPounds(p)));
+}
+
 /** A line of a marker's statement: one exam, question group (null: a whole script), kind and rate. ratePence and pence
  * are null while the exam has no rate. */
 export type StatementLine = {
@@ -198,12 +210,20 @@ export function parseRateMissing(v: unknown): RateMissingExam[] {
   });
 }
 
+const absent = (v: unknown) => v === null || v === undefined;
+const sum = (xs: number[]) => xs.reduce((n, x) => n + x, 0);
+
+/** One line, or null when it cannot be read: an exam, a kind that is paid and a count of scripts; with a rate, the
+ * amount is the rate times the scripts; with none, there is no amount either. */
 function parseLine(v: unknown): StatementLine | null {
   const l = obj(v);
   const examId = l ? str(l.exam_id) : null;
   const pieces = l ? count(l.pieces) : null;
   if (!l || !examId || pieces === null || !isKind(l.kind)) return null;
-  const ratePence = count(l.rate_pence);
+  const rated = !absent(l.rate_pence);
+  const ratePence = rated ? count(l.rate_pence) : null;
+  const pence = rated ? count(l.pence) : null;
+  if (rated ? ratePence === null || pence === null || pence !== ratePence * pieces : !absent(l.pence)) return null;
   return {
     examId,
     examTitle: str(l.exam_title) ?? "Removed exam",
@@ -212,42 +232,49 @@ function parseLine(v: unknown): StatementLine | null {
     kind: l.kind,
     pieces,
     ratePence,
-    pence: ratePence === null ? null : count(l.pence),
+    pence,
   };
 }
 
+/** One marker's statement, or null when it cannot be read: every line must be readable and add up to the marker's
+ * scripts and total; the total is there exactly when every line has an amount; a fixed time must be a time. */
 function parseMarker(v: unknown): MarkerStatement | null {
   const m = obj(v);
   const markerId = m ? str(m.marker_id) : null;
   if (!m || !markerId || !Array.isArray(m.lines)) return null;
-  const lines = m.lines.map(parseLine).filter((l): l is StatementLine => l !== null);
-  return {
-    markerId,
-    name: str(m.name),
-    fixedAt: time(m.fixed_at),
-    pieces: count(m.pieces) ?? lines.reduce((n, l) => n + l.pieces, 0),
-    // No total while a line has no rate, whatever the answer says.
-    totalPence: lines.some((l) => l.pence === null) ? null : count(m.total_pence),
-    lines,
-  };
+  const lines: StatementLine[] = [];
+  for (const x of m.lines) {
+    const l = parseLine(x);
+    if (!l) return null;
+    lines.push(l);
+  }
+  const pieces = count(m.pieces);
+  if (pieces === null || pieces !== sum(lines.map((l) => l.pieces))) return null;
+  const known = lines.every((l) => l.pence !== null);
+  const totalPence = known ? count(m.total_pence) : null;
+  if (known ? totalPence === null || totalPence !== sum(lines.map((l) => l.pence ?? 0)) : !absent(m.total_pence)) return null;
+  const fixedAt = time(m.fixed_at);
+  if (fixedAt === null && !absent(m.fixed_at)) return null;
+  return { markerId, name: str(m.name), fixedAt, pieces, totalPence, lines };
 }
 
-/** marker_statements_get's answer, or the code it was refused with; null for an answer it cannot read. */
+/** marker_statements_get's answer, or the code it was refused with; null for an answer it cannot read, which includes
+ * one with any marker or line it cannot read (so no figures are shown that do not add up). */
 export function parseStatements(data: unknown): { ok: true; statements: Statements } | { ok: false; code: string } | null {
   const d = obj(data);
   if (!d) return null;
   if (d.ok !== true) return { ok: false, code: typeof d.code === "string" ? d.code : "internal" };
   const month = typeof d.month === "string" ? ukMonth(d.month) : null;
   if (!month || !Array.isArray(d.markers)) return null;
+  const markers: MarkerStatement[] = [];
+  for (const x of d.markers) {
+    const m = parseMarker(x);
+    if (!m) return null;
+    markers.push(m);
+  }
   return {
     ok: true,
-    statements: {
-      month,
-      ended: d.ended === true,
-      fixed: d.fixed === true,
-      rateMissing: parseRateMissing(d.rate_missing),
-      markers: d.markers.map(parseMarker).filter((m): m is MarkerStatement => m !== null),
-    },
+    statements: { month, ended: d.ended === true, fixed: d.fixed === true, rateMissing: parseRateMissing(d.rate_missing), markers },
   };
 }
 
@@ -275,15 +302,18 @@ export function groupText(label: string | null): string {
 // The CSV.
 // ---------------------------------------------------------------------------------------------
 
-/** One CSV cell. A number as it is. A text in double quotes with its quotes doubled; a text that starts with =, +, - or
- * @ gets a leading ' first, so a spreadsheet does not read it as a formula. */
+/** One CSV cell. A number as it is. A text in double quotes with its quotes doubled; a text that starts with =, +, -, @,
+ * a tab or a carriage return gets a leading ' first, so a spreadsheet does not read it as a formula. */
 export function csvCell(value: string | number): string {
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : '""';
-  const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
 const CSV_HEADER = "Month,Marker,Exam,Paper,Question group,Kind,Scripts,Rate (£),Amount (£),Fixed";
+
+/** The UTF-8 byte-order mark, so a spreadsheet reads the £ signs right. */
+const BOM = "\uFEFF";
 
 /** A month's statements as a CSV: a UTF-8 byte-order mark, CRLF lines, the header, one row per line and one "Total" row
  * per marker. Amounts are plain pounds ("12.50"); a line with no rate says "Rate not set" and has no amount, and so has
@@ -310,5 +340,5 @@ export function statementCsv(s: Statements): string {
     }
     rows.push([month, name, "Total", "", "", "", m.pieces, "", m.totalPence === null ? "" : poundsNumber(m.totalPence), fixed]);
   }
-  return `﻿${[CSV_HEADER, ...rows.map((r) => r.map(csvCell).join(","))].join("\r\n")}\r\n`;
+  return `${BOM}${[CSV_HEADER, ...rows.map((r) => r.map(csvCell).join(","))].join("\r\n")}\r\n`;
 }

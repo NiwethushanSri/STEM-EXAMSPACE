@@ -4,21 +4,28 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ReasonDialog } from "@/components/papers/ReasonDialog";
 import { setRates, type PayActionResult } from "@/app/admin/marking/payments/actions";
-import { RATE_PROBLEM, readRates, type RatesView } from "@/lib/marker-pay";
-import { penceToInput } from "@/lib/money";
+import { RATE_PROBLEM, rateTexts, ratesKey, readRates, type RatesView } from "@/lib/marker-pay";
 
 const GENERIC = "Something went wrong. Please try again.";
 const BOX = "w-28 rounded border border-slate-300 px-2 py-1 text-sm disabled:bg-slate-50 disabled:text-slate-500";
 
 /** 3B Task 12: what markers are paid for this exam's marking, per script, or per question group for an exam marked by
  * question. Once some of its marking is in a fixed statement a change needs a reason, and fixed statements keep their
- * pay. The database checks every rule again (marker_rates_set). */
+ * pay. The database checks every rule again (marker_rates_set). The boxes show the stored amounts ("£12.50"): after a
+ * save they show what was saved, and they are made again from the stored rates whenever those change (Ruling R26). */
 export function PayRates({ examId, rates }: { examId: string; rates: RatesView | null }) {
+  // Kept here, so the notice stays when the boxes are made again from the refreshed rates.
+  const [notice, setNotice] = useState<string | null>(null);
   return (
     <div className="mt-6 border-t border-slate-100 pt-4">
       <h3 className="text-sm font-semibold text-slate-800">Marker pay</h3>
+      {notice && (
+        <div role="status" className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
+          {notice}
+        </div>
+      )}
       {rates ? (
-        <Rates key={`${rates.mode}:${rates.rates.map((r) => r.groupId).join()}`} examId={examId} saved={rates} />
+        <Rates key={ratesKey(rates)} examId={examId} saved={rates} onNotice={setNotice} />
       ) : (
         <p role="alert" className="mt-2 text-sm text-red-700">
           The pay rates could not be loaded. Refresh the page.
@@ -28,14 +35,13 @@ export function PayRates({ examId, rates }: { examId: string; rates: RatesView |
   );
 }
 
-function Rates({ examId, saved }: { examId: string; saved: RatesView }) {
+function Rates({ examId, saved, onNotice }: { examId: string; saved: RatesView; onNotice: (notice: string | null) => void }) {
   const router = useRouter();
-  const [texts, setTexts] = useState(saved.rates.map((r) => (r.pence === null ? "" : penceToInput(r.pence))));
+  const [texts, setTexts] = useState(() => rateTexts(saved.rates.map((r) => r.pence)));
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState<number[] | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
   const fixed = saved.fixedPieces > 0;
   const unset = saved.rates.some((r) => r.pence === null);
@@ -47,7 +53,9 @@ function Rates({ examId, saved }: { examId: string; saved: RatesView }) {
     setBusy(false);
     if (res.ok) {
       setAsking(null);
-      setNotice(res.message);
+      // The boxes show what was saved, as the stored amounts.
+      setTexts(rateTexts(pence));
+      onNotice(res.message);
       router.refresh();
     } else if (reason !== undefined) {
       setDialogError(res.message);
@@ -66,10 +74,13 @@ function Rates({ examId, saved }: { examId: string; saved: RatesView }) {
   function onSave(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    setNotice(null);
+    onNotice(null);
     const pence = readRates(texts);
     if (!pence) return setFormError(RATE_PROBLEM);
-    if (pence.every((p, i) => p === saved.rates[i].pence)) return setNotice("The pay rates are unchanged.");
+    if (pence.every((p, i) => p === saved.rates[i].pence)) {
+      setTexts(rateTexts(pence));
+      return onNotice("The pay rates are unchanged.");
+    }
     // Some of this exam's marking is in a fixed statement: a change needs a reason, so ask for it first.
     if (fixed) return ask(pence);
     void save(pence);
@@ -81,11 +92,6 @@ function Rates({ examId, saved }: { examId: string; saved: RatesView }) {
 
   return (
     <>
-      {notice && (
-        <div role="status" className="mt-2 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900">
-          {notice}
-        </div>
-      )}
       <form onSubmit={onSave} aria-label="Marker pay" className="mt-3 space-y-3 text-sm text-slate-700">
         {saved.mode === "whole" ? (
           <RateBox label="Pay per script" value={texts[0]} busy={busy} onChange={(v) => setTexts([v])} />
@@ -146,7 +152,6 @@ function RateBox({ label, value, busy, onChange }: { label: string; value: strin
   return (
     <label className="flex flex-wrap items-center gap-2">
       <span className="min-w-32 font-medium text-slate-800">{label}</span>
-      <span aria-hidden="true">£</span>
       <input type="text" inputMode="decimal" autoComplete="off" value={value} disabled={busy} onChange={(e) => onChange(e.target.value)} className={BOX} />
     </label>
   );

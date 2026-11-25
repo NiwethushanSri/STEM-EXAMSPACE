@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
 import { exportCsv, fixMonth, type CsvResult, type PayActionResult } from "@/app/admin/marking/payments/actions";
+import { saveBlob } from "@/lib/download";
 import {
   examName,
   fixedText,
@@ -23,17 +24,6 @@ const GENERIC = "Something went wrong. Please try again.";
 const FIELD = "rounded border border-slate-300 px-3 py-2 text-sm";
 const PRIMARY = "rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50";
 const QUIET = "rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
-
-function saveBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
-}
 
 /** The exams with no pay rate, each linked to its page (where Marker pay sets it). */
 function MissingRates({ exams }: { exams: RateMissingExam[] }) {
