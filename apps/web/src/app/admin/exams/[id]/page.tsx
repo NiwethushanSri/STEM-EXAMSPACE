@@ -82,6 +82,7 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
         examId={v.exam.id}
         view={marking.view}
         checks={marking.checks}
+        rates={marking.rates}
         groups={marking.groups}
         finishesAt={marking.finishesAt}
         homeUntil={marking.homeUntil}

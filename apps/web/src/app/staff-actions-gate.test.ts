@@ -183,6 +183,19 @@ describe("marking actions", () => {
     expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
   });
+  it("the marker pay ones are refused for a teacher and a corrector (a lead marker too) and touch nothing", async () => {
+    const p = await import("./admin/marking/payments/actions");
+    for (const role of ["teacher", "corrector"]) {
+      state.role = role;
+      await expect(p.setRates(UUID, [{ groupId: null, pence: 1250 }])).rejects.toThrow("NEXT_REDIRECT");
+      await expect(p.setRates(UUID, [{ groupId: UUID, pence: 300 }], "New rate agreed")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(p.fixMonth("2027-03")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(p.exportCsv("2027-03")).rejects.toThrow("NEXT_REDIRECT");
+    }
+    expect(state.calls).toHaveLength(8);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
   it("the admin second-marking ones are refused for a corrector (a lead marker too) and touch nothing", async () => {
     state.role = "corrector";
     const a = await import("./admin/marking/actions");

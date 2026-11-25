@@ -7,6 +7,7 @@ import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
 import { ReasonDialog } from "@/components/papers/ReasonDialog";
 import { ChecksSettings } from "@/components/marking/ChecksSettings";
+import { PayRates } from "@/components/marking/PayRates";
 import {
   closeMarkingAction,
   openMarkingAction,
@@ -15,6 +16,7 @@ import {
   type MarkingActionResult,
 } from "@/app/admin/exams/[id]/actions";
 import { markingChecks, type ChecksView, type MarkingGroup, type MarkingMode, type MarkingView } from "@/lib/exam-marking";
+import type { RatesView } from "@/lib/marker-pay";
 import { utcToLondonParts } from "@/lib/london-time";
 import { formatLondon } from "@/lib/money";
 
@@ -25,11 +27,13 @@ type Dialog = "open" | "close" | "reopen" | "deadline";
 
 /** How the exam is marked, its marking deadline, the checks on the marking, what opening waits for, and Open, Close
  * and Reopen. 3B Task 10: once marking has opened, a link to the exam's approval page ("Approve marking", or
- * "Approved"); an approved exam says so and offers no Reopen until an admin withdraws the approval. */
+ * "Approved"); an approved exam says so and offers no Reopen until an admin withdraws the approval. 3B Task 12: what
+ * markers are paid for the exam's marking (Marker pay). */
 export function ExamMarkingPanel({
   examId,
   view,
   checks,
+  rates,
   groups,
   finishesAt,
   homeUntil,
@@ -38,6 +42,8 @@ export function ExamMarkingPanel({
   view: MarkingView | null;
   /** Null when the checks could not be loaded. */
   checks: ChecksView | null;
+  /** The marker pay rates; null when they could not be loaded. */
+  rates: RatesView | null;
   groups: MarkingGroup[];
   /** When the exam finishes: the deadline must be after it. */
   finishesAt: string;
@@ -53,13 +59,14 @@ export function ExamMarkingPanel({
       </Card>
     );
   }
-  return <Panel examId={examId} view={view} checks={checks} groups={groups} finishesAt={finishesAt} homeUntil={homeUntil} />;
+  return <Panel examId={examId} view={view} checks={checks} rates={rates} groups={groups} finishesAt={finishesAt} homeUntil={homeUntil} />;
 }
 
 function Panel({
   examId,
   view,
   checks,
+  rates,
   groups,
   finishesAt,
   homeUntil,
@@ -67,6 +74,7 @@ function Panel({
   examId: string;
   view: MarkingView;
   checks: ChecksView | null;
+  rates: RatesView | null;
   groups: MarkingGroup[];
   finishesAt: string;
   homeUntil: string;
@@ -217,6 +225,8 @@ function Panel({
       </form>
 
       <ChecksSettings examId={examId} checks={checks} />
+
+      <PayRates examId={examId} rates={rates} />
 
       <div className="mt-6 border-t border-slate-100 pt-4">
         <h3 className="text-sm font-semibold text-slate-800">{opened ? "Progress" : "Before marking opens"}</h3>

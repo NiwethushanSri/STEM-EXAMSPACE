@@ -87,6 +87,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
       { href: "/admin/marking", label: "Marking" },
       { href: "/admin/marking/markers", label: "Markers" },
+      { href: "/admin/marking/payments", label: "Marker payments" },
     ],
   },
   teacher: {
@@ -123,6 +124,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
       { href: "/admin/marking", label: "Marking" },
       { href: "/admin/marking/markers", label: "Markers" },
+      { href: "/admin/marking/payments", label: "Marker payments" },
       { href: "/admin/notices", label: "Notices" },
       { href: "/admin/audit", label: "Audit log" },
     ],
