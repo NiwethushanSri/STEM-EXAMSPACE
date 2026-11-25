@@ -156,7 +156,7 @@ end $$;
 insert into public.subjects (name, kind) values ('ZZ Appr', 'school'), ('ZZ Appr Small', 'school');
 insert into c values ('admin', tests.create_user('admin', 'active')), ('corr', tests.create_user('corrector', 'active')),
   ('teacher', tests.create_user('teacher', 'active')), ('admin2', tests.create_user('admin', 'active'));
-insert into c select 'm' || i, tests.marker(pg_temp.subj('ZZ Appr')) from generate_series(1, 4) i;
+insert into c select 'm' || i, tests.marker(pg_temp.subj('ZZ Appr')) from generate_series(1, 6) i;
 insert into c values ('lead', tests.marker(pg_temp.subj('ZZ Appr'), true)), ('x1', tests.marker(pg_temp.subj('ZZ Appr Small')));
 update public.profiles set first_name = 'Agatha', last_name = 'Approver' where id = pg_temp.uid('admin');
 update public.profiles set first_name = 'Ermengarde', last_name = 'Leadbetter' where id = pg_temp.uid('lead');
@@ -352,59 +352,97 @@ insert into res values ('sb_s1', pg_temp.as('lead', format($q$ select public.mar
 insert into res values ('re_s1', pg_temp.mark('m1', pg_temp.u('s1'), array[1, 2, 2], 'f:s1'));
 insert into res values ('fs_f1', pg_temp.as('lead', format($q$ select public.marking_final_set(%L, %L::jsonb, 'Question 1 was misread.') $q$,
   pg_temp.u('f1'), jsonb_build_array(pg_temp.mk('f1', '1', 2)))));
--- Ruling R23. sb2 (second-marked): m1's 1,1,1 and m2's 3,2,5 differ; the lead sends it back to m1, who marks it again
--- 3,2,5: within tolerance, so the piece is checked and the pair compared and within. pz (second-marked): m4 marks it and
--- m2 starts its second marking; the lead pauses m4 (the lead's review of pz opens; it is dated a minute earlier, so
--- that it shows as opened first inside this one transaction); m2 then submits 3,2,5 and the lead accepts the review
--- (Ruling R15): checked, the pair never compared.
-select pg_temp.script(x, 'b', 0.01) from unnest(array['sb2', 'pz']) x;
-select pg_temp.first('sb2', 'm1', array[1, 1, 1]);
-select pg_temp.second('sb2', 'm2', array[3, 2, 5]);
+-- Rulings R23 and R24, every pair second-marked (draw 0.01), all through the real functions unless said:
+--   sb2: m1's 1,1,1 and m2's 3,2,5 differ; sent back to m1, who marks it again 3,2,5: within, checked; compared, within.
+--   so1: the same, but m1 marks it again 1,1,1: still outside, a new difference the lead settles (first marks stand);
+--        compared, outside.
+--   sa1: the same difference, sent back to another marker: m1's marking is set aside and m6 marks the piece 3,2,5:
+--        the new pair is within; compared, within.
+--   pz:  m4 marks it and m2 starts its second marking; the lead pauses m4 (the lead's review of pz opens); m2 then
+--        submits 3,2,5 and the lead accepts (Ruling R15): checked, never compared.
+--   pa:  m5 marks it and m2 starts its second marking; m5's automatic pause is set and waits for the minute job
+--        (written as postgres, as marking_after_submit sets it); m2's submit of 3,2,5 itself opens the lead's review
+--        (Ruling R24, N5); the lead accepts and the pause is then applied: checked, never compared.
+--   st1: the lead marks it, m1's second marking 1,1,1 is within: checked; the lead then makes it a seeded script, so it
+--        wants no second marking any more (Ruling R24, N7): still compared, within.
+select pg_temp.script(x, 'b', 0.01) from unnest(array['sb2', 'so1', 'sa1', 'pz', 'pa', 'st1']) x;
+select pg_temp.first(x, 'm1', array[1, 1, 1]) from unnest(array['sb2', 'so1', 'sa1']) x;
+select pg_temp.second(x, 'm2', array[3, 2, 5]) from unnest(array['sb2', 'so1', 'sa1']) x;
 insert into res values ('sb_sb2', pg_temp.as('lead', format($q$ select public.marking_send_back(%L, 'same', 'Look again at every question.',
   'The two markings are far apart.') $q$, pg_temp.u('sb2'))));
 insert into res values ('re_sb2', pg_temp.mark('m1', pg_temp.u('sb2'), array[3, 2, 5], 'f:sb2'));
+insert into res values ('sb_so1', pg_temp.as('lead', format($q$ select public.marking_send_back(%L, 'same', 'Look again at every question.',
+  'The two markings are far apart.') $q$, pg_temp.u('so1'))));
+insert into res values ('re_so1', pg_temp.mark('m1', pg_temp.u('so1'), array[1, 1, 1], 'f:so1'));
+insert into res values ('rv_so1', to_jsonb((select string_agg(r.state || ' ' || coalesce(r.outcome, '-'), ',' order by r.state desc)
+                                            from public.marking_reviews r where r.unit_id = pg_temp.u('so1'))));
+insert into res values ('st_so1', pg_temp.settle('lead', 'so1', 'first_stands', 'The first marks are right after all.'));
+insert into res values ('sb_sa1', pg_temp.as('lead', format($q$ select public.marking_send_back(%L, 'other', 'Another marker will look at it.',
+  'The two markings are far apart.') $q$, pg_temp.u('sa1'))));
+select pg_temp.first('sa1', 'm6', array[3, 2, 5]);
 select pg_temp.first('pz', 'm4', array[1, 1, 1]);
 select public.marking_unit_take(pg_temp.u('pz'), pg_temp.uid('m2'), 'next', null, now() + interval '2 hours', 'second');
 insert into res values ('open_pz', pg_temp.as('m2', format('select public.marking_unit_open(%L)', pg_temp.u('pz'))));
 insert into res values ('pause_m4', pg_temp.as('lead', format($q$ select public.marking_marker_pause(%L, %L, 'Seeded scripts missed.') $q$,
   pg_temp.k('b'), pg_temp.uid('m4'))));
-update public.marking_reviews set opened_at = now() - interval '1 minute' where unit_id = pg_temp.u('pz') and kind = 'paused_marker';
 insert into res values ('sub_pz', pg_temp.mark('m2', pg_temp.u('pz'), array[3, 2, 5], 's:pz'));
 insert into res values ('acc_pz', pg_temp.as('lead', format('select public.marking_review_accept(%L)', pg_temp.rv('pz', 'paused_marker'))));
+select pg_temp.first('pa', 'm5', array[1, 1, 1]);
+select public.marking_unit_take(pg_temp.u('pa'), pg_temp.uid('m2'), 'next', null, now() + interval '2 hours', 'second');
+insert into res values ('open_pa', pg_temp.as('m2', format('select public.marking_unit_open(%L)', pg_temp.u('pa'))));
+insert into public.exam_markers (exam_id, marker_id, paused_at) values (pg_temp.k('b'), pg_temp.uid('m5'), now());
+insert into res values ('rv_pa_before', to_jsonb((select count(*)::int from public.marking_reviews r where r.unit_id = pg_temp.u('pa'))));
+insert into res values ('sub_pa', pg_temp.mark('m2', pg_temp.u('pa'), array[3, 2, 5], 's:pa'));
+insert into res values ('acc_pa', pg_temp.as('lead', format('select public.marking_review_accept(%L)', pg_temp.rv('pa', 'paused_marker'))));
+insert into res values ('apply_m5', to_jsonb(public.marking_pause_apply(pg_temp.k('b'), pg_temp.uid('m5'))));
+select pg_temp.first('st1', 'lead', array[1, 1, 1]);
+select pg_temp.second('st1', 'm1', array[1, 1, 1]);
+insert into res values ('cs_st1_before', to_jsonb(pg_temp.cs('st1')));
+insert into res values ('seed_st1', pg_temp.as('lead', format($q$ select public.marking_standard_set(%L, 'seed') $q$, pg_temp.u('st1'))));
 insert into res values ('sample', pg_temp.as('lead', format('select public.marking_review_sample(%L, %L, 1)', pg_temp.k('b'), pg_temp.uid('m1'))));
 select is(array[pg_temp.code(pg_temp.r('st_d1')), pg_temp.code(pg_temp.r('st_d2')), pg_temp.code(pg_temp.r('st_d3')),
     pg_temp.code(pg_temp.r('st_d4')), pg_temp.code(pg_temp.r('acc_p1')), pg_temp.code(pg_temp.r('drop_w1')), pg_temp.r('drop_w1') ->> 'dropped',
     pg_temp.r('sb_s1') ->> 'to', pg_temp.code(pg_temp.r('re_s1')), pg_temp.code(pg_temp.r('fs_f1')), pg_temp.r('sample') ->> 'added',
     pg_temp.cs('d4'), pg_temp.cs('p1'), pg_temp.cs('w1'), pg_temp.cs('s1'),
     pg_temp.r('sb_sb2') ->> 'to', pg_temp.code(pg_temp.r('re_sb2')), pg_temp.code(pg_temp.r('open_pz')), pg_temp.code(pg_temp.r('pause_m4')),
-    pg_temp.code(pg_temp.r('sub_pz')), pg_temp.code(pg_temp.r('acc_pz')), pg_temp.cs('sb2'), pg_temp.cs('pz')],
+    pg_temp.code(pg_temp.r('sub_pz')), pg_temp.code(pg_temp.r('acc_pz')), pg_temp.cs('sb2'), pg_temp.cs('pz'),
+    pg_temp.r('sb_so1') ->> 'to', pg_temp.code(pg_temp.r('re_so1')), pg_temp.r('rv_so1') #>> '{}', pg_temp.code(pg_temp.r('st_so1')),
+    pg_temp.cs('so1'), pg_temp.r('sb_sa1') ->> 'to', pg_temp.cs('sa1'),
+    pg_temp.code(pg_temp.r('open_pa')), pg_temp.r('rv_pa_before') #>> '{}', pg_temp.code(pg_temp.r('sub_pa')), pg_temp.code(pg_temp.r('acc_pa')),
+    pg_temp.cs('pa'), pg_temp.r('cs_st1_before') #>> '{}', pg_temp.code(pg_temp.r('seed_st1')), pg_temp.cs('st1'),
+    (select coalesce(u.second_wanted::text, '-') from public.marking_units u where u.id = pg_temp.u('st1'))],
   array['ok', 'ok', 'ok', 'ok', 'ok', 'ok', '1', 'same', 'ok', 'ok', '1', 'checked', 'checked', 'checked', 'checked',
-    'same', 'ok', 'ok', 'ok', 'ok', 'ok', 'checked', 'checked'],
-  'the lead settles, accepts, sends back and changes a final mark, an admin releases w1, and the lead samples one script; sb2 is sent back and marked again, pz accepted after m4''s pause');
+    'same', 'ok', 'ok', 'ok', 'ok', 'ok', 'checked', 'checked',
+    'same', 'ok', 'open -,closed sent_back', 'ok', 'checked', 'other', 'checked',
+    'ok', '0', 'ok', 'ok', 'checked', 'checked', 'ok', 'checked', 'false'],
+  'the lead settles, accepts, sends back and changes a final mark, an admin releases w1, and the lead samples one script; sb2 and so1 are sent back and marked again (so1 still differs: a new difference, settled), sa1 is sent to m6, pz and pa are accepted after a pause (pa''s review opened in m2''s own submit), st1 is made a seeded script');
 
 -- ---------------------------------------------------------------------------------------------
 -- figures_count_settles_by_outcome_and_by_a_party
 -- ---------------------------------------------------------------------------------------------
 insert into res values ('b2', pg_temp.get('admin', 'b'));
 select is(pg_temp.r('b2') -> 'figures',
-  '{"pieces": 13, "second_marked": 6, "within_tolerance": 2, "settled": {"first_stands": 2, "second_stands": 1, "lead_marks": 1},
-    "settled_by_a_party": 1, "accepted_after_pause": 2, "sent_back": 2, "final_marks_changed": 1, "standards": {"practice": 1, "seed": 1},
+  '{"pieces": 17, "second_marked": 9, "within_tolerance": 4, "settled": {"first_stands": 3, "second_stands": 1, "lead_marks": 1},
+    "settled_by_a_party": 1, "accepted_after_pause": 3, "sent_back": 4, "final_marks_changed": 1, "standards": {"practice": 1, "seed": 2},
     "seed_attempts": 2, "seed_outside": 1, "sample_reviews_open": 1}'::jsonb,
-  'figures_count_settles_by_outcome_and_by_a_party: 6 second-marked (compared), 2 within (k1, and sb2 marked again after a send-back); pz''s pair was never compared; differences settled 2 first, 1 second, 1 the lead''s own (f1''s final mark change is not a settle), 1 by a lead who was a marker; p1 and pz accepted after a pause; s1 and sb2 sent back; f1''s final mark changed; one seeded and one practice script, two attempts submitted, one outside');
+  'figures_count_settles_by_outcome_and_by_a_party: 9 second-marked (compared: d1 to d4, k1, sb2, so1, sa1, st1), 4 within (k1, sb2, sa1, st1); pz''s and pa''s pairs were never compared; differences settled 3 first (so1''s too), 1 second, 1 the lead''s own (f1''s final mark change is not a settle), 1 by a lead who was a marker; p1, pz and pa accepted after a pause; s1, sb2, so1 and sa1 sent back; f1''s final mark changed; two seeded and one practice script, two attempts submitted, one outside');
 -- ---------------------------------------------------------------------------------------------
--- a_pair_sent_back_and_marked_again_within_counts_as_within_on_both_screens (Ruling R23), and the paused piece's pair
--- counts in neither (N2): the marker statistics count the same pairs alike.
+-- a_pair_sent_back_and_marked_again_within_counts_as_within_on_both_screens (Ruling R23), and the other paths (Ruling
+-- R24): marked again outside, sent to another marker, a paused piece's pair in neither (N2, N5), a piece made a seeded
+-- script after its pair was compared (N7). The marker statistics count the same pairs alike.
 -- ---------------------------------------------------------------------------------------------
 insert into res values ('stats_b', pg_temp.as('admin', format('select public.marking_stats(%L)', pg_temp.k('b'))));
 create function pg_temp.sec(p_marker text) returns text language sql stable as $$
   select coalesce((x #>> '{second,compared}') || '/' || (x #>> '{second,within}'), '-')
   from jsonb_array_elements(pg_temp.r('stats_b') -> 'markers') x where x ->> 'marker_id' = pg_temp.uid(p_marker)::text $$;
-select is(array[pg_temp.code(pg_temp.r('stats_b')), pg_temp.sec('m1'), pg_temp.sec('m2'), pg_temp.sec('m4'), pg_temp.sec('lead'),
-    (select string_agg(p.within::text, ',') from public.marking_second_pairs(pg_temp.k('b')) p where p.unit_id = pg_temp.u('sb2')),
-    (select string_agg(p.compared::text || '/' || p.within::text, ',') from public.marking_second_pairs(pg_temp.k('b')) p
-     where p.unit_id = pg_temp.u('pz'))],
-  array['ok', '6/2', '5/2', '0/0', '1/0', 'true', 'false/false'],
-  'a_pair_sent_back_and_marked_again_within_counts_as_within_on_both_screens: m1 (first of d1 to d3, k1, sb2; second of d4) 6 compared, 2 within; m2 (second of d1 to d3, k1, sb2; pz not compared) 5 and 2; m4 (pz) none; the lead (d4) 1 and 0');
+create function pg_temp.pair(p text) returns text language sql stable as $$
+  select coalesce(string_agg(x.compared::text || '/' || x.within::text, ','), '-')
+  from public.marking_second_pairs(pg_temp.k('b')) x where x.unit_id = pg_temp.u(p) $$;
+select is(array[pg_temp.code(pg_temp.r('stats_b')), pg_temp.sec('m1'), pg_temp.sec('m2'), pg_temp.sec('m4'), pg_temp.sec('m5'), pg_temp.sec('m6'),
+    pg_temp.sec('lead'), pg_temp.pair('sb2'), pg_temp.pair('so1'), pg_temp.pair('sa1'), pg_temp.pair('pz'), pg_temp.pair('pa'),
+    pg_temp.pair('st1')],
+  array['ok', '8/3', '7/3', '0/0', '0/0', '1/1', '2/1', 'true/true', 'true/false', 'true/true', 'false/false', 'false/false', 'true/true'],
+  'a_pair_sent_back_and_marked_again_within_counts_as_within_on_both_screens (sb2); marked again outside, it is outside through its new difference (so1); sent to another marker, the new pair is judged (sa1); a paused piece accepted with a second marking never compared counts in neither, also when the second marking''s own submit opened the review (pz, pa: Ruling R24); a pair compared within stays so when its piece is made a seeded script (st1). The statistics agree: m1 8 compared and 3 within; m2 7 and 3; m4 and m5 none; m6 1 and 1; the lead 2 and 1');
 select is(array[pg_temp.r('b2') -> 'checks', to_jsonb(pg_temp.r('b2') ->> 'lead_name'), pg_temp.r('b2') -> 'approved_at', pg_temp.r('b2') -> 'approved_by_name'],
   array['{"double_marking": true, "sample_percent": 10, "tolerance_percent": 10, "seeds": true, "seed_every": 50, "practice": false, "off": null}'::jsonb,
     '"Ermengarde Leadbetter"'::jsonb, 'null'::jsonb, 'null'::jsonb],
@@ -419,7 +457,7 @@ select is(array[pg_temp.keys(pg_temp.r('b2')), pg_temp.keys(pg_temp.r('b2') -> '
 -- ---------------------------------------------------------------------------------------------
 select is(array[pg_temp.blocks(pg_temp.r('b2')), pg_temp.r('b2') ->> 'can_approve', pg_temp.r('b2') ->> 'stale', pg_temp.r('b2') #>> '{scripts,checked}',
     (select count(*)::text from public.marking_reviews r where r.exam_id = pg_temp.k('b') and r.kind = 'sample' and r.state = 'open')],
-  array['', 'true', 'false', '13', '1'],
+  array['', 'true', 'false', '17', '1'],
   'open_sample_review_does_not_block: with every script checked and one routine sample open, nothing blocks');
 
 -- ---------------------------------------------------------------------------------------------
@@ -476,7 +514,7 @@ select is(array[pg_temp.cs('k1'), pg_temp.st('k1'), pg_temp.cs('d1'), pg_temp.cs
     (select count(*) filter (where st.retired_at is null)::text from public.marking_standards st where st.exam_id = pg_temp.k('b')),
     (select count(*)::text from public.marking_reviews r where r.exam_id = pg_temp.k('b') and r.kind = 'sample' and r.state = 'open'),
     (select (m.closed_at is not null)::text from public.exam_marking m where m.exam_id = pg_temp.k('b'))],
-  array['checked', 'checked', 'checked', 'checked', '2', '3 -', '10', '2', '2', '1', 'true'],
+  array['checked', 'checked', 'checked', 'checked', '2', '3 -', '10', '3', '3', '1', 'true'],
   'and nothing changed: the pieces stay checked, f1''s final mark, the questions, the checks, the pause, the standards and the sample are as they were');
 
 -- ---------------------------------------------------------------------------------------------

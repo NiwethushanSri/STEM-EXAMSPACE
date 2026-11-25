@@ -32,10 +32,11 @@
 -- What the checks found (figures), on the same scripts:
 --   pieces; second_marked and within_tolerance: the second-marked pairs the check compared, and those of them within
 --     tolerance, as it recorded them (Ruling R23: marking_second_pairs, which the marker statistics use too): a pair
---     sent back and marked again within tolerance is within; a paused marker's piece accepted with a second marking
---     submitted while the lead was looking (Ruling R15) was never compared and counts in neither; a later tolerance
---     change moves neither (as R20 for seeds). Nothing is compared again here (marking_compare per pair was too slow
---     at 1,500 pairs);
+--     sent back and marked again is compared again (within, or outside through its new difference); a paused marker's
+--     piece accepted with a second marking submitted while the lead was looking, or whose submit itself opened the
+--     lead's review (an automatic pause not applied yet, Ruling R24), was never compared (Ruling R15) and counts in
+--     neither; a later tolerance change moves neither (as R20 for seeds). Nothing is compared again here
+--     (marking_compare per pair was too slow at 1,500 pairs);
 --   settled: difference reviews closed as first_stands, second_stands or lead_marks (a lead's change of a final mark is
 --     recorded as a closed sample review with outcome lead_marks, 20261123000007, and is not a settle);
 --   settled_by_a_party: those settled by one of the piece's two markers (the party flag of the lead's list);
@@ -181,13 +182,20 @@ $$;
 --     after both current submissions, as the check bounds a settle (a submission made again is compared again). A
 --     withdrawn one, or one closed when the piece was sent back, does not: a sent-back first marking submitted again is
 --     compared again, and a new review is opened if it still differs.
---   compared: outside, or the check found the pair within tolerance: the piece is checked and wanted a second marking,
---     with no paused marker's review of the first marking's current submission. When there is one (rule 4, open or
---     accepted), the pair was compared only if the second marking was submitted before that review was opened; one
---     submitted while the lead was looking (Ruling R15: accepted without a comparison) is compared in neither sense.
+--   compared: outside, or the check found the pair within tolerance: the piece is checked, with no paused marker's
+--     review of the first marking's current submission (a piece later made a practice or seeded script, which then
+--     wants no second marking, stays compared: Ruling R24). When there is one (rule 4, open or accepted), the pair was
+--     compared only if both its submissions came strictly before that review was opened (Ruling R24): a second
+--     marking submitted while the lead was looking, or one whose own submit opened the review because the first
+--     marker's automatic pause was still waiting for the minute job (both in one transaction, so at one time), was
+--     never compared (Ruling R15: accepted without a comparison) and is compared in neither sense.
 --   within: compared and not outside.
 -- So the figure is the check's judgement with the tolerance of its time: a later tolerance change does not move it (as
 -- Ruling R20 for seeds). Totals are given for the gap.
+-- A known limit (Ruling R24, N6): the times compared are now(), a transaction's start. A pause (by hand, or the minute
+-- job's) that began before a concurrent second marking's submit committed, and that waited for the script's lock,
+-- opens its review dated before that submission, though the check had compared the pair by then: such a pair is
+-- counted in neither. It needs the two calls to overlap on the same piece, and is rare.
 -- ---------------------------------------------------------------------------------------------
 create function public.marking_second_pairs(p_exam uuid)
 returns table (unit_id uuid, first_id uuid, first_marker_id uuid, first_total numeric, second_id uuid, second_marker_id uuid,
@@ -198,7 +206,7 @@ security definer
 set search_path = ''
 as $$
   with p as materialized (
-    select u.id as unit_id, u.check_state, u.second_wanted,
+    select u.id as unit_id, u.check_state,
       f.id as first_id, f.marker_id as first_marker_id, f.total as first_total, f.submitted_at as first_at,
       k.id as second_id, k.marker_id as second_marker_id, k.total as second_total, k.submitted_at as second_at
     from public.marking_units u
@@ -223,8 +231,8 @@ as $$
     o.outside or c.found_within, not o.outside and c.found_within
   from o
   cross join lateral (
-    select case when o.paused_at is not null then o.second_at <= o.paused_at
-                else o.check_state = 'checked' and coalesce(o.second_wanted, false) end as found_within
+    select case when o.paused_at is not null then greatest(o.first_at, o.second_at) < o.paused_at
+                else o.check_state = 'checked' end as found_within
   ) c
 $$;
 
