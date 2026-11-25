@@ -2109,6 +2109,9 @@ isOneToOne: false
 "marking_holds_expire":
 { Args: { "p_now": string }; Returns: number
                            },
+"marking_is_lead":
+{ Args: Record<PropertyKey, never>; Returns: boolean
+                           },
 "marking_lead_marks_refusal":
 { Args: { "p_every": boolean,"p_marks": Json,"p_unit": string }; Returns: Json
                            },

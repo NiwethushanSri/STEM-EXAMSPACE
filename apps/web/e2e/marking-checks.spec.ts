@@ -13,8 +13,11 @@ import {
   pauseMarker,
   pieceOf,
   removeMarkingExam,
+  sampleAs,
   seedCheckedExam,
+  sendBackAs,
   setUntilSeed,
+  settleAs,
   standardsOf,
   type Login,
   type SeededStudent,
@@ -25,7 +28,9 @@ import {
 // any other until it is marked outside tolerance (Review Focus 1) and is then locked, a second marker who sees nothing
 // of the first marking, and a paused marker. Each test has an exam of its own (seedCheckedExam: the lead marker's own
 // marking makes the practice and seeded scripts), except that the locked seed is the one the test before missed; every
-// row and file is removed afterwards.
+// row and file is removed afterwards. Task 13 adds what Tasks 6 and 8 left for a browser: a script the lead marker sent
+// back says so on the marker's list and screen, a change to a script the lead settled is refused and never "Saved", and a
+// first look at the lead's review pages and the admin's check column.
 // Needs the Edge Functions served locally (supabase functions serve --env-file supabase/functions/.env.test.local): the
 // screen's picture links come from marking-pictures. npm run e2e:local starts them when they are not served already.
 
@@ -59,6 +64,8 @@ const SEED_HEADING = "This was a check script. Your marks were outside the toler
 const PRACTICE_WAIT = "Your practice scripts are with the lead marker.";
 const PAUSED = "Your marking on this exam is paused. The lead marker will be in touch.";
 const LOCKED = "This script can no longer be changed.";
+const SETTLED = "The lead marker has settled this script. Ask them if a mark should change.";
+const SENT_BACK_NOTE = "Look at question 3 again: the units are missing.";
 const PIECE = /^\/marking\/[0-9a-f-]{36}$/;
 const COMPUTER = { width: 1440, height: 900 };
 const IPAD = { width: 820, height: 1180 };
@@ -330,6 +337,91 @@ test.describe("on a computer", () => {
     await expect(page.getByText(SUBMITTED)).toBeVisible();
     await expect(page.getByTestId("question-3-mark")).toHaveText("1");
     await saved(page);
+  });
+
+  test("sent_back_script_says_so_on_the_list_and_on_the_screen", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { examId, lead, markers, students } = await checkedExam({ scripts: 1, checks: {} });
+    const marker = markers[0];
+    const unitId = await nextAs(marker, examId);
+    await markAs(marker, unitId, [...LEAD_MARKS]);
+    expect(await checkStateOf(unitId)).toBe("checked");
+    // The lead's routine sample takes it, and they send it back to the same marker with a note.
+    expect(await sampleAs(lead, examId, marker.id)).toBe(1);
+    await sendBackAs(lead, unitId, SENT_BACK_NOTE);
+
+    await signIn(page, marker);
+    await page.goto("/marking");
+    const { scriptNumber } = await pieceOf(unitId);
+    const row = page.getByTestId("marking-piece").filter({ hasText: `Script ${scriptNumber}` });
+    await expect(row).toContainText("Sent back by the lead marker.");
+    await noSidewaysScroll(page, "the marker home with a script sent back", COMPUTER);
+    await noNames(page, students);
+    await row.getByRole("link", { name: `Open script ${scriptNumber}` }).click();
+    await page.waitForURL((u) => u.pathname.endsWith(unitId));
+    await expect(page.getByTestId("page-surface")).toBeVisible();
+    await expect(page.getByTestId("sent-back-note")).toHaveText(`The lead marker sent this back: ${SENT_BACK_NOTE}`);
+    await expect(page.getByText(SUBMITTED)).toHaveCount(0);
+    await noSidewaysScroll(page, "the screen of a script sent back", COMPUTER);
+    await noNames(page, students);
+  });
+
+  test("settled_script_refuses_a_change_and_never_says_saved", async ({ page }) => {
+    test.setTimeout(240_000);
+    const { examId, lead, markers, admin, students } = await checkedExam({ scripts: 1, checks: { double_marking: true, sample_percent: 100 }, markers: 2 });
+    const [first, second] = markers;
+    const unitId = await nextAs(first, examId);
+    await markAs(first, unitId, [5, 4, 15]);
+    expect(await nextAs(second, examId)).toBe(unitId);
+    await markAs(second, unitId, [...LEAD_MARKS]);
+    expect(await checkStateOf(unitId)).toBe("to_lead");
+    const { scriptNumber } = await pieceOf(unitId);
+
+    // A first look at the lead's review pages: the list of marks that differ, and the review screen.
+    await signIn(page, lead);
+    await page.goto(`/marking/review?tab=difference&exam=${examId}`);
+    await expect(page.getByRole("link", { name: "Marks that differ (1)" })).toBeVisible();
+    await noNames(page, students);
+    await noSidewaysScroll(page, "the review page", COMPUTER);
+    await page.getByRole("link", { name: `Open script ${scriptNumber}` }).click();
+    await page.waitForURL(/\/marking\/review\/[0-9a-f-]{36}/);
+    await expect(page.getByTestId("review-row")).toHaveCount(3);
+    await expect(page.getByTestId("review-first-total")).toHaveText("24");
+    await expect(page.getByTestId("review-second-total")).toHaveText("15");
+    await expect(page.getByRole("button", { name: "First marks stand", exact: true })).toBeEnabled();
+    await noNames(page, students);
+    await noSidewaysScroll(page, "the review screen", COMPUTER);
+
+    // The lead settles it (through the function, as the screen does): it is checked, and the admin's list says so.
+    await settleAs(lead, unitId, "first_stands");
+    expect(await checkStateOf(unitId)).toBe("checked");
+    await page.context().clearCookies();
+    await signIn(page, admin);
+    await page.goto(`/admin/marking?exam=${examId}`);
+    await expect(page.getByTestId("marking-unit").filter({ hasText: scriptNumber })).toContainText("Checked");
+    await noNames(page, students);
+
+    // The first marker changes a mark: refused in plain words, never "Saved" (Ruling R12); the mark goes back.
+    await page.context().clearCookies();
+    await signIn(page, first);
+    await page.goto(`/marking/${unitId}`);
+    await expect(page.getByTestId("page-surface")).toBeVisible();
+    await expect(page.getByText(SUBMITTED)).toBeVisible();
+    await expect(page.getByTestId("question-3-mark")).toHaveText("15");
+    await page.getByTestId("question-3").click();
+    await page.getByRole("button", { name: "9 marks", exact: true }).click();
+    await expect(page.getByRole("alert").filter({ hasText: SETTLED })).toBeVisible();
+    await expect(page.getByTestId("save-status")).toHaveText(SETTLED);
+    await expect(page.getByText(SUBMITTED)).toHaveCount(0);
+    await expect(page.getByTestId("question-3-mark")).toHaveText("15");
+    await expect(page.getByTestId("running-total")).toHaveText("24 / 24");
+
+    // Opened again, it shows the saved marks only.
+    await page.reload();
+    await expect(page.getByTestId("page-surface")).toBeVisible();
+    await expect(page.getByTestId("question-3-mark")).toHaveText("15");
+    await saved(page);
+    await noNames(page, students);
   });
 
   test("paused_marker_is_told_and_stopped", async ({ page }) => {

@@ -198,9 +198,9 @@ insert into res values ('d2', public.marking_dashboard()), ('checks', public.scr
 select tests.as_postgres();
 
 select is(array[pg_temp.more('d2', 'base', 'alerts_open'), (pg_temp.r('d2') -> 'totals' ->> 'alerts_open')::int],
-  array[2, (select count(*)::int from public.marking_alerts a join public.exams e on e.id = a.exam_id
+  array[2, (select count(distinct a.script_id)::int from public.marking_alerts a join public.exams e on e.id = a.exam_id
             join public.scripts s on s.id = a.script_id where a.state = 'open')],
-  'alerts_open counts every open marking alert (2 more here; the closed one is not counted)');
+  'alerts_open counts the scripts with an open marking alert (2 more here; the closed one is not counted; 3B Task 13: a script with two counts once, 063)');
 select is(pg_temp.more('d2', 'base', 'pictures_to_check'), 1, 'pictures_to_check counts the marking picture staff must check');
 select is((pg_temp.r('d2') -> 'totals' ->> 'pictures_to_check')::int, jsonb_array_length(pg_temp.r('checks') -> 'items'),
   'it is what the list of marking pictures to check shows');

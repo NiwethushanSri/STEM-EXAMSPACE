@@ -253,6 +253,21 @@ describe("parseProgress and parseUnits", () => {
     });
     expect(parseProgress({ ok: false, code: "forbidden" })).toBeNull();
   });
+  it("reads each exam's checks (3B), none when they are missing", () => {
+    const exam = { exam_id: "e1", title: "Physics mock", scripts: { marked: 14, checked: 12 } };
+    const p = parseProgress({
+      ok: true,
+      exams: [
+        { ...exam, checks: { waiting_second: 2, with_lead: 3, stuck_second: 1, paused_markers: 1, approved_at: "2026-12-20T10:00:00Z" } },
+        { ...exam, exam_id: "e2" },
+      ],
+    });
+    expect(p![0]).toMatchObject({
+      scripts: { marked: 14, checked: 12 },
+      checks: { waitingSecond: 2, withLead: 3, stuckSecond: 1, pausedMarkers: 1, approvedAt: "2026-12-20T10:00:00Z" },
+    });
+    expect(p![1].checks).toEqual({ waitingSecond: 0, withLead: 0, stuckSecond: 0, pausedMarkers: 0, approvedAt: null });
+  });
   it("reads each piece of an exam, with the index number and no candidate name", () => {
     const u = parseUnits({
       ok: true,

@@ -771,8 +771,8 @@ select tests.as_user(pg_temp.uid('admin'));
 insert into res values ('pg', public.marking_progress(pg_temp.k('ep')));
 select tests.as_postgres();
 select is(jsonb_array_length(pg_temp.r('pg') -> 'exams'), 1, 'one exam, as asked');
-select is(pg_temp.r('pg') -> 'exams' -> 0 -> 'scripts', '{"waiting": 1, "ready_to_mark": 2, "marking": 1, "marked": 1}'::jsonb,
-  'scripts: 1 waiting (late, not decided), 2 ready, 1 being marked, 1 marked');
+select is(pg_temp.r('pg') -> 'exams' -> 0 -> 'scripts', '{"waiting": 1, "ready_to_mark": 2, "marking": 1, "marked": 1, "checked": 0}'::jsonb,
+  'scripts: 1 waiting (late, not decided), 2 ready, 1 being marked, 1 marked (3B Task 13: and none checked)');
 select is(pg_temp.r('pg') -> 'exams' -> 0 -> 'units', '{"open": 1, "taken": 1, "submitted": 1, "on_hold": 1}'::jsonb,
   'pieces: 1 open, 1 taken, 1 submitted, 1 on hold');
 select is(pg_temp.r('pg') -> 'exams' -> 0 -> 'markers',

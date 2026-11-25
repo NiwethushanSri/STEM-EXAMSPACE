@@ -21,9 +21,10 @@ function status(e: ProgressExam): { text: string; tone: "slate" | "green" | "blu
   return { text: "Not open yet", tone: "blue" };
 }
 
-/** What is left per exam and per marker: the scripts waiting, ready to mark, being marked and marked; each marker's
- * scripts taken and submitted; the alerts open. No candidate name. `scriptsLink` links each exam to its list of
- * scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
+/** What is left per exam and per marker: the scripts waiting, ready to mark, being marked and marked; once marking has
+ * opened, the checks (3B): "12 checked · 3 with the lead marker · 2 waiting for a second marker", leaving out what is
+ * 0; each marker's scripts taken and submitted; the alerts open. No candidate name. `scriptsLink` links each exam to
+ * its list of scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
  * changed pictures can be released even when the alerts list cannot be loaded. `reviewLink` (3B) links each exam whose
  * marking has opened to the lead marker's review of it, and `statsLink` to its marker statistics on the admin pages.
  * `approved` (3B Task 10), when given, links each exam whose marking has opened to its approval page on the admin pages:
@@ -79,6 +80,17 @@ export function MarkingProgress({
                 </div>
               ))}
             </dl>
+            {e.openedAt && (
+              <p className="text-sm text-slate-700" data-testid="progress-checks">
+                {[
+                  `${e.scripts.checked} checked`,
+                  e.checks.withLead > 0 ? `${e.checks.withLead} with the lead marker` : null,
+                  e.checks.waitingSecond > 0 ? `${e.checks.waitingSecond} waiting for a second marker` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            )}
             {(e.units.onHold > 0 || e.alertsOpen > 0) && (
               <p className="text-sm text-amber-900">
                 {[

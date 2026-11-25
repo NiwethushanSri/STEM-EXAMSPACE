@@ -226,9 +226,12 @@ export type ProgressExam = {
   overdue: boolean;
   openedAt: string | null;
   closedAt: string | null;
-  /** waiting: verified, not yet ready to mark. */
-  scripts: { waiting: number; readyToMark: number; marking: number; marked: number };
+  /** waiting: verified, not yet ready to mark; marked: marked or checked; checked (3B): checked. */
+  scripts: { waiting: number; readyToMark: number; marking: number; marked: number; checked: number };
   units: { open: number; taken: number; submitted: number; onHold: number };
+  /** 3B: pieces waiting for a second marker, with the lead marker, and waiting for one whom nobody can be; markers
+   * paused on the exam; when its marking was approved. */
+  checks: { waitingSecond: number; withLead: number; stuckSecond: number; pausedMarkers: number; approvedAt: string | null };
   markers: ProgressMarker[];
   alertsOpen: number;
 };
@@ -243,6 +246,7 @@ export function parseProgress(data: unknown): ProgressExam[] | null {
     if (!examId) continue;
     const s = obj(e.scripts) ?? {};
     const u = obj(e.units) ?? {};
+    const c = obj(e.checks) ?? {};
     out.push({
       examId,
       title: str(e.title) ?? "",
@@ -253,8 +257,15 @@ export function parseProgress(data: unknown): ProgressExam[] | null {
       overdue: e.overdue === true,
       openedAt: time(e.opened_at),
       closedAt: time(e.closed_at),
-      scripts: { waiting: num(s.waiting), readyToMark: num(s.ready_to_mark), marking: num(s.marking), marked: num(s.marked) },
+      scripts: { waiting: num(s.waiting), readyToMark: num(s.ready_to_mark), marking: num(s.marking), marked: num(s.marked), checked: num(s.checked) },
       units: { open: num(u.open), taken: num(u.taken), submitted: num(u.submitted), onHold: num(u.on_hold) },
+      checks: {
+        waitingSecond: num(c.waiting_second),
+        withLead: num(c.with_lead),
+        stuckSecond: num(c.stuck_second),
+        pausedMarkers: num(c.paused_markers),
+        approvedAt: time(c.approved_at),
+      },
       markers: list(e.markers).flatMap((m) => {
         const markerId = str(m.marker_id);
         return markerId

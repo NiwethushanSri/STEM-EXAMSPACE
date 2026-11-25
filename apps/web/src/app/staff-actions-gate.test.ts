@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // A signed-in teacher (or anyone outside the allowed roles) calling a staff server action directly must be
@@ -219,5 +221,13 @@ describe("attendance actions called by a student or parent", () => {
     expect(state.calls).toHaveLength(3);
     expect(state.calls.every((c) => c.join() === "admin,owner,teacher")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("the examiner demonstration pages (3B Task 13)", () => {
+  it("are gone, and so is their route rule: /examiner is no staff area any more", async () => {
+    expect(existsSync(fileURLToPath(new URL("./examiner", import.meta.url)))).toBe(false);
+    const { config } = await import("@/proxy");
+    expect(config.matcher.some((m) => m.startsWith("/examiner"))).toBe(false);
   });
 });

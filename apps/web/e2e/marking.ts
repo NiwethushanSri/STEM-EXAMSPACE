@@ -172,10 +172,12 @@ export async function seedMarkingExam(opts: { scripts: number; mode?: "whole" | 
   return { examId: s.examId, title: s.title, marker: s.markers[0], markers: s.markers, admin: s.admin, students: s.students };
 }
 
-/** seedMarkingExam, with the checks given and, with `lead`, an approved lead marker of the subject (`Lead`). */
-async function seedMarking(opts: { scripts: number; mode: "whole" | "by_question"; markers: number; checks: Checks; lead: boolean }): Promise<{
+/** seedMarkingExam, with the checks given and, with `lead`, an approved lead marker of the subject (`Lead`). With
+ * `open: false` (3B Task 13) marking is left for the admin to open in the browser. */
+async function seedMarking(opts: { scripts: number; mode: "whole" | "by_question"; markers: number; checks: Checks; lead: boolean; open?: boolean }): Promise<{
   examId: string;
   title: string;
+  subject: string;
   markers: Login[];
   lead: Login | null;
   admin: Login;
@@ -260,15 +262,102 @@ async function seedMarking(opts: { scripts: number; mode: "whole" | "by_question
   );
 
   // The admin opens marking, as on the exam's marking panel.
-  await asUser(admin, async (client) => {
-    const settings = await client.rpc("marking_settings_set", { p_exam: exam.examId, p_mode: mode, p_deadline: null });
-    if (settings.error || settings.data?.ok !== true) throw new Error(`marking settings failed: ${settings.error?.message ?? JSON.stringify(settings.data)}`);
-    const opened = await client.rpc("marking_open", { p_exam: exam.examId });
-    if (opened.error || opened.data?.ok !== true || opened.data?.ready !== opts.scripts) {
-      throw new Error(`marking open failed: ${opened.error?.message ?? JSON.stringify(opened.data)}`);
-    }
+  if (opts.open !== false) {
+    await asUser(admin, async (client) => {
+      const settings = await client.rpc("marking_settings_set", { p_exam: exam.examId, p_mode: mode, p_deadline: null });
+      if (settings.error || settings.data?.ok !== true) throw new Error(`marking settings failed: ${settings.error?.message ?? JSON.stringify(settings.data)}`);
+      const opened = await client.rpc("marking_open", { p_exam: exam.examId });
+      if (opened.error || opened.data?.ok !== true || opened.data?.ready !== opts.scripts) {
+        throw new Error(`marking open failed: ${opened.error?.message ?? JSON.stringify(opened.data)}`);
+      }
+    });
+  }
+  const subject = must(await svc().from("subjects").select("name").eq("id", exam.subjectId).single(), "subject read").name as string;
+  return { examId: exam.examId, title: exam.title, subject, markers, lead, admin, students };
+}
+
+/**
+ * For the staff browser test of the checks (3B Task 13): an exam marked as whole scripts with the structure above, an
+ * admin, two approved correctors (`markers`: "Marker Tester" and "Marker2 Tester"), an approved lead marker ("Lead
+ * Tester") and `scripts` verified home scripts of candidates with names and index numbers. Its checks are written as
+ * given (double marking, seeded scripts; practice off, so the markers need no clearing), and marking is left for the
+ * admin to open: the exam's pieces are made when it opens (unitsOf).
+ */
+export async function seedChecksExam(opts: { scripts: number; checks: Checks }): Promise<{
+  examId: string;
+  title: string;
+  subject: string;
+  admin: Login;
+  markers: Login[];
+  lead: Login;
+  students: SeededStudent[];
+}> {
+  const s = await seedMarking({ scripts: opts.scripts, mode: "whole", markers: 2, checks: opts.checks, lead: true, open: false });
+  return { examId: s.examId, title: s.title, subject: s.subject, admin: s.admin, markers: s.markers, lead: s.lead!, students: s.students };
+}
+
+/** An exam's pieces in script order, with their script numbers. */
+export async function unitsOf(examId: string): Promise<{ unitId: string; scriptNumber: string }[]> {
+  const rows = must(await svc().from("marking_units").select("id, scripts(number)").eq("exam_id", examId), "units read") as unknown as { id: string; scripts: { number: string } }[];
+  return rows.sort((a, b) => a.scripts.number.localeCompare(b.scripts.number)).map((r) => ({ unitId: r.id, scriptNumber: r.scripts.number }));
+}
+
+/** The admin assigns pieces to a marker as a first (live) or second pass (marking_assign, as "Assign to…"). */
+export async function assignAs(admin: Login, unitIds: string[], marker: Login, kind: "live" | "second" = "live"): Promise<void> {
+  const r = await rpcAs(admin, "marking_assign", { p_units: unitIds, p_marker: marker.id, p_reason: "Handed out for the test", p_kind: kind });
+  if (r.assigned !== unitIds.length) throw new Error(`marking_assign skipped pieces: ${JSON.stringify(r)}`);
+}
+
+/** The lead takes a routine sample of a marker's work on the exam (marking_review_sample); how many were added. */
+export async function sampleAs(lead: Login, examId: string, markerId: string, count = 5): Promise<number> {
+  return Number((await rpcAs(lead, "marking_review_sample", { p_exam: examId, p_marker: markerId, p_count: count })).added);
+}
+
+/** The lead sends a piece back to the same marker with a note (marking_send_back, as "Send back" on the review screen). */
+export async function sendBackAs(lead: Login, unitId: string, note: string): Promise<void> {
+  await rpcAs(lead, "marking_send_back", { p_unit: unitId, p_to: "same", p_note: note, p_reason: "Question 3 looks too generous" });
+}
+
+/** The lead settles the open difference on a piece at its markings' current revs (marking_review_settle). */
+export async function settleAs(lead: Login, unitId: string, outcome: "first_stands" | "second_stands"): Promise<string> {
+  const review = must(await svc().from("marking_reviews").select("id").eq("unit_id", unitId).eq("kind", "difference").eq("state", "open").single(), "review read");
+  const rev = async (kind: string) =>
+    must(await svc().from("markings").select("rev").eq("unit_id", unitId).eq("kind", kind).eq("status", "submitted").single(), `${kind} marking read`).rev as number;
+  await rpcAs(lead, "marking_review_settle", {
+    p_review: review.id,
+    p_outcome: outcome,
+    p_first_rev: await rev("live"),
+    p_second_rev: await rev("second"),
+    p_reason: "The second marks are right",
   });
-  return { examId: exam.examId, title: exam.title, markers, lead, admin, students };
+  return review.id as string;
+}
+
+/** The marker's next Next script on the exam gives a seeded script (exam_markers.until_seed 0, made if it is not there). */
+export async function seedNext(examId: string, markerId: string): Promise<void> {
+  must(await svc().from("exam_markers").upsert({ exam_id: examId, marker_id: markerId, until_seed: 0 }, { onConflict: "exam_id,marker_id" }).select("exam_id").single(), "until_seed upsert");
+}
+
+/** A change to a submitted piece, as `who`'s screen would send it, with a reason: the code it is refused with ("ok"
+ * when it is saved). */
+export async function changeAs(who: Login, unitId: string, marks: number[]): Promise<string> {
+  return asUser(who, async (client) => {
+    const opened = await client.rpc("marking_unit_open", { p_unit: unitId });
+    const o = opened.data as { ok?: boolean; code?: string; marking: { id: string; rev: number }; structure: { questions: { id: string; parent_id: string | null }[] } } | null;
+    if (opened.error || !o) throw new Error(`marking_unit_open failed: ${opened.error?.message ?? "no answer"}`);
+    if (o.ok !== true) return o.code ?? "none";
+    const parents = new Set(o.structure.questions.flatMap((q) => (q.parent_id ? [q.parent_id] : [])));
+    const ops = o.structure.questions.filter((q) => !parents.has(q.id)).map((q, i) => ({ op: "mark", question_id: q.id, mark: marks[i], na: false }));
+    const saved = await client.rpc("marking_save", { p_marking: o.marking.id, p_rev: o.marking.rev, p_ops: ops, p_reason: "A slip in question 1" });
+    if (saved.error) throw new Error(`marking_save failed: ${saved.error.message}`);
+    return saved.data?.ok === true ? "ok" : String(saved.data?.code ?? "none");
+  });
+}
+
+/** The admin withdraws the exam's approval when it is approved (before its rows are removed); otherwise nothing. */
+export async function withdrawApprovalIfAny(admin: Login, examId: string): Promise<void> {
+  const m = (await svc().from("exam_marking").select("approved_at").eq("exam_id", examId).maybeSingle()).data;
+  if (m?.approved_at) await rpcAs(admin, "marking_approval_withdraw", { p_exam: examId, p_reason: "The test is over" });
 }
 
 /** Runs `fn` with a client signed in as `who` (the anon key and their own session, as their browser would), then

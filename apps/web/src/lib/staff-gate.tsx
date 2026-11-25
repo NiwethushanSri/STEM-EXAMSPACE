@@ -2,7 +2,6 @@ import { Suspense, type ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { homeFor, roleLabel, type AppRole } from "@stem/shared";
 import { ShellUserProvider } from "@/components/AppShell";
-import { parseMyWork } from "@/lib/marking-lists";
 import { createClient, getSessionProfile, type SessionProfile } from "@/lib/supabase/server";
 
 /**
@@ -19,11 +18,12 @@ export async function requireStaff(roles: readonly AppRole[]): Promise<SessionPr
   return me;
 }
 
-/** Whether the signed-in marker leads a subject (marking_my_work's lead_subjects; false when it cannot say). */
+/** Whether the signed-in marker leads a subject (marking_is_lead, 3B Task 13: one light question instead of the whole of
+ * marking_my_work; false when it cannot say). */
 async function leadsASubject(): Promise<boolean> {
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("marking_my_work", {});
-  return !error && (parseMyWork(data)?.leadSubjects.length ?? 0) > 0;
+  const { data, error } = await supabase.rpc("marking_is_lead");
+  return !error && data === true;
 }
 
 /** Layout body for a staff area: waits for the role check (a real redirect for the wrong role) and gives AppShell the user.

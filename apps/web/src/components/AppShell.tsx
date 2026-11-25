@@ -65,13 +65,6 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/parent/notices", label: "Special notices" },
     ],
   },
-  examiner: {
-    name: "Examiner",
-    items: [
-      { href: "/examiner", label: "Worklist" },
-      { href: "/examiner/standardisation", label: "Standardisation" },
-    ],
-  },
   owner: {
     name: "Super administrator",
     items: [

@@ -155,10 +155,11 @@ test("admin_assigns_two_scripts_and_takes_one_back", async ({ page }) => {
   await noCandidateName(page, "the admin marking page");
   await noSidewaysScroll(page, "the admin marking page");
 
-  // The admin home page has the exam's marking row: 2 left, none marked, none on hold, the deadline.
+  // The admin home page has the exam's marking row: 2 left, none marked, checked, with the lead marker or waiting for a
+  // second marker (3B), none on hold, the deadline.
   await page.goto("/admin");
   const row = page.getByTestId("marking-exam").filter({ hasText: seed.title });
-  await expect(row.getByRole("cell")).toHaveText(["2", "0", "0", /^Mark by /]);
+  await expect(row.getByRole("cell")).toHaveText(["2", "0", "0", "0", "0", "0", /^Mark by /]);
   await noSidewaysScroll(page, "the admin home page");
 });
 
@@ -173,7 +174,7 @@ test("a_hidden_area_change_puts_the_marked_piece_on_hold", async ({ page }) => {
   // The admin home page says so.
   await signIn(page, seed.admin);
   await page.goto("/admin");
-  await expect(page.getByTestId("marking-exam").filter({ hasText: seed.title }).getByRole("cell")).toHaveText(["2", "0", "1", /^Mark by /]);
+  await expect(page.getByTestId("marking-exam").filter({ hasText: seed.title }).getByRole("cell")).toHaveText(["2", "0", "0", "0", "0", "1", /^Mark by /]);
   await expect(page.getByTestId("marking-alerts")).toContainText(/\d+ scripts? (is|are) on hold in marking\./);
 
   // The exam's progress card offers "Release all": it needs only the exam, so it is there when the alerts list is not.
