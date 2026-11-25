@@ -414,6 +414,14 @@ describe("paymentMessageFor (3B Task 11)", () => {
     expect(paymentMessageFor("rate_missing")).toBe("Set the pay rate for every exam in this month first.");
     expect(paymentMessageFor("too_early")).toBe("This month has not ended yet.");
   });
+  it("names the earlier month to fix first (Ruling R25)", () => {
+    expect(paymentMessageFor("earlier_month", "2027-03-01")).toBe("Fix March 2027 first.");
+    expect(paymentMessageFor("earlier_month", "2026-12-01")).toBe("Fix December 2026 first.");
+    expect(paymentMessageFor("earlier_month", "2027-01")).toBe("Fix January 2027 first.");
+    expect(paymentMessageFor("earlier_month")).toBe("Fix the earlier month first.");
+    expect(paymentMessageFor("earlier_month", "2027-13-01")).toBe("Fix the earlier month first.");
+    expect(paymentMessageFor("earlier_month", "March")).toBe("Fix the earlier month first.");
+  });
   it("maps each other code of marker pay", () => {
     expect(paymentMessageFor("forbidden")).toBe("You do not have permission to do that.");
     expect(paymentMessageFor("invalid_input")).toBe(

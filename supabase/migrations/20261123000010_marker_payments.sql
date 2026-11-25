@@ -25,9 +25,18 @@
 -- statement for the month yet, and one item per piece with its pence. Every such piece needs a rate first
 -- (rate_missing). A piece an earlier fixed month missed (its marker had that month's statement, or its submit
 -- committed after the fix) is carried into the next month's, since a month's payable pieces are all those submitted
--- before its end and not fixed yet. A marker fixed already is left alone. Fixed statements and their items never
--- change: no function updates or deletes them, and a trigger refuses any update, delete or truncate of either table,
--- whoever asks. A later take-back, send-back or rate change leaves them as they are.
+-- before its end and not fixed yet. A marker fixed already is left alone. Months are fixed in order (Ruling R25: a fix
+-- is permanent): an earlier month with payable pieces and no statement at all is fixed first (earlier_month); a month
+-- with a statement that missed a late piece or a marker does not hold the next one back.
+--
+-- Fixed statements and their items never change. No function updates or deletes them; a trigger refuses any update,
+-- delete or truncate of either table, whoever asks; only the definer functions write the three pay tables (Ruling R25:
+-- insert, update, delete, truncate and trigger are revoked from service_role, anon and authenticated); and after every
+-- insert each statement it touches must have exactly its stored pieces and total in items, so nothing can be added to
+-- a fixed statement either. A later take-back, send-back or rate change leaves them as they are. A fixed statement
+-- keeps the exam's id and reads the exam's title and paper live, so a renamed exam shows its new name (pieces and pence
+-- never move); its group labels cannot drift, since a question group with pieces cannot be deleted (the marking units'
+-- foreign key) and groups are matched by label.
 --
 -- Two fixes at once. The fix takes a transaction advisory lock for the month, then the pay lock (exclusive), before it
 -- reads the payable pieces, so a second admin's fix waits, then finds those markers fixed and adds nothing. The pay
@@ -39,6 +48,7 @@
 --   tables marker_rates, marker_statements, marker_statement_items: row-level security, select for admins only;
 --   marker_payable(p_before), marker_statement_month(p_at): internal;
 --   marker_statements_frozen(): the trigger that refuses changes to fixed statements;
+--   marker_statements_add_up(): the trigger that refuses an insert leaving a statement apart from its items;
 --   marker_rates_get(p_exam), marker_rates_set(p_exam, p_rates, p_reason), marker_statements_get(p_month),
 --   marker_statements_fix(p_month, p_now), marker_statement_exported(p_month): admins.
 -- No earlier function is changed. Nothing here names or points to a candidate: no script number, index number or id of
@@ -94,6 +104,10 @@ alter table public.marker_statement_items enable row level security;
 
 revoke all on public.marker_rates, public.marker_statements, public.marker_statement_items from anon, authenticated;
 grant select on public.marker_rates, public.marker_statements, public.marker_statement_items to authenticated;
+-- Ruling R25: only the definer functions write the pay tables; no client role, the service role included, can. TRIGGER
+-- goes too: a trigger a client role put on a pay table would run with the rights of the definer function writing it.
+revoke insert, update, delete, truncate, trigger on public.marker_rates, public.marker_statements, public.marker_statement_items
+  from service_role, anon, authenticated;
 
 create policy marker_rates_select on public.marker_rates for select to authenticated using ((select public.is_staff_admin()));
 create policy marker_statements_select on public.marker_statements for select to authenticated using ((select public.is_staff_admin()));
@@ -117,6 +131,45 @@ create trigger marker_statements_frozen before update or delete or truncate on p
   for each statement execute function public.marker_statements_frozen();
 create trigger marker_statement_items_frozen before update or delete or truncate on public.marker_statement_items
   for each statement execute function public.marker_statements_frozen();
+
+-- ---------------------------------------------------------------------------------------------
+-- A statement adds up to its items (Ruling R25): after any insert of statements or of items, every statement the
+-- inserted rows touch has exactly its stored pieces and total_pence in items, or the insert is refused. So no item can
+-- be added to a fixed statement, and no statement stands apart from its items. It is a statement-level check over the
+-- inserted rows (a transition table): the fix writes the statements and their items in one SQL statement, so the check
+-- at its end sees both, one query per fix. A deferred constraint trigger would also let a statement and its items be
+-- written by separate SQL statements of one transaction, but constraint triggers are row-level only (3,000 checks at
+-- commit for a 3,000-piece fix), and no function writes them apart.
+-- ---------------------------------------------------------------------------------------------
+create function public.marker_statements_add_up()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_ids uuid[];
+begin
+  if tg_table_name = 'marker_statements' then
+    select array_agg(n.id) into v_ids from new_rows n;
+  else
+    select array_agg(distinct n.statement_id) into v_ids from new_rows n;
+  end if;
+  if exists (
+    select 1
+    from public.marker_statements s
+    cross join lateral (select count(*) as n, coalesce(sum(i.pence), 0) as t
+                        from public.marker_statement_items i where i.statement_id = s.id) x
+    where s.id = any (v_ids) and (s.pieces <> x.n or s.total_pence <> x.t)) then
+    raise exception 'A fixed marker statement''s items must add up to its pieces and total.' using errcode = 'check_violation';
+  end if;
+  return null;
+end;
+$$;
+
+create trigger marker_statements_add_up after insert on public.marker_statements
+  referencing new table as new_rows for each statement execute function public.marker_statements_add_up();
+create trigger marker_statement_items_add_up after insert on public.marker_statement_items
+  referencing new table as new_rows for each statement execute function public.marker_statements_add_up();
 
 -- ---------------------------------------------------------------------------------------------
 -- Internal: the first day of the UK calendar month (Europe/London, daylight saving handled) of p_at.
@@ -198,9 +251,11 @@ $$;
 -- pence}]: whole pence from 0 to 100,000; exactly one with no group for an exam marked as whole scripts, exactly one per
 -- question group of the exam otherwise. Rates not in the list (left from another mode) are removed. Once a piece of the
 -- exam is in a fixed statement, a change needs a reason (3 to 300 characters); fixed items keep their pence. Refused,
--- in this order: forbidden; invalid_input (also a reason given of another length when none is needed); not_found;
--- reason_required. The same rates again answer {ok, changed: false} and nothing is written. Audited marker_rate_set:
--- what changed (the first five, in the paper's order) and the reason. Returns {ok, changed: true}.
+-- in this order: forbidden; invalid_input (no exam, or rates that are not a list of valid rates); not_found;
+-- invalid_input (rates that do not fit the exam's mode and question groups). The same rates again then answer {ok,
+-- changed: false} and nothing is written, whatever the reason. A change is then refused reason_required (pieces are
+-- fixed and no valid reason is given) or invalid_input (a reason given of another length when none is needed). Audited
+-- marker_rate_set: what changed (the first five, in the paper's order) and the reason. Returns {ok, changed: true}.
 -- ---------------------------------------------------------------------------------------------
 create function public.marker_rates_set(p_exam uuid, p_rates jsonb, p_reason text default null)
 returns jsonb
@@ -419,10 +474,12 @@ $$;
 -- ---------------------------------------------------------------------------------------------
 -- marker_statements_fix: an admin fixes a month's statements (p_month: its first day; p_now for tests, read through
 -- paper_clock). Refused, in this order: forbidden; invalid_input; too_early (the month has not ended by server time in
--- UK time); rate_missing with exams: [{exam_id, exam_title, paper}] (a payable piece of a marker not fixed yet has no
--- rate; nothing is fixed). Otherwise one statement, with an item per piece at its rate, for every marker with payable
--- pieces before the month's end and no statement for the month; markers fixed already are left alone. Takes the
--- month's advisory lock, then the pay lock, before reading anything (see the header). Audited marker_statements_fixed
+-- UK time); earlier_month with month (Ruling R25: the earliest UK month before p_month that has payable pieces and no
+-- statement at all, to be fixed first); rate_missing with exams: [{exam_id, exam_title, paper}] (a payable piece of a
+-- marker not fixed yet has no rate). Nothing is fixed when refused. Otherwise one statement, with an item per piece at
+-- its rate, for every marker with payable pieces before the month's end and no statement for the month; markers fixed
+-- already are left alone. Takes the month's advisory lock, then the pay lock, before reading anything (see the header),
+-- and the statements' add-up check runs at the end of its insert. Audited marker_statements_fixed
 -- (the month, statements, pieces and pence) when it fixes something. Returns {ok, statements, pieces, total_pence} of
 -- what this call fixed (all 0 when nothing was left).
 -- ---------------------------------------------------------------------------------------------
@@ -434,7 +491,9 @@ set search_path = ''
 as $$
 declare
   v_actor uuid := auth.uid();
+  v_start timestamptz;
   v_end timestamptz;
+  v_earlier date;
   v_missing jsonb;
   v_statements int;
   v_pieces int;
@@ -449,11 +508,22 @@ begin
   if public.marker_statement_month(public.paper_clock(p_now)) <= p_month then
     return jsonb_build_object('ok', false, 'code', 'too_early');
   end if;
+  v_start := p_month::timestamp at time zone 'Europe/London';
   v_end := (p_month + interval '1 month')::timestamp at time zone 'Europe/London';
 
   -- The month's lock, then the pay lock (exclusive): a second fix of the month waits here and then adds nothing.
   perform pg_advisory_xact_lock(hashtextextended('marker_statements:' || to_char(p_month, 'YYYY-MM'), 0));
   perform pg_advisory_xact_lock(hashtextextended('marker_pay', 0));
+
+  -- Ruling R25: an earlier month with payable pieces and no statement at all is fixed first; a fix is permanent, so a
+  -- month swept into a later one could never be put right. A month with a statement that missed a late piece or a
+  -- marker does not count: those pieces carry into the next month.
+  select min(x.month) into v_earlier
+  from (select distinct public.marker_statement_month(p.submitted_at) as month from public.marker_payable(v_start) p) x
+  where not exists (select 1 from public.marker_statements s where s.month = x.month);
+  if v_earlier is not null then
+    return jsonb_build_object('ok', false, 'code', 'earlier_month', 'month', v_earlier);
+  end if;
 
   select jsonb_agg(jsonb_build_object('exam_id', e.id, 'exam_title', e.title, 'paper', e.paper) order by e.title, e.paper, e.id)
   into v_missing
@@ -530,6 +600,7 @@ $$;
 -- Privileges.
 -- ---------------------------------------------------------------------------------------------
 revoke execute on function public.marker_statements_frozen() from public, anon, authenticated, service_role;
+revoke execute on function public.marker_statements_add_up() from public, anon, authenticated, service_role;
 revoke execute on function public.marker_statement_month(timestamptz) from public, anon, authenticated, service_role;
 revoke execute on function public.marker_payable(timestamptz) from public, anon, authenticated, service_role;
 

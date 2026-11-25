@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(41);
+select plan(46);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -158,6 +158,19 @@ create function pg_temp.reason(p_action text, p_target uuid default null) return
   select coalesce(a.reason, 'none') from public.audit_log a
   where a.action = p_action and a.actor_id = pg_temp.uid('admin') and (p_target is null or a.target_id = p_target)
   order by a.id desc limit 1 $$;
+-- p_sql run as the service role: 'done', or the SQLSTATE that refused it.
+create function pg_temp.as_service(p_sql text) returns text language plpgsql as $$
+begin
+  set local role service_role;
+  begin
+    execute p_sql;
+    reset role;
+    return 'done';
+  exception when others then
+    reset role;
+    return sqlstate;
+  end;
+end $$;
 -- A month's statements of this file's markers, as stored: 'name pieces total [the items' pence]', by name.
 create function pg_temp.stored(p_month date) returns text language sql stable security definer as $$
   select coalesce(string_agg(p.first_name || ' ' || p.last_name || ' ' || s.pieces || ' ' || s.total_pence
@@ -397,6 +410,13 @@ select is(pg_temp.as('admin', 'select public.marker_statements_get(''2001-01-01'
           || ' ' || (pg_temp.as('admin', 'select public.marker_statements_get(''2099-01-01'')') ->> 'ended'),
   'true false', 'ended reads the server''s time: January 2001 has ended and January 2099 has not');
 insert into res values ('w_set', pg_temp.rates('w', '[{"group_id": null, "pence": 1000}]'));
+insert into res values ('fix_a_early', pg_temp.fix('2027-04-01', '2027-05-01 12:00Z'));
+select is(array[pg_temp.code(pg_temp.r('fix_a_early')), pg_temp.r('fix_a_early') ->> 'month',
+    (select count(*)::text from public.marker_statements where month in ('2027-03-01', '2027-04-01')),
+    pg_temp.audits('marker_statements_fixed')::text],
+  array['earlier_month', '2027-03-01', '0', '0'],
+  'earlier_month (Ruling R25): April cannot be fixed while March holds payable pieces and has no statement at all; the '
+  || 'refusal names March and nothing is fixed');
 insert into res values ('fix_m', pg_temp.fix('2027-03-01', '2027-04-02 12:00Z'));
 select is(array[pg_temp.code(pg_temp.r('w_set')), pg_temp.code(pg_temp.r('fix_m')), pg_temp.r('fix_m') ->> 'statements',
     pg_temp.r('fix_m') ->> 'pieces', pg_temp.r('fix_m') ->> 'total_pence', pg_temp.stored('2027-03-01'),
@@ -441,6 +461,17 @@ select throws_ok($$delete from public.marker_statement_items$$, 'P0001', 'Fixed 
   'so is a delete of its items');
 select throws_ok($$truncate public.marker_statements cascade$$, 'P0001', 'Fixed marker statements and their items never change.',
   'and a truncate');
+select throws_ok(format($q$insert into public.marker_statement_items (marking_id, statement_id, exam_id, kind, pence, submitted_at)
+                          select %L, s.id, %L, 'second', 1000, '2027-03-11 12:00Z' from public.marker_statements s
+                          where s.marker_id = %L and s.month = '2027-03-01'$q$,
+    pg_temp.k('s:w4'), pg_temp.k('w'), pg_temp.uid('B')),
+  '23514', 'A fixed marker statement''s items must add up to its pieces and total.',
+  'an item added to a fixed statement, for a marking paid nowhere yet, is refused: the statement would no longer add up '
+  || '(Ruling R25), even as postgres');
+select throws_ok(format($q$insert into public.marker_statements (marker_id, month, pieces, total_pence, fixed_by, fixed_at)
+                          values (%L, '2027-03-01', 1, 1000, %L, now())$q$, pg_temp.uid('D'), pg_temp.uid('admin')),
+  '23514', 'A fixed marker statement''s items must add up to its pieces and total.',
+  'and so is a statement whose items are not there');
 
 -- ---------------------------------------------------------------------------------------------
 -- no_marking_is_ever_in_two_statements (Review Focus 5)
@@ -479,15 +510,17 @@ select is(array[pg_temp.who(pg_temp.r('m3'), 'A'), pg_temp.lines(pg_temp.r('m3')
   'late_piece_is_carried_into_the_next_month: A''s fixed March is as it was and A''s late piece shows in April; C, with no '
   || 'March statement, shows in March (not fixed yet) and, carried, in April');
 insert into res values ('fix_m2', pg_temp.fix('2027-03-01', '2027-04-02 12:00Z'));
+insert into res values ('w11_before', to_jsonb(pg_temp.paid(timestamptz '2027-04-01 00:00 Europe/London', array['w11'])));
 insert into res values ('fix_a', pg_temp.fix('2027-04-01', '2027-05-01 12:00Z'));
 select is(array[pg_temp.r('fix_m2') ->> 'statements', pg_temp.r('fix_m2') ->> 'pieces', pg_temp.r('fix_m2') ->> 'total_pence',
-    pg_temp.stored('2027-03-01'), pg_temp.r('fix_a') ->> 'statements', pg_temp.r('fix_a') ->> 'pieces',
-    pg_temp.r('fix_a') ->> 'total_pence', pg_temp.stored('2027-04-01')],
+    pg_temp.stored('2027-03-01'), pg_temp.r('w11_before') #>> '{}', pg_temp.code(pg_temp.r('fix_a')),
+    pg_temp.r('fix_a') ->> 'statements', pg_temp.r('fix_a') ->> 'pieces', pg_temp.r('fix_a') ->> 'total_pence',
+    pg_temp.stored('2027-04-01')],
   array['1', '1', '2000',
         'Alma Abbot 5 5000 [1000,1000,1000,1000,1000], Bede Brook 2 2000 [1000,1000], Cora Cole 1 2000 [2000], Ezra Eames 1 1000 [1000]',
-        '1', '2', '4000', 'Alma Abbot 2 4000 [2000,2000]'],
-  'fixing March again makes C''s statement and leaves the markers fixed already alone; April''s takes A''s w8 and the late w11 '
-  || 'at the new rate');
+        'w11 live A 2000', 'ok', '1', '2', '4000', 'Alma Abbot 2 4000 [2000,2000]'],
+  'fixing March again makes C''s statement and leaves the markers fixed already alone; March, fixed, still misses A''s late '
+  || 'w11, yet April may be fixed (earlier_month counts only a month with no statement) and takes w8 and w11 at the new rate');
 
 -- ---------------------------------------------------------------------------------------------
 -- fix_twice_adds_nothing
@@ -545,7 +578,7 @@ select is(array[pg_temp.code(pg_temp.rates_get('w', 'A')), pg_temp.code(pg_temp.
   array['forbidden', 'forbidden', 'forbidden', 'forbidden', 'forbidden', 'forbidden', 'forbidden'],
   'and every pay function refuses them');
 select is((select array_agg(f order by f) from unnest(array['public.marker_payable(timestamptz)', 'public.marker_statement_month(timestamptz)',
-    'public.marker_statements_frozen()']) f
+    'public.marker_statements_frozen()', 'public.marker_statements_add_up()']) f
   where has_function_privilege('authenticated', f, 'execute') or has_function_privilege('anon', f, 'execute')
      or has_function_privilege('service_role', f, 'execute') or has_function_privilege('public', f, 'execute')),
   null, 'the internal functions are revoked from every client role');
@@ -559,15 +592,40 @@ select is(array[
                        'marker_statement_exported')
      and p.prosecdef and p.proconfig @> array['search_path=""']),
     (select count(*)::text from pg_proc p where p.pronamespace = 'public'::regnamespace
-     and p.proname in ('marker_statement_month', 'marker_statements_frozen') and p.proconfig @> array['search_path=""']),
+     and p.proname in ('marker_statement_month', 'marker_statements_frozen', 'marker_statements_add_up')
+     and p.proconfig @> array['search_path=""']),
     (select string_agg(c.relname || ' ' || c.relrowsecurity, ', ' order by c.relname) from pg_class c
      where c.oid in ('public.marker_rates'::regclass, 'public.marker_statements'::regclass, 'public.marker_statement_items'::regclass)),
     (select count(*)::text from unnest(array['public.marker_rates', 'public.marker_statements', 'public.marker_statement_items']) t
      cross join unnest(array['insert', 'update', 'delete']) p
      where has_table_privilege('authenticated', t, p) or has_table_privilege('anon', t, p) or has_table_privilege('anon', t, 'select'))],
-  array['6', '2', 'marker_rates true, marker_statement_items true, marker_statements true', '0'],
+  array['6', '3', 'marker_rates true, marker_statement_items true, marker_statements true', '0'],
   'each reading function is security definer with an empty search path; the tables have row-level security and give '
   || 'signed-in users select only, under the admins'' policy');
+
+select is((select array_agg(r || ' ' || p || ' ' || t order by r, t, p)
+           from unnest(array['service_role', 'anon', 'authenticated']) r
+           cross join unnest(array['public.marker_rates', 'public.marker_statements', 'public.marker_statement_items']) t
+           cross join unnest(array['insert', 'update', 'delete', 'truncate', 'trigger']) p
+           where has_table_privilege(r, t, p)),
+  null, 'Ruling R25: no client role, the service role included, may insert, update, delete or truncate a pay table, or put a '
+  || 'trigger on one');
+select is(array[
+    pg_temp.as_service(format($q$insert into public.marker_rates (exam_id, pence, set_at) values (%L, 1, now())$q$, pg_temp.k('g'))),
+    pg_temp.as_service('update public.marker_rates set pence = 1'),
+    pg_temp.as_service('delete from public.marker_rates'),
+    pg_temp.as_service(format($q$insert into public.marker_statements (marker_id, month, pieces, total_pence, fixed_by, fixed_at)
+                                 values (%L, '2027-05-01', 0, 0, %L, now())$q$, pg_temp.uid('D'), pg_temp.uid('admin'))),
+    pg_temp.as_service('update public.marker_statements set total_pence = 0'),
+    pg_temp.as_service('delete from public.marker_statements'),
+    pg_temp.as_service(format($q$insert into public.marker_statement_items (marking_id, statement_id, exam_id, kind, pence, submitted_at)
+                                 select %L, s.id, %L, 'second', 0, now() from public.marker_statements s limit 1$q$,
+                              pg_temp.k('s:w4'), pg_temp.k('w'))),
+    pg_temp.as_service('update public.marker_statement_items set pence = 0'),
+    pg_temp.as_service('delete from public.marker_statement_items'),
+    (select count(*)::text from public.marker_rates where exam_id = pg_temp.k('g'))],
+  array['42501', '42501', '42501', '42501', '42501', '42501', '42501', '42501', '42501', '1'],
+  'the service role is refused an insert, update or delete of each pay table (permission denied), and nothing changed');
 
 -- ---------------------------------------------------------------------------------------------
 -- export_is_recorded

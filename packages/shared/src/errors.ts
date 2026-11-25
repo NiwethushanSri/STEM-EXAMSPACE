@@ -611,7 +611,8 @@ export function reviewMessageFor(code: string | null | undefined, reason?: strin
 }
 
 /** 3B Task 11: failure codes of marker pay, for admins (marker_rates_get, marker_rates_set, marker_statements_get,
- * marker_statements_fix, marker_statement_exported). rate_missing comes with the exams that have no rate. */
+ * marker_statements_fix, marker_statement_exported). rate_missing comes with the exams that have no rate, and
+ * earlier_month (Ruling R25) with the month to fix first. */
 const paymentMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   invalid_input: "Enter each rate from £0 to £1,000, one for each question group. A reason can be 3 to 300 characters.",
@@ -621,8 +622,23 @@ const paymentMessages: Record<string, string> = {
   too_early: "This month has not ended yet.",
 };
 
-/** Message for a marker pay RPC failure code; unknown codes get the generic message. */
-export function paymentMessageFor(code: string | null | undefined): string {
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+  "November", "December"];
+
+/** "March 2027" for a month as the database gives it ("2027-03-01", or "2027-03"); null for anything else. */
+function monthName(month: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})(?:-\d{2})?$/.exec(month ?? "");
+  const i = m ? Number(m[2]) - 1 : -1;
+  return m && i >= 0 && i < 12 ? `${MONTH_NAMES[i]} ${m[1]}` : null;
+}
+
+/** Message for a marker pay RPC failure code; unknown codes get the generic message. For earlier_month, pass the
+ * refusal's month: "Fix March 2027 first." (without one: "Fix the earlier month first."). */
+export function paymentMessageFor(code: string | null | undefined, month?: string | null): string {
+  if (code === "earlier_month") {
+    const name = monthName(month);
+    return name ? `Fix ${name} first.` : "Fix the earlier month first.";
+  }
   return code && Object.hasOwn(paymentMessages, code) ? paymentMessages[code] : messages.internal;
 }
 
