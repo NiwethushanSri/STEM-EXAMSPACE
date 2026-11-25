@@ -610,6 +610,22 @@ export function reviewMessageFor(code: string | null | undefined, reason?: strin
   return code && Object.hasOwn(reviewMessages, code) ? reviewMessages[code] : messages.internal;
 }
 
+/** 3B Task 11: failure codes of marker pay, for admins (marker_rates_get, marker_rates_set, marker_statements_get,
+ * marker_statements_fix, marker_statement_exported). rate_missing comes with the exams that have no rate. */
+const paymentMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input: "Enter each rate from £0 to £1,000, one for each question group. A reason can be 3 to 300 characters.",
+  not_found: "This exam no longer exists. Refresh the page.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  rate_missing: "Set the pay rate for every exam in this month first.",
+  too_early: "This month has not ended yet.",
+};
+
+/** Message for a marker pay RPC failure code; unknown codes get the generic message. */
+export function paymentMessageFor(code: string | null | undefined): string {
+  return code && Object.hasOwn(paymentMessages, code) ? paymentMessages[code] : messages.internal;
+}
+
 /** A lead marker with a declared conflict (or a tutor link) for the script's candidate. */
 const CONFLICTED_LEAD = "You cannot release this script because of a declared conflict. Ask an admin.";
 

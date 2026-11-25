@@ -613,6 +613,84 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"marker_rates": {
+                  Row: {
+                    "exam_id": string,"group_id": string | null,"pence": number,"set_at": string,"set_by": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "exam_id": string,"group_id"?: string | null,"pence": number,"set_at": string,"set_by"?: string | null
+                  }
+                  Update: {
+                    "exam_id"?: string,"group_id"?: string | null,"pence"?: number,"set_at"?: string,"set_by"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_rates_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_rates_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_rates_group_id_fkey"
+      columns: ["group_id"]
+isOneToOne: false
+      referencedRelation: "question_groups"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marker_statement_items": {
+                  Row: {
+                    "exam_id": string,"group_id": string | null,"kind": Database["public"]['Enums']["marking_kind"],"marking_id": string,"pence": number,"statement_id": string,"submitted_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "exam_id": string,"group_id"?: string | null,"kind": Database["public"]['Enums']["marking_kind"],"marking_id": string,"pence": number,"statement_id": string,"submitted_at": string
+                  }
+                  Update: {
+                    "exam_id"?: string,"group_id"?: string | null,"kind"?: Database["public"]['Enums']["marking_kind"],"marking_id"?: string,"pence"?: number,"statement_id"?: string,"submitted_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_statement_items_marking_id_fkey"
+      columns: ["marking_id"]
+isOneToOne: true
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_statement_items_statement_id_fkey"
+      columns: ["statement_id"]
+isOneToOne: false
+      referencedRelation: "marker_statements"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marker_statements": {
+                  Row: {
+                    "fixed_at": string,"fixed_by": string,"id": string,"marker_id": string,"month": string,"pieces": number,"total_pence": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "fixed_at": string,"fixed_by": string,"id"?: string,"marker_id": string,"month": string,"pieces": number,"total_pence": number
+                  }
+                  Update: {
+                    "fixed_at"?: string,"fixed_by"?: string,"id"?: string,"marker_id"?: string,"month"?: string,"pieces"?: number,"total_pence"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_statements_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"marking_alerts": {
                   Row: {
                     "closed_at": string | null,"closed_by": string | null,"created_at": string,"exam_id": string,"id": string,"kind": string,"page_id": string | null,"reason": string | null,"resolution": string | null,"script_id": string,"state": string,"unit_id": string | null
@@ -1894,8 +1972,31 @@ isOneToOne: false
 "marker_conflict_set":
 { Args: { "p_marker": string,"p_note": string,"p_reason": string,"p_student": string }; Returns: Json
                            },
+"marker_payable":
+{ Args: { "p_before": string }; Returns: {
+              "exam_id": string,"group_id": string,"kind": Database["public"]['Enums']["marking_kind"],"marker_id": string,"marking_id": string,"pence": number,"submitted_at": string
+            }[]
+                           },
+"marker_rates_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marker_rates_set":
+{ Args: { "p_exam": string,"p_rates": Json,"p_reason"?: string }; Returns: Json
+                           },
 "marker_set_lead":
 { Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"marker_statement_exported":
+{ Args: { "p_month": string }; Returns: Json
+                           },
+"marker_statement_month":
+{ Args: { "p_at": string }; Returns: string
+                           },
+"marker_statements_fix":
+{ Args: { "p_month": string,"p_now"?: string }; Returns: Json
+                           },
+"marker_statements_get":
+{ Args: { "p_month": string }; Returns: Json
                            },
 "marker_unapprove":
 { Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json

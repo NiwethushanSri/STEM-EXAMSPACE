@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, paymentMessageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -406,6 +406,26 @@ describe("reviewMessageFor (3B Task 7)", () => {
     expect(reviewMessageFor("conflict")).toBe("Something went wrong. Please try again.");
     expect(reviewMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(reviewMessageFor(null)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("paymentMessageFor (3B Task 11)", () => {
+  it("says the brief's sentences for a missing rate and a month not ended", () => {
+    expect(paymentMessageFor("rate_missing")).toBe("Set the pay rate for every exam in this month first.");
+    expect(paymentMessageFor("too_early")).toBe("This month has not ended yet.");
+  });
+  it("maps each other code of marker pay", () => {
+    expect(paymentMessageFor("forbidden")).toBe("You do not have permission to do that.");
+    expect(paymentMessageFor("invalid_input")).toBe(
+      "Enter each rate from £0 to £1,000, one for each question group. A reason can be 3 to 300 characters.",
+    );
+    expect(paymentMessageFor("not_found")).toBe("This exam no longer exists. Refresh the page.");
+    expect(paymentMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+  });
+  it("falls back to the generic message", () => {
+    expect(paymentMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(paymentMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(paymentMessageFor(null)).toBe("Something went wrong. Please try again.");
   });
 });
 
