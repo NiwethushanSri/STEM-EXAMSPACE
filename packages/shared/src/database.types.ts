@@ -433,6 +433,50 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"exam_results": {
+                  Row: {
+                    "cohort": Json | null,"exam_id": string,"first_published_at": string | null,"prepared_at": string | null,"prepared_by": string | null,"publish_at": string | null,"publish_failed_at": string | null,"publish_failed_reason": string | null,"published_at": string | null,"published_by": string | null,"remark_fee_pence": number | null,"state": Database["public"]['Enums']["results_state"],"updated_at": string,"version": number,"withdraw_reason": string | null,"withdrawn_at": string | null,"withdrawn_by": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "cohort"?: Json | null,"exam_id": string,"first_published_at"?: string | null,"prepared_at"?: string | null,"prepared_by"?: string | null,"publish_at"?: string | null,"publish_failed_at"?: string | null,"publish_failed_reason"?: string | null,"published_at"?: string | null,"published_by"?: string | null,"remark_fee_pence"?: number | null,"state"?: Database["public"]['Enums']["results_state"],"updated_at"?: string,"version"?: number,"withdraw_reason"?: string | null,"withdrawn_at"?: string | null,"withdrawn_by"?: string | null
+                  }
+                  Update: {
+                    "cohort"?: Json | null,"exam_id"?: string,"first_published_at"?: string | null,"prepared_at"?: string | null,"prepared_by"?: string | null,"publish_at"?: string | null,"publish_failed_at"?: string | null,"publish_failed_reason"?: string | null,"published_at"?: string | null,"published_by"?: string | null,"remark_fee_pence"?: number | null,"state"?: Database["public"]['Enums']["results_state"],"updated_at"?: string,"version"?: number,"withdraw_reason"?: string | null,"withdrawn_at"?: string | null,"withdrawn_by"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "exam_results_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: true
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_results_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: true
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_results_prepared_by_fkey"
+      columns: ["prepared_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_results_published_by_fkey"
+      columns: ["published_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_results_withdrawn_by_fkey"
+      columns: ["withdrawn_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"exams": {
                   Row: {
                     "allowed_materials": string | null,"booking_deadline": string,"created_at": string,"created_by": string | null,"currency": string,"duration_minutes": number,"exam_code": string,"format": Database["public"]['Enums']["exam_format"],"home_rules": string | null,"id": string,"paper": string,"price_confirmed": boolean,"price_pence": number,"release_held": boolean,"release_minutes_before": number,"release_notified_at": string | null,"released_early_at": string | null,"spare_pages": number,"starts_at": string,"status": Database["public"]['Enums']["exam_status"],"subject_id": number,"title": string,"updated_at": string
@@ -490,6 +534,38 @@ isOneToOne: false
       columns: ["unit_id"]
 isOneToOne: false
       referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"grade_boundaries": {
+                  Row: {
+                    "exam_id": string,"grade": string,"min_mark": number,"position": number,"set_at": string,"set_by": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "exam_id": string,"grade": string,"min_mark": number,"position": number,"set_at"?: string,"set_by"?: string | null
+                  }
+                  Update: {
+                    "exam_id"?: string,"grade"?: string,"min_mark"?: number,"position"?: number,"set_at"?: string,"set_by"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "grade_boundaries_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "grade_boundaries_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "grade_boundaries_set_by_fkey"
+      columns: ["set_by"]
+isOneToOne: false
+      referencedRelation: "profiles"
       referencedColumns: ["id"]
     }
                   ]
@@ -1231,6 +1307,70 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"result_versions": {
+                  Row: {
+                    "made_at": string,"made_by": string | null,"published_at": string,"reason": string | null,"result_id": string,"snapshot": NonNullable<Json>,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "made_at"?: string,"made_by"?: string | null,"published_at": string,"reason"?: string | null,"result_id": string,"snapshot": NonNullable<Json>,"version": number
+                  }
+                  Update: {
+                    "made_at"?: string,"made_by"?: string | null,"published_at"?: string,"reason"?: string | null,"result_id"?: string,"snapshot"?: NonNullable<Json>,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "result_versions_result_id_fkey"
+      columns: ["result_id"]
+isOneToOne: false
+      referencedRelation: "results"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"results": {
+                  Row: {
+                    "booking_id": string,"exam_id": string,"grade": string | null,"id": string,"max_total": number,"percentage": number | null,"question_marks": NonNullable<Json>,"rank": number | null,"rank_cohort": number | null,"remarked": boolean,"script_id": string | null,"sitting": Database["public"]['Enums']["sitting_mode"],"status": Database["public"]['Enums']["result_status"],"status_reason": string | null,"status_set": boolean,"student_id": string,"total": number | null,"updated_at": string,"version": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "booking_id": string,"exam_id": string,"grade"?: string | null,"id"?: string,"max_total": number,"percentage"?: number | null,"question_marks"?: NonNullable<Json>,"rank"?: number | null,"rank_cohort"?: number | null,"remarked"?: boolean,"script_id"?: string | null,"sitting": Database["public"]['Enums']["sitting_mode"],"status": Database["public"]['Enums']["result_status"],"status_reason"?: string | null,"status_set"?: boolean,"student_id": string,"total"?: number | null,"updated_at"?: string,"version"?: number
+                  }
+                  Update: {
+                    "booking_id"?: string,"exam_id"?: string,"grade"?: string | null,"id"?: string,"max_total"?: number,"percentage"?: number | null,"question_marks"?: NonNullable<Json>,"rank"?: number | null,"rank_cohort"?: number | null,"remarked"?: boolean,"script_id"?: string | null,"sitting"?: Database["public"]['Enums']["sitting_mode"],"status"?: Database["public"]['Enums']["result_status"],"status_reason"?: string | null,"status_set"?: boolean,"student_id"?: string,"total"?: number | null,"updated_at"?: string,"version"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "results_booking_id_fkey"
+      columns: ["booking_id"]
+isOneToOne: true
+      referencedRelation: "bookings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "results_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "results_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "results_script_id_fkey"
+      columns: ["script_id"]
+isOneToOne: false
+      referencedRelation: "scripts"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "results_student_id_fkey"
+      columns: ["student_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"scan_batches": {
                   Row: {
                     "centre_id": string,"created_at": string,"created_by": string | null,"exam_id": string,"id": string,"manifest_id": string | null,"number": string,"submitted_at": string | null
@@ -1797,6 +1937,9 @@ isOneToOne: false
 "exam_code_generate":
 { Args: { "p_paper": string,"p_self": string,"p_starts_at": string,"p_subject": number }; Returns: string
                            },
+"exam_max_total":
+{ Args: { "p_exam": string }; Returns: number
+                           },
 "exam_structure_get":
 { Args: { "p_exam": string }; Returns: Json
                            },
@@ -1899,6 +2042,9 @@ isOneToOne: false
                            },
 "home_upload_type_ok":
 { Args: { "p_kind": Database["public"]['Enums']["upload_kind"],"p_mime": string }; Returns: boolean
+                           },
+"is_family_of":
+{ Args: { "p_student": string }; Returns: boolean
                            },
 "is_lead_for":
 { Args: { "p_subject": number,"p_user": string }; Returns: boolean
@@ -2936,7 +3082,7 @@ isOneToOne: false
                            }
           }
           Enums: {
-            "account_status": "unconfirmed"|"pending"|"profile_incomplete"|"active"|"suspended","app_role": "owner"|"admin"|"teacher"|"tutor"|"corrector"|"student"|"parent","attendance_status": "present"|"late"|"absent","booking_status": "awaiting_payment"|"paid"|"cancel_requested"|"refunded"|"part_refunded"|"cancelled"|"expired","exam_format": "in_person"|"online"|"both","exam_status": "draft"|"published"|"cancelled"|"completed","exception_kind": "no_code"|"unknown_code"|"other_exam"|"not_expected"|"duplicate"|"missing_pages"|"uncoded_family_page"|"mixed_versions"|"poor_quality"|"late"|"name_visible"|"processing_failed","job_state": "queued"|"running"|"done"|"failed","marking_kind": "live"|"second"|"seed"|"practice"|"remark","marking_mode": "whole"|"by_question","page_role": "answer"|"cover"|"blank"|"information","page_state": "matched"|"blank"|"duplicate"|"unmatched"|"rejected","paper_download_kind": "home"|"print_pack"|"reprint"|"admin_preview","paper_kind": "paper"|"insert","script_source": "home"|"centre","script_state": "receiving"|"checking"|"needs_attention"|"verified"|"ready_to_mark"|"marking"|"marked"|"checked"|"final"|"withdrawn"|"void","sitting_mode": "centre"|"home","subject_kind": "school"|"entrance","submission_state": "draft"|"checking"|"received"|"needs_attention"|"rejected","upload_kind": "home_photo"|"home_pdf"|"scan_file","upload_state": "pending"|"stored"|"discarded"|"queued"|"processing"|"processed"|"failed"
+            "account_status": "unconfirmed"|"pending"|"profile_incomplete"|"active"|"suspended","app_role": "owner"|"admin"|"teacher"|"tutor"|"corrector"|"student"|"parent","attendance_status": "present"|"late"|"absent","booking_status": "awaiting_payment"|"paid"|"cancel_requested"|"refunded"|"part_refunded"|"cancelled"|"expired","exam_format": "in_person"|"online"|"both","exam_status": "draft"|"published"|"cancelled"|"completed","exception_kind": "no_code"|"unknown_code"|"other_exam"|"not_expected"|"duplicate"|"missing_pages"|"uncoded_family_page"|"mixed_versions"|"poor_quality"|"late"|"name_visible"|"processing_failed","job_state": "queued"|"running"|"done"|"failed","marking_kind": "live"|"second"|"seed"|"practice"|"remark","marking_mode": "whole"|"by_question","page_role": "answer"|"cover"|"blank"|"information","page_state": "matched"|"blank"|"duplicate"|"unmatched"|"rejected","paper_download_kind": "home"|"print_pack"|"reprint"|"admin_preview","paper_kind": "paper"|"insert","result_status": "present"|"absent"|"withdrawn"|"incomplete"|"disqualified","results_state": "none"|"prepared"|"scheduled"|"published"|"withdrawn","script_source": "home"|"centre","script_state": "receiving"|"checking"|"needs_attention"|"verified"|"ready_to_mark"|"marking"|"marked"|"checked"|"final"|"withdrawn"|"void","sitting_mode": "centre"|"home","subject_kind": "school"|"entrance","submission_state": "draft"|"checking"|"received"|"needs_attention"|"rejected","upload_kind": "home_photo"|"home_pdf"|"scan_file","upload_state": "pending"|"stored"|"discarded"|"queued"|"processing"|"processed"|"failed"
           }
           CompositeTypes: {
             [_ in never]: never
@@ -3056,7 +3202,7 @@ export const Constants = {
           }
         },"public": {
           Enums: {
-            "account_status": ["unconfirmed", "pending", "profile_incomplete", "active", "suspended"],"app_role": ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"],"attendance_status": ["present", "late", "absent"],"booking_status": ["awaiting_payment", "paid", "cancel_requested", "refunded", "part_refunded", "cancelled", "expired"],"exam_format": ["in_person", "online", "both"],"exam_status": ["draft", "published", "cancelled", "completed"],"exception_kind": ["no_code", "unknown_code", "other_exam", "not_expected", "duplicate", "missing_pages", "uncoded_family_page", "mixed_versions", "poor_quality", "late", "name_visible", "processing_failed"],"job_state": ["queued", "running", "done", "failed"],"marking_kind": ["live", "second", "seed", "practice", "remark"],"marking_mode": ["whole", "by_question"],"page_role": ["answer", "cover", "blank", "information"],"page_state": ["matched", "blank", "duplicate", "unmatched", "rejected"],"paper_download_kind": ["home", "print_pack", "reprint", "admin_preview"],"paper_kind": ["paper", "insert"],"script_source": ["home", "centre"],"script_state": ["receiving", "checking", "needs_attention", "verified", "ready_to_mark", "marking", "marked", "checked", "final", "withdrawn", "void"],"sitting_mode": ["centre", "home"],"subject_kind": ["school", "entrance"],"submission_state": ["draft", "checking", "received", "needs_attention", "rejected"],"upload_kind": ["home_photo", "home_pdf", "scan_file"],"upload_state": ["pending", "stored", "discarded", "queued", "processing", "processed", "failed"]
+            "account_status": ["unconfirmed", "pending", "profile_incomplete", "active", "suspended"],"app_role": ["owner", "admin", "teacher", "tutor", "corrector", "student", "parent"],"attendance_status": ["present", "late", "absent"],"booking_status": ["awaiting_payment", "paid", "cancel_requested", "refunded", "part_refunded", "cancelled", "expired"],"exam_format": ["in_person", "online", "both"],"exam_status": ["draft", "published", "cancelled", "completed"],"exception_kind": ["no_code", "unknown_code", "other_exam", "not_expected", "duplicate", "missing_pages", "uncoded_family_page", "mixed_versions", "poor_quality", "late", "name_visible", "processing_failed"],"job_state": ["queued", "running", "done", "failed"],"marking_kind": ["live", "second", "seed", "practice", "remark"],"marking_mode": ["whole", "by_question"],"page_role": ["answer", "cover", "blank", "information"],"page_state": ["matched", "blank", "duplicate", "unmatched", "rejected"],"paper_download_kind": ["home", "print_pack", "reprint", "admin_preview"],"paper_kind": ["paper", "insert"],"result_status": ["present", "absent", "withdrawn", "incomplete", "disqualified"],"results_state": ["none", "prepared", "scheduled", "published", "withdrawn"],"script_source": ["home", "centre"],"script_state": ["receiving", "checking", "needs_attention", "verified", "ready_to_mark", "marking", "marked", "checked", "final", "withdrawn", "void"],"sitting_mode": ["centre", "home"],"subject_kind": ["school", "entrance"],"submission_state": ["draft", "checking", "received", "needs_attention", "rejected"],"upload_kind": ["home_photo", "home_pdf", "scan_file"],"upload_state": ["pending", "stored", "discarded", "queued", "processing", "processed", "failed"]
           }
         }
 } as const

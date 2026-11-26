@@ -292,5 +292,81 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------------------------------------
+-- Results fixture (Phase 4A). Call it as postgres.
+--
+-- tests.results_exam(p_home, p_centre, p_totals, p_subject) returns the exam's id. An exam (tests.marking_exam) whose
+-- marking is finished and approved (exam_marking.approved_at set, by a new admin), with candidates whose scripts are
+-- checked, each with a final mark for every leaf question.
+--   p_home    int        candidates who sat at home (default 2); their bookings are sitting 'home', paid.
+--   p_centre  int        candidates who sat at a centre (default 1); sitting 'centre', paid.
+--   p_totals  numeric[]  each candidate's total, in order: the home candidates first, then the centre ones. Default: the
+--             first candidate gets the paper's maximum (24) and each next one 2 marks fewer (22, 20, ...), never below 0.
+--             A total is spread over the leaves in paper order (1, 2a, 2b, 3, then 4 last), so a total up to 24 is
+--             counted whole by script_final_total. A total above 24 or below 0, or fewer entries than candidates, raises.
+--   p_subject bigint     the exam's subject (default 1).
+-- The paper (maximum 24): question 1 (10 marks); question 2 with parts (a) 3 and (b) 5; question 3 (6); question 4 (5).
+-- Questions 2, 3 and 4 are one option group "Answer 2 of 3" (choose 2): the best two of 8, 6 and 5 count.
+-- The scripts are those of tests.verified_script, made 'checked'; each has one marking unit (submitted, checked) with
+-- its final marks (source 'first'). No result rows are made: Task 3's preparing does that.
+-- ---------------------------------------------------------------------------------------------
+create or replace function tests.results_exam(p_home int default 2, p_centre int default 1,
+  p_totals numeric[] default null, p_subject bigint default 1)
+returns uuid
+language plpgsql
+as $$
+declare
+  v_exam uuid := tests.marking_exam(p_subject);
+  v_admin uuid := tests.create_user('admin', 'active');
+  v_og uuid;
+  v_two uuid;
+  v_n int := p_home + p_centre;
+  v_i int;
+  v_total numeric;
+  v_left numeric;
+  v_script uuid;
+  v_unit uuid;
+  v_q record;
+  v_put numeric;
+begin
+  if p_totals is not null and cardinality(p_totals) < v_n then
+    raise exception 'tests.results_exam: % totals given for % candidates', cardinality(p_totals), v_n;
+  end if;
+  insert into public.exam_option_groups (exam_id, label, choose) values (v_exam, 'Answer 2 of 3', 2) returning id into v_og;
+  insert into public.exam_questions (exam_id, label, position, max_mark, pages) values (v_exam, '1', 1, 10, '{1}');
+  insert into public.exam_questions (exam_id, label, position, pages, option_group_id) values (v_exam, '2', 2, '{2}', v_og)
+  returning id into v_two;
+  insert into public.exam_questions (exam_id, parent_id, label, position, max_mark, pages)
+  values (v_exam, v_two, 'a', 1, 3, '{2}'), (v_exam, v_two, 'b', 2, 5, '{2}');
+  insert into public.exam_questions (exam_id, label, position, max_mark, pages, option_group_id)
+  values (v_exam, '3', 3, 6, '{3}', v_og), (v_exam, '4', 4, 5, '{3}', v_og);
+
+  for v_i in 1 .. v_n loop
+    v_total := coalesce(p_totals[v_i], greatest(24 - 2 * (v_i - 1), 0));
+    if v_total < 0 or v_total > 24 then
+      raise exception 'tests.results_exam: total % is outside 0 to 24', v_total;
+    end if;
+    v_script := tests.verified_script(v_exam, (case when v_i <= p_home then 'home' else 'centre' end)::public.script_source);
+    update public.scripts set state = 'checked' where id = v_script;
+    insert into public.marking_units (script_id, exam_id, state, check_state, checked_at)
+    values (v_script, v_exam, 'submitted', 'checked', now()) returning id into v_unit;
+    v_left := v_total;
+    for v_q in
+      select q.id, q.max_mark from public.exam_questions q
+      where q.exam_id = v_exam and q.max_mark is not null
+      order by case q.label when '1' then 1 when 'a' then 2 when 'b' then 3 when '3' then 4 else 5 end
+    loop
+      v_put := least(v_left, v_q.max_mark);
+      v_left := v_left - v_put;
+      insert into public.final_marks (unit_id, question_id, mark, source, reason) values (v_unit, v_q.id, v_put, 'first', 'fixture');
+    end loop;
+  end loop;
+
+  update public.exam_marking set opened_at = now() - interval '1 day', approved_at = now(), approved_by = v_admin
+  where exam_id = v_exam;
+  return v_exam;
+end;
+$$;
+
 grant usage on schema tests to anon, authenticated;
 grant execute on function tests.as_postgres() to anon, authenticated;
