@@ -226,8 +226,8 @@ describe("taking a script back from the markers", () => {
     expect(actionText("marking_script_handed_back")).toBe("Handed back to the markers");
   });
   it("knows which scripts are with the markers", () => {
-    expect(["ready_to_mark", "marking", "marked"].every((s) => beingMarked(s as never))).toBe(true);
-    expect(["verified", "needs_attention", "checked", "final", "void"].some((s) => beingMarked(s as never))).toBe(false);
+    expect(["ready_to_mark", "marking", "marked", "checked"].every((s) => beingMarked(s as never))).toBe(true);
+    expect(["verified", "needs_attention", "final", "void"].some((s) => beingMarked(s as never))).toBe(false);
   });
   it("says in words why a script cannot be handed back yet", () => {
     expect(handBackBlocked(takenBack("needs_attention"))).toBe(

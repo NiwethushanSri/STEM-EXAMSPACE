@@ -24,7 +24,6 @@ const eslintConfig = defineConfig([
     files: [
       "src/app/admin/exams/page.tsx",
       "src/app/admin/notices/page.tsx",
-      "src/app/examiner/papers/page.tsx",
       "src/app/parent/notices/page.tsx",
       "src/app/parent/page.tsx",
       "src/app/parent/results/page.tsx",

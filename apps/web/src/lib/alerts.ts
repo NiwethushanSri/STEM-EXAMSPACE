@@ -350,9 +350,10 @@ export function scriptsDashboardAlerts(d: ScriptsDashboard): StaffAlert[] {
 // ---------------------------------------------------------------------------------------------
 // Staff alerts from the marking dashboard (public.marking_dashboard), shown on the admin home. Pure, as above.
 
-/** One exam whose marking is open, or closed in the last 14 days: its pieces left (not submitted), marked (submitted)
- * and on hold (a held piece is also left or marked), its deadline, and whether marking is overdue (the deadline passed,
- * marking not closed and a piece not submitted). */
+/** One exam whose marking is open, closed in the last 14 days, or not approved: its pieces left (not submitted) and
+ * marked (submitted), its scripts on hold (a held piece is also left or marked), its deadline, and whether marking is
+ * overdue (the deadline passed, marking not closed and a piece not submitted). 3B: its scripts checked, with the lead
+ * marker and waiting for a second marker, and whether its marking is approved. */
 export type MarkingDashboardExam = {
   examId: string;
   title: string;
@@ -362,20 +363,35 @@ export type MarkingDashboardExam = {
   left: number;
   marked: number;
   onHold: number;
+  checked: number;
+  withLead: number;
+  waitingSecond: number;
+  approved: boolean;
 };
 
 export type MarkingDashboard = {
   exams: MarkingDashboardExam[];
-  /** The exams' pieces left and on hold, and how many of them are overdue. */
+  /** The exams' pieces left and scripts on hold, and how many of the exams are overdue. */
   left: number;
   onHold: number;
   overdueExams: number;
-  /** Open marking alerts, of any exam. */
+  /** Scripts with an open marking alert, of any exam. */
   alertsOpen: number;
   /** Marking pictures that wait for staff to check them (the "Marking pictures to check" tab). */
   picturesToCheck: number;
   /** Pieces an admin assigned that nobody has saved for 7 days (marking open, not on hold). */
   staleAssigned: number;
+  /** 3B: the exams' scripts with the lead marker and waiting for a second marker, and of those waiting the ones nobody
+   * can second-mark. */
+  withLead: number;
+  waitingSecond: number;
+  stuckSecond: number;
+  /** Markers paused on one of the exams (each marker once). */
+  markersPaused: number;
+  /** Listed exams whose marking nothing blocks from approval, and those approved with something blocking (a script
+   * arrived or changed after the approval). */
+  readyToApprove: number;
+  approvedStale: number;
 };
 
 function markingExam(x: unknown): MarkingDashboardExam | null {
@@ -392,6 +408,10 @@ function markingExam(x: unknown): MarkingDashboardExam | null {
     left: counted(x.left),
     marked: counted(x.marked),
     onHold: counted(x.on_hold),
+    checked: counted(x.checked),
+    withLead: counted(x.with_lead),
+    waitingSecond: counted(x.waiting_second),
+    approved: x.approved === true,
   };
 }
 
@@ -407,6 +427,12 @@ export function parseMarkingDashboard(data: unknown): MarkingDashboard | null {
     alertsOpen: counted(t.alerts_open),
     picturesToCheck: counted(t.pictures_to_check),
     staleAssigned: counted(t.stale_assigned),
+    withLead: counted(t.with_lead),
+    waitingSecond: counted(t.waiting_second),
+    stuckSecond: counted(t.stuck_second),
+    markersPaused: counted(t.markers_paused),
+    readyToApprove: counted(t.ready_to_approve),
+    approvedStale: counted(t.approved_stale),
   };
 }
 
@@ -437,4 +463,52 @@ export function markingAlerts(d: MarkingDashboard): StaffAlert[] {
     });
   }
   return out;
+}
+
+/** What staff should act on in the checks on the marking (3B), the most urgent first: approvals a script arrived or
+ * changed after (Phase 4 will not prepare results while one is stale), scripts waiting for a second marker whom nobody
+ * can be, scripts with the lead marker, paused markers, and exams whose marking nothing blocks from approval. Scripts
+ * that only wait for a second marker are not an alert: someone can take them. */
+export function checkingAlerts(d: MarkingDashboard): StaffAlert[] {
+  const out: StaffAlert[] = [];
+  if (d.approvedStale > 0) {
+    out.push({
+      id: "checking-stale",
+      tone: "red",
+      text: `A script arrived or changed after the marking of ${plural(d.approvedStale, "exam", "exams")} was approved.`,
+      href: "/admin/marking",
+    });
+  }
+  if (d.stuckSecond > 0) {
+    out.push({
+      id: "checking-stuck",
+      tone: "red",
+      text:
+        d.stuckSecond === 1
+          ? "1 script waits for a second marker and nobody can take it."
+          : `${d.stuckSecond} scripts wait for a second marker and nobody can take them.`,
+      href: "/admin/marking",
+    });
+  }
+  if (d.withLead > 0) {
+    out.push({ id: "checking-with-lead", tone: "amber", text: `${plural(d.withLead, "script waits", "scripts wait")} for the lead marker.`, href: "/marking/review" });
+  }
+  if (d.markersPaused > 0) {
+    out.push({ id: "checking-paused", tone: "amber", text: `${plural(d.markersPaused, "marker is", "markers are")} paused.`, href: "/marking/review?tab=markers" });
+  }
+  if (d.readyToApprove > 0) {
+    out.push({
+      id: "checking-ready",
+      tone: "amber",
+      text: d.readyToApprove === 1 ? "1 exam is ready for its marking to be approved." : `${d.readyToApprove} exams are ready for their marking to be approved.`,
+      href: "/admin/marking",
+    });
+  }
+  return out;
+}
+
+/** The alerts with every red one first, each tone keeping its own order (a stable sort), so alerts joined from two
+ * lists still put the most urgent first. */
+export function redFirst(alerts: StaffAlert[]): StaffAlert[] {
+  return [...alerts].sort((a, b) => (a.tone === b.tone ? 0 : a.tone === "red" ? -1 : 1));
 }

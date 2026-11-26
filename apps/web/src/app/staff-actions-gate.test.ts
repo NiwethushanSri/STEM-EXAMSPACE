@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // A signed-in teacher (or anyone outside the allowed roles) calling a staff server action directly must be
@@ -136,7 +138,8 @@ describe("marking actions", () => {
     await expect(m.releaseAlert(UUID, "Pictures checked")).rejects.toThrow("NEXT_REDIRECT");
     await expect(m.noteAlert(UUID, "Seen it")).rejects.toThrow("NEXT_REDIRECT");
     await expect(m.releaseAllAlerts(UUID, "All checked")).rejects.toThrow("NEXT_REDIRECT");
-    expect(state.calls).toHaveLength(6);
+    await expect(m.markingFeedback(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(7);
     expect(state.calls.every((c) => c.join() === "corrector,teacher,admin,owner")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
   });
@@ -147,6 +150,61 @@ describe("marking actions", () => {
     await expect(a.assignSome(UUID, null, UUID, 5, "Even the load")).rejects.toThrow("NEXT_REDIRECT");
     await expect(a.takeBackUnits([UUID], "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
     await expect(a.reassignUnits([UUID], UUID, "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(4);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the lead's review ones are refused for a tutor and touch nothing", async () => {
+    state.role = "tutor";
+    const r = await import("./marking/review/actions");
+    const marks = [{ question_id: UUID, mark: 1, na: false }];
+    await expect(r.settleReview(UUID, "first_stands", 1, 1, "Agreed with the first")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.settleReview(UUID, "lead_marks", 1, 1, "My own view", marks)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.acceptReview(UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.sendBack(UUID, "same", "Look at 2(b) again.", "Too generous")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.sampleMarker(UUID, UUID, 5)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.setFinalMarks(UUID, marks, "Misread 1(a)")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.setFinalMarks(UUID, marks, "Misread 1(a)", UUID)).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.clearMarker(UUID, UUID, "Practice is good")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.pauseMarker(UUID, UUID, "Too many misses")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.setStandard(UUID, "practice")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(r.retireStandard(UUID, "No longer fair")).rejects.toThrow("NEXT_REDIRECT");
+    expect(state.calls).toHaveLength(11);
+    expect(state.calls.every((c) => c.join() === "corrector,teacher,admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the approval ones are refused for a teacher and a corrector (a lead marker too) and touch nothing", async () => {
+    const a = await import("./admin/marking/[examId]/approval/actions");
+    for (const role of ["teacher", "corrector"]) {
+      state.role = role;
+      await expect(a.approveMarking(UUID, "Every script is checked.")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(a.approveMarking(UUID, "")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(a.withdrawApproval(UUID, "A script was marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
+    }
+    expect(state.calls).toHaveLength(6);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the marker pay ones are refused for a teacher and a corrector (a lead marker too) and touch nothing", async () => {
+    const p = await import("./admin/marking/payments/actions");
+    for (const role of ["teacher", "corrector"]) {
+      state.role = role;
+      await expect(p.setRates(UUID, [{ groupId: null, pence: 1250 }])).rejects.toThrow("NEXT_REDIRECT");
+      await expect(p.setRates(UUID, [{ groupId: UUID, pence: 300 }], "New rate agreed")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(p.fixMonth("2027-03")).rejects.toThrow("NEXT_REDIRECT");
+      await expect(p.exportCsv("2027-03")).rejects.toThrow("NEXT_REDIRECT");
+    }
+    expect(state.calls).toHaveLength(8);
+    expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
+    expect(createClient).not.toHaveBeenCalled();
+  });
+  it("the admin second-marking ones are refused for a corrector (a lead marker too) and touch nothing", async () => {
+    state.role = "corrector";
+    const a = await import("./admin/marking/actions");
+    await expect(a.addSecond([UUID], "A second look")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.dropSecond([UUID], "Nobody can take it")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.assignSecond([UUID], UUID, "Cover for Ann")).rejects.toThrow("NEXT_REDIRECT");
+    await expect(a.takeBackSecond([UUID], "Marked wrongly")).rejects.toThrow("NEXT_REDIRECT");
     expect(state.calls).toHaveLength(4);
     expect(state.calls.every((c) => c.join() === "admin,owner")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
@@ -163,5 +221,13 @@ describe("attendance actions called by a student or parent", () => {
     expect(state.calls).toHaveLength(3);
     expect(state.calls.every((c) => c.join() === "admin,owner,teacher")).toBe(true);
     expect(createClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("the examiner demonstration pages (3B Task 13)", () => {
+  it("are gone, and so is their route rule: /examiner is no staff area any more", async () => {
+    expect(existsSync(fileURLToPath(new URL("./examiner", import.meta.url)))).toBe(false);
+    const { config } = await import("@/proxy");
+    expect(config.matcher.some((m) => m.startsWith("/examiner"))).toBe(false);
   });
 });

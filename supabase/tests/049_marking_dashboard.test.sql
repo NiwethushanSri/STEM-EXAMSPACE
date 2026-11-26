@@ -10,7 +10,8 @@ select tests.assert_no_owner();
 --      (withdrawn after opening, so its piece is on hold and counted nowhere);
 --   b: deadline in 3 hours; script b1 (open);
 --   c: deadline a day ago, closed 3 days ago (still listed); script c1, assigned to m1 8 days ago;
---   d: closed 20 days ago (not listed); f: settings saved, never opened (not listed);
+--   d: closed 20 days ago, not approved (still listed: it waits for approval); f: settings saved, never opened (not
+--      listed);
 --   s: no deadline; scripts s1 to s7 held in the ways the stale test describes.
 -- The pieces' states, holds, assignments and markings are written directly, as postgres. The local database may hold
 -- other exams, so the figures that count every exam (the totals) are compared with a dashboard read before the
@@ -59,7 +60,8 @@ create function pg_temp.scripts(p_exam text, p_names text[]) returns void langua
 -- Opens exam p's marking with that deadline (as marking_open would) and makes its verified scripts ready.
 create function pg_temp.open(p text, p_deadline timestamptz) returns void language plpgsql as $$
 begin
-  insert into public.exam_marking (exam_id, deadline, opened_at, opened_by) values (pg_temp.k(p), p_deadline, now(), pg_temp.uid('admin'));
+  insert into public.exam_marking (exam_id, deadline, opened_at, opened_by) values (pg_temp.k(p), p_deadline, now(), pg_temp.uid('admin'))
+  on conflict (exam_id) do update set deadline = excluded.deadline, opened_at = excluded.opened_at, opened_by = excluded.opened_by;
   perform public.marking_exam_sync(pg_temp.k(p), null);
 end $$;
 -- Sets a script's piece to a state, on hold (picture_changed) or not.
@@ -98,7 +100,7 @@ select pg_temp.open('b', now() + interval '3 hours');
 select pg_temp.open('c', now() - interval '1 day');
 select pg_temp.open('d', null);
 select pg_temp.open('s', null);
-insert into public.exam_marking (exam_id) values (pg_temp.k('f'));
+insert into public.exam_marking (exam_id) values (pg_temp.k('f')) on conflict (exam_id) do nothing;
 update public.exam_marking set closed_at = now() - interval '3 days', closed_by = pg_temp.uid('admin') where exam_id = pg_temp.k('c');
 update public.exam_marking set closed_at = now() - interval '20 days', closed_by = pg_temp.uid('admin') where exam_id = pg_temp.k('d');
 
@@ -140,16 +142,16 @@ select is(pg_temp.counts('d', 'a'), '2 2 2',
 select is(pg_temp.counts('d', 'b'), '1 0 0', 'an exam with one open piece: 1 left');
 select is(array(select x ->> 'title' from jsonb_array_elements(pg_temp.r('d') -> 'exams') x
                 where (x ->> 'exam_id')::uuid in (select id from kv) order by x ->> 'title'),
-  array['ZZ Dash a', 'ZZ Dash b', 'ZZ Dash c', 'ZZ Dash s'],
-  'exams whose marking is open, or closed in the last 14 days, are listed; one closed 20 days ago or never opened is not');
+  array['ZZ Dash a', 'ZZ Dash b', 'ZZ Dash c', 'ZZ Dash d', 'ZZ Dash s'],
+  'exams whose marking is open, closed in the last 14 days, or not approved are listed (d closed 20 days ago and waits for approval: the final review''s issue 5); one never opened is not');
 select is(array[pg_temp.f('d', 'a', 'title'), pg_temp.f('d', 'a', 'paper'), (pg_temp.f('d', 'a', 'deadline')::timestamptz = now() + interval '1 day')::text],
   array['ZZ Dash a', 'Paper 1', 'true'], 'each row names the exam, its paper and its deadline');
 select is(array[(pg_temp.r('d') -> 'totals' ->> 'left')::int, (pg_temp.r('d') -> 'totals' ->> 'on_hold')::int],
   array[(select sum((x ->> 'left')::int)::int from jsonb_array_elements(pg_temp.r('d') -> 'exams') x),
         (select sum((x ->> 'on_hold')::int)::int from jsonb_array_elements(pg_temp.r('d') -> 'exams') x)],
   'the totals left and on hold add up the listed exams');
-select is(array[pg_temp.more('d', 'base', 'left'), pg_temp.more('d', 'base', 'on_hold')], array[2 + 1 + 1 + 7, 2 + 1],
-  'these exams add 11 pieces left (a 2, b 1, c 1, s 7) and 3 on hold (a 2, s 1)');
+select is(array[pg_temp.more('d', 'base', 'left'), pg_temp.more('d', 'base', 'on_hold')], array[2 + 1 + 1 + 1 + 7, 2 + 1],
+  'these exams add 12 pieces left (a 2, b 1, c 1, d 1, s 7) and 3 on hold (a 2, s 1)');
 
 -- ---------------------------------------------------------------------------------------------
 -- overdue_only_after_the_deadline_with_work_left
@@ -197,9 +199,9 @@ insert into res values ('d2', public.marking_dashboard()), ('checks', public.scr
 select tests.as_postgres();
 
 select is(array[pg_temp.more('d2', 'base', 'alerts_open'), (pg_temp.r('d2') -> 'totals' ->> 'alerts_open')::int],
-  array[2, (select count(*)::int from public.marking_alerts a join public.exams e on e.id = a.exam_id
+  array[2, (select count(distinct a.script_id)::int from public.marking_alerts a join public.exams e on e.id = a.exam_id
             join public.scripts s on s.id = a.script_id where a.state = 'open')],
-  'alerts_open counts every open marking alert (2 more here; the closed one is not counted)');
+  'alerts_open counts the scripts with an open marking alert (2 more here; the closed one is not counted; 3B Task 13: a script with two counts once, 063)');
 select is(pg_temp.more('d2', 'base', 'pictures_to_check'), 1, 'pictures_to_check counts the marking picture staff must check');
 select is((pg_temp.r('d2') -> 'totals' ->> 'pictures_to_check')::int, jsonb_array_length(pg_temp.r('checks') -> 'items'),
   'it is what the list of marking pictures to check shows');

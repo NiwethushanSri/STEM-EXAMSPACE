@@ -20,7 +20,6 @@ const AREAS: Record<string, readonly AppRole[]> = {
   // Mock sample-data areas: nobody may open them until their part of the build; visitors go home.
   "/student": [],
   "/parent": [],
-  "/examiner": [],
 };
 
 function areaOf(pathname: string): string | null {
@@ -82,5 +81,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/owner/:path*", "/admin/:path*", "/teacher/:path*", "/tutor/:path*", "/corrector/:path*", "/marking/:path*", "/student/:path*", "/parent/:path*", "/examiner/:path*", "/account/:path*"],
+  matcher: ["/owner/:path*", "/admin/:path*", "/teacher/:path*", "/tutor/:path*", "/corrector/:path*", "/marking/:path*", "/student/:path*", "/parent/:path*", "/account/:path*"],
 };

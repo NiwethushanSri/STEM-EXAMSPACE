@@ -81,6 +81,13 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
   const progress = progressRes.error ? null : parseProgress(progressRes.data);
   const alerts = alertsRes.error ? null : parseAlerts(alertsRes.data);
   if (!progress) return failed("Marking");
+  // 3B Task 10: which exams' marking is approved, for each exam's approval link (left out when it cannot be read).
+  const approvalRes = progress.length
+    ? await supabase.from("exam_marking").select("exam_id, approved_at").in("exam_id", progress.map((e) => e.examId))
+    : { data: [], error: null };
+  const approved = approvalRes.error
+    ? undefined
+    : new Set((approvalRes.data ?? []).filter((m) => m.approved_at !== null).map((m) => m.exam_id));
   const now = new Date().toISOString();
   // The exam asked for, else the first whose marking is open, else the first.
   const exam = progress.find((e) => e.examId === first(sp.exam)) ?? progress.find((e) => e.openedAt && !e.closedAt) ?? progress[0] ?? null;
@@ -88,7 +95,7 @@ async function Body({ searchParams }: { searchParams: Promise<Params> }) {
   return (
     <div className="space-y-6">
       <Card title="Progress">
-        <MarkingProgress exams={progress} now={now} scriptsLink releaseAll />
+        <MarkingProgress exams={progress} now={now} scriptsLink releaseAll reviewLink statsLink approved={approved} />
       </Card>
       {exam && (
         <div id="scripts">

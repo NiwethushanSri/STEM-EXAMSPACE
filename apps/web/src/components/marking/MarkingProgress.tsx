@@ -21,21 +21,31 @@ function status(e: ProgressExam): { text: string; tone: "slate" | "green" | "blu
   return { text: "Not open yet", tone: "blue" };
 }
 
-/** What is left per exam and per marker: the scripts waiting, ready to mark, being marked and marked; each marker's
- * scripts taken and submitted; the alerts open. No candidate name. `scriptsLink` links each exam to its list of
- * scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
- * changed pictures can be released even when the alerts list cannot be loaded. `now` is the server's clock when the
- * page was made. */
+/** What is left per exam and per marker: the scripts waiting, ready to mark, being marked and marked; once marking has
+ * opened, the checks (3B): "12 checked · 3 with the lead marker · 2 waiting for a second marker", leaving out what is
+ * 0; each marker's scripts taken and submitted; the alerts open. No candidate name. `scriptsLink` links each exam to
+ * its list of scripts on the admin marking page. `releaseAll` offers "Release all" on each exam with an open alert, so the holds of
+ * changed pictures can be released even when the alerts list cannot be loaded. `reviewLink` (3B) links each exam whose
+ * marking has opened to the lead marker's review of it, and `statsLink` to its marker statistics on the admin pages.
+ * `approved` (3B Task 10), when given, links each exam whose marking has opened to its approval page on the admin pages:
+ * "Approve marking", or "Approved" once its marking is (the ids of the approved exams). `now` is the server's clock when
+ * the page was made. */
 export function MarkingProgress({
   exams,
   now,
   scriptsLink = false,
   releaseAll = false,
+  reviewLink = false,
+  statsLink = false,
+  approved,
 }: {
   exams: ProgressExam[];
   now: string;
   scriptsLink?: boolean;
   releaseAll?: boolean;
+  reviewLink?: boolean;
+  statsLink?: boolean;
+  approved?: ReadonlySet<string>;
 }) {
   const at = new Date(now);
   if (exams.length === 0) return <p className="text-sm text-slate-600">No exam has marking set up yet.</p>;
@@ -70,6 +80,17 @@ export function MarkingProgress({
                 </div>
               ))}
             </dl>
+            {e.openedAt && (
+              <p className="text-sm text-slate-700" data-testid="progress-checks">
+                {[
+                  `${e.scripts.checked} checked`,
+                  e.checks.withLead > 0 ? `${e.checks.withLead} with the lead marker` : null,
+                  e.checks.waitingSecond > 0 ? `${e.checks.waitingSecond} waiting for a second marker` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            )}
             {(e.units.onHold > 0 || e.alertsOpen > 0) && (
               <p className="text-sm text-amber-900">
                 {[
@@ -89,10 +110,30 @@ export function MarkingProgress({
                 rows={e.markers.map((m) => [m.name, m.taken, m.submitted, m.lastSavedAt ? ukDayTime(m.lastSavedAt) : "—"])}
               />
             )}
-            {scriptsLink && (
-              <Link href={`/admin/marking?exam=${e.examId}#scripts`} className="inline-block text-sm font-medium text-blue-700 underline">
-                Show the scripts of {e.title}
-              </Link>
+            {(scriptsLink || ((reviewLink || statsLink || approved) && e.openedAt)) && (
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                {scriptsLink && (
+                  <Link href={`/admin/marking?exam=${e.examId}#scripts`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    Show the scripts of {e.title}
+                  </Link>
+                )}
+                {reviewLink && e.openedAt && (
+                  <Link href={`/marking/review?exam=${e.examId}`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    Review the marking of {e.title}
+                  </Link>
+                )}
+                {statsLink && e.openedAt && (
+                  <Link href={`/admin/marking/${e.examId}/statistics`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    Marker statistics for {e.title}
+                  </Link>
+                )}
+                {approved && e.openedAt && (
+                  <Link href={`/admin/marking/${e.examId}/approval`} className="inline-block text-sm font-medium text-blue-700 underline">
+                    {approved.has(e.examId) ? "Approved" : "Approve marking"}
+                    <span className="sr-only"> for {e.title}</span>
+                  </Link>
+                )}
+              </div>
             )}
           </li>
         );

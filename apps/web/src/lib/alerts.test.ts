@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   QUEUE_STUCK_MINUTES,
+  checkingAlerts,
   markingAlerts,
   parseMarkingDashboard,
   parseScriptsDashboard,
+  redFirst,
   scriptsDashboardAlerts,
   type MarkingDashboard,
   type ScriptsDashboard,
@@ -158,21 +160,77 @@ describe("scriptsDashboardAlerts", () => {
   });
 });
 
+/** A marking dashboard with nothing to count. */
+const NONE: MarkingDashboard = {
+  exams: [],
+  left: 0,
+  onHold: 0,
+  overdueExams: 0,
+  alertsOpen: 0,
+  picturesToCheck: 0,
+  staleAssigned: 0,
+  withLead: 0,
+  waitingSecond: 0,
+  stuckSecond: 0,
+  markersPaused: 0,
+  readyToApprove: 0,
+  approvedStale: 0,
+};
+
 describe("parseMarkingDashboard", () => {
   const marking = {
     ok: true,
     exams: [
-      { exam_id: EXAM, title: "Maths mock", paper: "Paper 1", deadline: "2026-12-12T17:00:00Z", overdue: true, left: 12, marked: 30, on_hold: 2 },
-      { exam_id: CENTRE, title: "Physics", paper: null, deadline: null, overdue: false, left: 0, marked: 8, on_hold: 0 },
+      {
+        exam_id: EXAM,
+        title: "Maths mock",
+        paper: "Paper 1",
+        deadline: "2026-12-12T17:00:00Z",
+        overdue: true,
+        left: 12,
+        marked: 30,
+        on_hold: 2,
+        checked: 20,
+        with_lead: 3,
+        waiting_second: 4,
+        approved: false,
+      },
+      { exam_id: CENTRE, title: "Physics", paper: null, deadline: null, overdue: false, left: 0, marked: 8, on_hold: 0, checked: 8, with_lead: 0, waiting_second: 0, approved: true },
     ],
-    totals: { left: 12, on_hold: 2, overdue_exams: 1, alerts_open: 3, pictures_to_check: 4, stale_assigned: 5 },
+    totals: {
+      left: 12,
+      on_hold: 2,
+      overdue_exams: 1,
+      alerts_open: 3,
+      pictures_to_check: 4,
+      stale_assigned: 5,
+      with_lead: 3,
+      waiting_second: 4,
+      stuck_second: 1,
+      markers_paused: 2,
+      ready_to_approve: 1,
+      approved_stale: 1,
+    },
   };
 
-  it("reads the marking figures", () => {
+  it("reads the marking figures, with the checks", () => {
     expect(parseMarkingDashboard(marking)).toEqual({
       exams: [
-        { examId: EXAM, title: "Maths mock", paper: "Paper 1", deadline: "2026-12-12T17:00:00Z", overdue: true, left: 12, marked: 30, onHold: 2 },
-        { examId: CENTRE, title: "Physics", paper: null, deadline: null, overdue: false, left: 0, marked: 8, onHold: 0 },
+        {
+          examId: EXAM,
+          title: "Maths mock",
+          paper: "Paper 1",
+          deadline: "2026-12-12T17:00:00Z",
+          overdue: true,
+          left: 12,
+          marked: 30,
+          onHold: 2,
+          checked: 20,
+          withLead: 3,
+          waitingSecond: 4,
+          approved: false,
+        },
+        { examId: CENTRE, title: "Physics", paper: null, deadline: null, overdue: false, left: 0, marked: 8, onHold: 0, checked: 8, withLead: 0, waitingSecond: 0, approved: true },
       ],
       left: 12,
       onHold: 2,
@@ -180,26 +238,27 @@ describe("parseMarkingDashboard", () => {
       alertsOpen: 3,
       picturesToCheck: 4,
       staleAssigned: 5,
+      withLead: 3,
+      waitingSecond: 4,
+      stuckSecond: 1,
+      markersPaused: 2,
+      readyToApprove: 1,
+      approvedStale: 1,
     });
   });
 
   it("is null for a refusal or a broken answer, and leaves out malformed rows", () => {
     expect(parseMarkingDashboard({ ok: false, code: "forbidden" })).toBeNull();
     expect(parseMarkingDashboard(null)).toBeNull();
-    expect(parseMarkingDashboard({ ok: true, exams: [{ exam_id: 5 }, { exam_id: EXAM, title: "T", left: -1, overdue: "yes" }] })).toEqual({
-      exams: [{ examId: EXAM, title: "T", paper: null, deadline: null, overdue: false, left: 0, marked: 0, onHold: 0 }],
-      left: 0,
-      onHold: 0,
-      overdueExams: 0,
-      alertsOpen: 0,
-      picturesToCheck: 0,
-      staleAssigned: 0,
+    expect(parseMarkingDashboard({ ok: true, exams: [{ exam_id: 5 }, { exam_id: EXAM, title: "T", left: -1, overdue: "yes", approved: "yes" }] })).toEqual({
+      ...NONE,
+      exams: [{ examId: EXAM, title: "T", paper: null, deadline: null, overdue: false, left: 0, marked: 0, onHold: 0, checked: 0, withLead: 0, waitingSecond: 0, approved: false }],
     });
   });
 });
 
 describe("markingAlerts", () => {
-  const none: MarkingDashboard = { exams: [], left: 0, onHold: 0, overdueExams: 0, alertsOpen: 0, picturesToCheck: 0, staleAssigned: 0 };
+  const none: MarkingDashboard = NONE;
 
   it("marking_alerts_texts: overdue exams, scripts on hold, pictures to check and untouched assigned scripts, the most urgent first", () => {
     expect(markingAlerts(none)).toEqual([]);
@@ -219,5 +278,45 @@ describe("markingAlerts", () => {
       "1 marking picture waits to be checked.",
       "1 assigned script has not been touched for a week.",
     ]);
+  });
+});
+
+describe("checkingAlerts", () => {
+  it("checking_alerts_texts: a stale approval, stuck scripts, scripts with the lead, paused markers and exams ready to approve, the most urgent first", () => {
+    expect(checkingAlerts(NONE)).toEqual([]);
+    // Scripts waiting for a second marker whom somebody can be are not an alert, nor are 3A's figures.
+    expect(checkingAlerts({ ...NONE, waitingSecond: 6, overdueExams: 1, onHold: 2 })).toEqual([]);
+    expect(checkingAlerts({ ...NONE, approvedStale: 2, stuckSecond: 3, withLead: 4, markersPaused: 5, readyToApprove: 6 })).toEqual([
+      { id: "checking-stale", tone: "red", text: "A script arrived or changed after the marking of 2 exams was approved.", href: "/admin/marking" },
+      { id: "checking-stuck", tone: "red", text: "3 scripts wait for a second marker and nobody can take them.", href: "/admin/marking" },
+      { id: "checking-with-lead", tone: "amber", text: "4 scripts wait for the lead marker.", href: "/marking/review" },
+      { id: "checking-paused", tone: "amber", text: "5 markers are paused.", href: "/marking/review?tab=markers" },
+      { id: "checking-ready", tone: "amber", text: "6 exams are ready for their marking to be approved.", href: "/admin/marking" },
+    ]);
+  });
+
+  it("uses the singular for one", () => {
+    expect(checkingAlerts({ ...NONE, approvedStale: 1, stuckSecond: 1, withLead: 1, markersPaused: 1, readyToApprove: 1 }).map((a) => a.text)).toEqual([
+      "A script arrived or changed after the marking of 1 exam was approved.",
+      "1 script waits for a second marker and nobody can take it.",
+      "1 script waits for the lead marker.",
+      "1 marker is paused.",
+      "1 exam is ready for its marking to be approved.",
+    ]);
+  });
+});
+
+describe("redFirst", () => {
+  it("home_alerts_red_before_amber: the joined marking and checking alerts, every red one first, each tone in its own order", () => {
+    const d: MarkingDashboard = { ...NONE, overdueExams: 1, onHold: 2, picturesToCheck: 3, approvedStale: 1, stuckSecond: 2, withLead: 4 };
+    expect(redFirst([...markingAlerts(d), ...checkingAlerts(d)]).map((a) => a.id)).toEqual([
+      "marking-overdue",
+      "checking-stale",
+      "checking-stuck",
+      "marking-on-hold",
+      "marking-pictures",
+      "checking-with-lead",
+    ]);
+    expect(redFirst([])).toEqual([]);
   });
 });

@@ -3,9 +3,20 @@
 import { useRouter } from "next/navigation";
 import { useId, useState } from "react";
 import { ReasonDialog } from "@/components/papers/ReasonDialog";
-import { assignSome, assignUnits, reassignUnits, takeBackUnits, type AllocationActionResult } from "@/app/admin/marking/actions";
+import {
+  addSecond,
+  assignSecond,
+  assignSome,
+  assignUnits,
+  dropSecond,
+  reassignUnits,
+  takeBackSecond,
+  takeBackUnits,
+  type AllocationActionResult,
+} from "@/app/admin/marking/actions";
 import { firstShownText, unitStateLabel, ukDayTime, waitingLabel, type MarkingMode, type UnitRow } from "@/lib/marking-lists";
 import { utcToLondonParts } from "@/lib/london-time";
+import { checkStateText, secondMarkerText } from "@/lib/marking-review";
 
 const BUTTON = "min-h-11 rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50";
 const QUIET = "min-h-11 rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50";
@@ -22,12 +33,48 @@ const STATE_FILTERS: Choice[] = [
   { id: "on_hold", label: "On hold" },
 ];
 
-type Step = { kind: "assign" } | { kind: "reassign" } | { kind: "take_back" } | { kind: "some"; n: number; groupId: string | null };
+type Step =
+  | { kind: "assign" }
+  | { kind: "reassign" }
+  | { kind: "take_back" }
+  | { kind: "some"; n: number; groupId: string | null }
+  // 3B: second marking of the ticked scripts.
+  | { kind: "second_add" }
+  | { kind: "second_drop" }
+  | { kind: "second_assign" }
+  | { kind: "second_take_back" };
+
+/** The steps that give scripts to a marker, so ask which one. */
+const TO_A_MARKER: Step["kind"][] = ["assign", "reassign", "some", "second_assign"];
+const plural = (n: number) => `${n} ${n === 1 ? "script" : "scripts"}`;
+
+const DIALOG_TITLE: Record<Step["kind"], (n: number, some: string) => string> = {
+  assign: (n) => `Assign ${plural(n)}`,
+  reassign: (n) => `Reassign ${plural(n)}`,
+  take_back: (n) => `Take back ${plural(n)}`,
+  some: (_n, some) => some,
+  second_add: (n) => `Second-mark ${plural(n)}`,
+  second_drop: (n) => `Release ${plural(n)} from second marking`,
+  second_assign: (n) => `Assign second marking of ${plural(n)}`,
+  second_take_back: (n) => `Take back second marking of ${plural(n)}`,
+};
+const CONFIRM_LABEL: Record<Step["kind"], string> = {
+  assign: "Assign",
+  reassign: "Reassign",
+  take_back: "Take back",
+  some: "Assign",
+  second_add: "Second-mark these",
+  second_drop: "Release",
+  second_assign: "Assign",
+  second_take_back: "Take back",
+};
 
 /** One exam's scripts (its pieces: whole scripts, or one per question group), filtered by state and marker, with tick
- * boxes for "Assign to…", "Take back" and "Reassign to…", and "Assign the next {n} to…". Each asks for a reason. The
- * script number and index number only; no candidate name. `markers`: the active markers approved for the subject.
- * `more`: the list was cut short (marking_units_list sends at most 2,000), and says so. */
+ * boxes for "Assign to…", "Take back" and "Reassign to…", and "Assign the next {n} to…". 3B: each script's check and
+ * its second marker, and for the ticked scripts "Second-mark these", "Release from second marking", "Assign second
+ * marking to…" and "Take back second marking". Each asks for a reason. The script number and index number only; no
+ * candidate name. `markers`: the active markers approved for the subject. `more`: the list was cut short
+ * (marking_units_list sends at most 2,000), and says so. */
 export function UnitsTable({
   exam,
   exams,
@@ -92,10 +139,14 @@ export function UnitsTable({
   /** The dialog's confirm: a marker must be chosen where the action gives scripts to one. */
   const confirm = (reason: string) => {
     if (!step) return;
-    if (step.kind !== "take_back" && !marker) return setError("Choose a marker.");
+    if (TO_A_MARKER.includes(step.kind) && !marker) return setError("Choose a marker.");
     if (step.kind === "assign") return run(() => assignUnits(chosen, marker, reason));
     if (step.kind === "reassign") return run(() => reassignUnits(chosen, marker, reason));
     if (step.kind === "take_back") return run(() => takeBackUnits(chosen, reason));
+    if (step.kind === "second_add") return run(() => addSecond(chosen, reason));
+    if (step.kind === "second_drop") return run(() => dropSecond(chosen, reason));
+    if (step.kind === "second_assign") return run(() => assignSecond(chosen, marker, reason));
+    if (step.kind === "second_take_back") return run(() => takeBackSecond(chosen, reason));
     return run(() => assignSome(exam.id, step.groupId, marker, step.n, reason));
   };
 
@@ -169,6 +220,22 @@ export function UnitsTable({
         {chosen.length > MAX && <span className="text-red-700">Tick at most 200 scripts at a time.</span>}
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+        <span className="mr-2 text-slate-700">Second marking of the ticked scripts:</span>
+        <button type="button" className={QUIET} disabled={chosen.length === 0 || chosen.length > MAX} onClick={() => open({ kind: "second_add" })}>
+          Second-mark these
+        </button>
+        <button type="button" className={QUIET} disabled={chosen.length === 0 || chosen.length > MAX} onClick={() => open({ kind: "second_drop" })}>
+          Release from second marking
+        </button>
+        <button type="button" className={QUIET} disabled={chosen.length === 0 || chosen.length > MAX} onClick={() => open({ kind: "second_assign" })}>
+          Assign second marking to…
+        </button>
+        <button type="button" className={QUIET} disabled={chosen.length === 0 || chosen.length > MAX} onClick={() => open({ kind: "second_take_back" })}>
+          Take back second marking
+        </button>
+      </div>
+
       <div className="flex flex-wrap items-end gap-3 text-sm">
         <label htmlFor={countId} className="flex flex-col gap-1">
           How many
@@ -218,6 +285,8 @@ export function UnitsTable({
                 <th className="py-2 pr-4 font-medium">Last saved</th>
                 <th className="py-2 pr-4 font-medium">Total</th>
                 <th className="py-2 pr-4 font-medium">Held back by</th>
+                <th className="py-2 pr-4 font-medium">Check</th>
+                <th className="py-2 pr-4 font-medium">Second marker</th>
               </tr>
             </thead>
             <tbody>
@@ -235,6 +304,8 @@ export function UnitsTable({
                   <td className="py-2.5 pr-4">{u.lastSavedAt ? ukDayTime(u.lastSavedAt) : "—"}</td>
                   <td className="py-2.5 pr-4">{u.state === "submitted" && u.total !== null ? u.total : "—"}</td>
                   <td className="py-2.5 pr-4">{waitingLabel(u.waiting) || "—"}</td>
+                  <td className="py-2.5 pr-4">{checkStateText(u.checkState) || "—"}</td>
+                  <td className="py-2.5 pr-4">{secondMarkerText(u.second) || "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -245,16 +316,8 @@ export function UnitsTable({
 
       {step && (
         <ReasonDialog
-          title={
-            step.kind === "assign"
-              ? `Assign ${chosen.length} ${chosen.length === 1 ? "script" : "scripts"}`
-              : step.kind === "reassign"
-                ? `Reassign ${chosen.length} ${chosen.length === 1 ? "script" : "scripts"}`
-                : step.kind === "take_back"
-                  ? `Take back ${chosen.length} ${chosen.length === 1 ? "script" : "scripts"}`
-                  : `Assign the next ${step.n} of ${exam.title}`
-          }
-          confirmLabel={step.kind === "take_back" ? "Take back" : step.kind === "reassign" ? "Reassign" : "Assign"}
+          title={DIALOG_TITLE[step.kind](chosen.length, step.kind === "some" ? `Assign the next ${step.n} of ${exam.title}` : "")}
+          confirmLabel={CONFIRM_LABEL[step.kind]}
           busy={busy}
           error={error}
           onCancel={() => setStep(null)}
@@ -265,7 +328,11 @@ export function UnitsTable({
             {step.kind === "reassign" && <p>They are taken back and given to the marker you choose. Marks so far are set aside, not deleted.</p>}
             {step.kind === "take_back" && <p>Each marker&rsquo;s hold ends and their marking is set aside. Nothing is deleted. Submitted scripts are marked again.</p>}
             {step.kind === "some" && <p>The free scripts are chosen as Next script would choose them. Fewer are given when fewer are left.</p>}
-            {step.kind !== "take_back" && markerPicker}
+            {step.kind === "second_add" && <p>Scripts whose first marking is submitted are marked again by a second marker, who does not see the first marks.</p>}
+            {step.kind === "second_drop" && <p>Scripts waiting for a second marker are checked on their first marks. A second marking in progress is set aside.</p>}
+            {step.kind === "second_assign" && <p>The marker keeps their second marking with no time limit. Scripts that cannot go to them are left as they are.</p>}
+            {step.kind === "second_take_back" && <p>Each second marker&rsquo;s hold ends and their second marking is set aside. The first marking is left as it is. Nothing is deleted.</p>}
+            {TO_A_MARKER.includes(step.kind) && markerPicker}
           </div>
         </ReasonDialog>
       )}

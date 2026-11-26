@@ -342,16 +342,20 @@ export function scriptMessageFor(code: string | null | undefined, reason?: strin
 export type StructureContext = "save" | "file";
 
 const STRUCTURE_LOCKED = "Marking has started, so this can no longer be changed.";
+/** 3B Task 10: any change to an approved exam's marking (its questions, checks, scripts, reviews and markers). */
+const MARKING_APPROVED = "This exam's marking has been approved. An admin must withdraw the approval first.";
 
 const structureMessages: Record<StructureContext, Record<string, string>> = {
   save: {
     structure_locked: STRUCTURE_LOCKED,
+    marking_approved: MARKING_APPROVED,
     structure_incomplete: "Finish the questions and their marks first.",
     forbidden: FORBIDDEN,
     reason_required: "Give a reason of 3 to 300 characters.",
     invalid_input:
       "Check the questions: each needs a label and a maximum, on answer or spare pages of this paper, and optional questions must be out of the same total.",
-    conflict: "A maximum cannot go below a mark a marker has already given.",
+    // 3B Task 10: a final mark or a practice or seeded script's mark counts too (exam_structure_save).
+    conflict: "A maximum cannot go below a mark already given.",
     not_found: "This exam no longer exists. Refresh the page.",
   },
   file: {
@@ -386,8 +390,25 @@ export function markerMessageFor(code: string | null | undefined): string {
   return code && Object.hasOwn(markerMessages, code) ? markerMessages[code] : messages.internal;
 }
 
+// 3B: sentences more than one table gives, so a code reads the same wherever staff or a marker meet it.
+const NAME_SEEN = "This marker may have seen a name on this script, so they cannot mark it.";
+const PRACTICE_FIRST = "This marker has not been cleared for live marking on this exam.";
+const MARKER_PAUSED = "This marker is paused on this exam.";
+const YOU_ARE_PAUSED = "Your marking on this exam is paused. The lead marker will be in touch.";
+const PRACTICE_WAIT = "Your practice scripts are with the lead marker.";
+const PRACTICE_NOT_READY = "Practice scripts are not ready yet.";
+const LOCKED = "This script can no longer be changed.";
+const NOT_YOURS = "Choose a script you marked yourself.";
+const TOO_MANY = "There are already 10 of these for this exam.";
+
 /** Failure codes of opening and closing marking for an exam (marking_settings_set, marking_exam_get, marking_open,
- * marking_close, marking_reopen); marking_not_open and marking_closed are also what hand-out answers. */
+ * marking_close, marking_reopen) and of its checks (marking_checks_get, marking_checks_set); marking_not_open and
+ * marking_closed are also what hand-out answers. 3B: also every other code of the checks on the marking (Tasks 2 to
+ * 5), for the lead's and the admin's pages: the pieces a second marking request skips (marking_second_add,
+ * marking_second_drop), practice and seeded scripts (marking_standard_set, as standardMessageFor says them), a marker
+ * not cleared or paused, and the codes only a marker meets (practice_wait, practice_not_ready, locked), in the words
+ * the marker reads; and (Task 10) the codes of approving an exam's marking (marking_approval_get, marking_approve,
+ * marking_approval_withdraw). */
 const markingMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   reason_required: "Give a reason of 3 to 300 characters.",
@@ -399,6 +420,28 @@ const markingMessages: Record<string, string> = {
   no_markers: "Approve at least one marker for this subject first.",
   marking_not_open: "Marking has not opened for this exam.",
   marking_closed: "Marking has closed for this exam.",
+  not_small_subject: "These checks can only be turned off when the subject has one approved marker.",
+  needs_two_markers: "Double marking needs two approved markers. Approve another, or turn it off with a reason.",
+  no_lead: "Choose a lead marker for this subject first.",
+  marking_approved: MARKING_APPROVED,
+  // 3B Task 10: approving an exam's marking while something still blocks it (marking_approve).
+  not_all_checked: "Not every script is checked yet.",
+  // 3B Task 3: a second pass is never given to a marker who saw a name on the script.
+  name_seen: NAME_SEEN,
+  // 3B Task 4: the pieces "Second-mark these" (marking_second_add) or a drop (marking_second_drop) skipped.
+  not_submitted: "This script's first marking is not submitted yet.",
+  settled: "The lead marker has settled this script.",
+  with_lead: "This script is with the lead marker.",
+  already: "This script already has a second marking, or is waiting for one.",
+  not_waiting: "This script is not waiting for a second marker.",
+  // 3B Task 5: practice and seeded scripts, and a marker not cleared after practice or paused on the exam.
+  not_yours: NOT_YOURS,
+  too_many: TOO_MANY,
+  practice_first: PRACTICE_FIRST,
+  paused: MARKER_PAUSED,
+  practice_wait: PRACTICE_WAIT,
+  practice_not_ready: PRACTICE_NOT_READY,
+  locked: LOCKED,
 };
 
 /** Message for a marking open or close RPC failure code; unknown codes get the generic message. */
@@ -421,6 +464,10 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     marking_closed: "Marking has closed for this exam.",
     nothing_left: "Nothing left to mark for now.",
     hold_expired: "Your hold on this script has ended. Press Next script to carry on.",
+    // 3B: Next script for a paused marker, and for one not cleared for live marking.
+    paused: YOU_ARE_PAUSED,
+    practice_wait: PRACTICE_WAIT,
+    practice_not_ready: PRACTICE_NOT_READY,
   },
   admin: {
     forbidden: FORBIDDEN,
@@ -435,6 +482,14 @@ const allocationMessages: Record<AllocationContext, Record<string, string>> = {
     submitted: "This script has been marked. Take it back or reassign it.",
     on_hold: "This script is on hold.",
     not_ready: "This script cannot be handed out yet.",
+    not_eligible: "This script cannot be given to this marker.",
+    // 3B: a second pass is never given to a marker who saw a name on the script, not even by an admin.
+    name_seen: NAME_SEEN,
+    // 3B: a marker not cleared after practice, or paused on the exam, is given no live work.
+    practice_first: PRACTICE_FIRST,
+    paused: MARKER_PAUSED,
+    // 3B Task 10: nothing is assigned or taken back on an approved exam.
+    marking_approved: MARKING_APPROVED,
   },
 };
 
@@ -460,6 +515,11 @@ const markingWorkMessages: Record<string, string> = {
   marking_closed: "Marking has closed for this exam.",
   incomplete: "Give every question a mark, or NR, before you submit.",
   mark_out_of_range: "That mark is not allowed for this question.",
+  // 3B: a change after submit to a piece the lead marker has settled (marking_save).
+  settled: "The lead marker has settled this script. Ask them if a mark should change.",
+  // 3B: a paused marker's work (opening, saving, submitting), and an attempt whose feedback was shown (marking_save).
+  paused: YOU_ARE_PAUSED,
+  locked: LOCKED,
 };
 const markingWorkConflicts: Record<string, string> = {
   rev: "This script was changed on another screen. Reload to carry on.",
@@ -485,9 +545,111 @@ export function markingScreenMessageFor(code: string | null | undefined, reason?
   return allocationMessageFor(code, "marker");
 }
 
+/** Failure codes of the lead's practice and seeded scripts and of clearing and pausing markers (marking_standard_set,
+ * marking_standard_retire, marking_standards_list, marking_marker_clear, marking_marker_pause, marking_exam_markers).
+ * A conflict says why in `reason`: switched_off (the check is off for the exam), already (the script is used already)
+ * or retired (it is no longer used). */
+const standardMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input: "That request was not valid. Reload the page and try again.",
+  not_found: "This could not be found. Refresh the page.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  not_approved: "This marker is not approved to mark this subject.",
+  not_yours: NOT_YOURS,
+  too_many: TOO_MANY,
+  on_hold: "This script is on hold.",
+  // 3B Task 10: no practice or seeded script is made, and no marker cleared or paused, on an approved exam.
+  marking_approved: MARKING_APPROVED,
+};
+const standardConflicts: Record<string, string> = {
+  switched_off: "This check is turned off for this exam.",
+  already: "This script is already used for practice or as a seeded script.",
+  retired: "This script is no longer used.",
+};
+
+/** Message for a practice, seeded script or clearance RPC failure code (and a conflict's reason); unknown codes get the
+ * generic message. */
+export function standardMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") {
+    return reason && Object.hasOwn(standardConflicts, reason) ? standardConflicts[reason] : messages.internal;
+  }
+  return code && Object.hasOwn(standardMessages, code) ? standardMessages[code] : messages.internal;
+}
+
+/** Failure codes of the lead's review (marking_review_list, marking_review_open, marking_review_settle,
+ * marking_review_accept, marking_send_back, marking_review_sample, marking_final_set). A conflict says why in `reason`:
+ * changed (a marker saved a change since the review was opened), settled (the review is closed already), not_submitted
+ * (the first marking is not submitted), with_lead (an open difference or paused marker's script is settled or accepted
+ * instead) or not_checked (the script is not checked yet). */
+const reviewMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input: "Check the details. A note to the marker can be 3 to 1,000 characters.",
+  not_found: "This could not be found. Refresh the page.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  conflict_of_interest: "You cannot review this script because of a declared conflict. Ask an admin.",
+  wrong_kind: "That action does not fit this review.",
+  incomplete: "Give every question a mark, or NR.",
+  mark_out_of_range: "That mark is not allowed for this question.",
+  marking_approved: MARKING_APPROVED,
+  // Ruling R16: a send-back while marking is closed.
+  marking_closed: "Marking has closed for this exam, so nobody could mark this script again.",
+};
+const reviewConflicts: Record<string, string> = {
+  changed: "A marker changed this script while you were looking. Reload to see it.",
+  settled: "This review is already closed. Refresh the page.",
+  not_submitted: "This script's first marking is not submitted.",
+  with_lead: "This script is with the lead marker. Settle or accept it first.",
+  not_checked: "This script is not checked yet.",
+};
+
+/** Message for a lead review RPC failure code (and a conflict's reason); unknown codes get the generic message. */
+export function reviewMessageFor(code: string | null | undefined, reason?: string | null): string {
+  if (code === "conflict") {
+    return reason && Object.hasOwn(reviewConflicts, reason) ? reviewConflicts[reason] : messages.internal;
+  }
+  return code && Object.hasOwn(reviewMessages, code) ? reviewMessages[code] : messages.internal;
+}
+
+/** 3B Task 11: failure codes of marker pay, for admins (marker_rates_get, marker_rates_set, marker_statements_get,
+ * marker_statements_fix, marker_statement_exported). rate_missing comes with the exams that have no rate, and
+ * earlier_month (Ruling R25) with the month to fix first. */
+const paymentMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input: "Enter each rate from £0 to £1,000, one for each question group. A reason can be 3 to 300 characters.",
+  not_found: "This exam no longer exists. Refresh the page.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  rate_missing: "Set the pay rate for every exam in this month first.",
+  too_early: "This month has not ended yet.",
+};
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+  "November", "December"];
+
+/** "March 2027" for a month as the database gives it ("2027-03-01", or "2027-03"); null for anything else. */
+function monthName(month: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})(?:-\d{2})?$/.exec(month ?? "");
+  const i = m ? Number(m[2]) - 1 : -1;
+  return m && i >= 0 && i < 12 ? `${MONTH_NAMES[i]} ${m[1]}` : null;
+}
+
+/** Message for a marker pay RPC failure code; unknown codes get the generic message. For earlier_month, pass the
+ * refusal's month: "Fix March 2027 first." (without one: "Fix the earlier month first."). */
+export function paymentMessageFor(code: string | null | undefined, month?: string | null): string {
+  if (code === "earlier_month") {
+    const name = monthName(month);
+    return name ? `Fix ${name} first.` : "Fix the earlier month first.";
+  }
+  return code && Object.hasOwn(paymentMessages, code) ? paymentMessages[code] : messages.internal;
+}
+
+/** A lead marker with a declared conflict (or a tutor link) for the script's candidate. */
+const CONFLICTED_LEAD = "You cannot release this script because of a declared conflict. Ask an admin.";
+
 /** Why an open picture_changed alert cannot be released yet: the reason marking_alert_can_release gives, which
- * marking_alerts_list returns as release_blocked and marking_alert_release answers as a conflict's reason. */
+ * marking_alerts_list returns as release_blocked and marking_alert_release answers as a conflict's reason; and, in the
+ * list only, conflict_of_interest for a lead blocked for the candidate. */
 const releaseBlocked: Record<string, string> = {
+  conflict_of_interest: CONFLICTED_LEAD,
   taken_back: "Release waits until staff hand the script back to the markers.",
   pictures_updating: "Release waits until the new marking pictures are made.",
   picture_missing: "Release waits until every page has a marking picture.",
@@ -500,13 +662,15 @@ export function releaseBlockedMessage(reason: string | null | undefined): string
 }
 
 /** Failure codes of releasing and noting marking alerts (marking_alert_release, marking_alerts_release_all,
- * marking_alert_note, marking_alerts_list). A conflict says why in `reason`: closed, or what holds a release back. */
+ * marking_alert_note, marking_alerts_list) and of viewing an alert's pages (marking_alert_pages). A conflict says why
+ * in `reason`: closed, or what holds a release back. */
 const alertMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   reason_required: "Give a reason of 3 to 300 characters.",
   invalid_input: "Check the details and try again.",
   not_found: "This alert could not be found. Refresh the page.",
   wrong_kind: "That action does not fit this kind of alert.",
+  conflict_of_interest: CONFLICTED_LEAD,
 };
 
 /** Message for a marking alert RPC failure code (and a conflict's reason); unknown codes get the generic message. */

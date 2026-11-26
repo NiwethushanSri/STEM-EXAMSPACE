@@ -285,16 +285,48 @@ isOneToOne: false
                   Relationships: [
                     
                   ]
-                },"exam_marking": {
+                },"exam_markers": {
                   Row: {
-                    "closed_at": string | null,"closed_by": string | null,"deadline": string | null,"exam_id": string,"mode": Database["public"]['Enums']["marking_mode"],"opened_at": string | null,"opened_by": string | null,"structure_version": number,"updated_at": string
+                    "cleared_at": string | null,"cleared_by": string | null,"exam_id": string,"marker_id": string,"misses": number,"pause_applied_at": string | null,"paused_at": string | null,"until_seed": number | null
                   }
                   ComputedFields: never
                   Insert: {
-                    "closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"exam_id": string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"structure_version"?: number,"updated_at"?: string
+                    "cleared_at"?: string | null,"cleared_by"?: string | null,"exam_id": string,"marker_id": string,"misses"?: number,"pause_applied_at"?: string | null,"paused_at"?: string | null,"until_seed"?: number | null
                   }
                   Update: {
-                    "closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"exam_id"?: string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"structure_version"?: number,"updated_at"?: string
+                    "cleared_at"?: string | null,"cleared_by"?: string | null,"exam_id"?: string,"marker_id"?: string,"misses"?: number,"pause_applied_at"?: string | null,"paused_at"?: string | null,"until_seed"?: number | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "exam_markers_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_markers_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "exam_markers_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"exam_marking": {
+                  Row: {
+                    "approved_at": string | null,"approved_by": string | null,"checks_off_at": string | null,"checks_off_by": string | null,"checks_off_reason": string | null,"closed_at": string | null,"closed_by": string | null,"deadline": string | null,"double_marking": boolean,"exam_id": string,"mode": Database["public"]['Enums']["marking_mode"],"opened_at": string | null,"opened_by": string | null,"practice": boolean,"sample_percent": number,"seed_every": number,"seeds": boolean,"structure_version": number,"tolerance_percent": number,"updated_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "approved_at"?: string | null,"approved_by"?: string | null,"checks_off_at"?: string | null,"checks_off_by"?: string | null,"checks_off_reason"?: string | null,"closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"double_marking"?: boolean,"exam_id": string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"practice"?: boolean,"sample_percent"?: number,"seed_every"?: number,"seeds"?: boolean,"structure_version"?: number,"tolerance_percent"?: number,"updated_at"?: string
+                  }
+                  Update: {
+                    "approved_at"?: string | null,"approved_by"?: string | null,"checks_off_at"?: string | null,"checks_off_by"?: string | null,"checks_off_reason"?: string | null,"closed_at"?: string | null,"closed_by"?: string | null,"deadline"?: string | null,"double_marking"?: boolean,"exam_id"?: string,"mode"?: Database["public"]['Enums']["marking_mode"],"opened_at"?: string | null,"opened_by"?: string | null,"practice"?: boolean,"sample_percent"?: number,"seed_every"?: number,"seeds"?: boolean,"structure_version"?: number,"tolerance_percent"?: number,"updated_at"?: string
                   }
                   Relationships: [
                     {
@@ -427,6 +459,40 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"final_mark_history": {
+                  Row: {
+                    "changed_at": string,"changed_by": string | null,"id": number,"mark": number | null,"not_attempted": boolean,"question_id": string,"reason": string | null,"removed": boolean,"source": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "changed_at"?: string,"changed_by"?: string | null,"id"?: never,"mark"?: number | null,"not_attempted": boolean,"question_id": string,"reason"?: string | null,"removed"?: boolean,"source": string,"unit_id": string
+                  }
+                  Update: {
+                    "changed_at"?: string,"changed_by"?: string | null,"id"?: never,"mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"reason"?: string | null,"removed"?: boolean,"source"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    
+                  ]
+                },"final_marks": {
+                  Row: {
+                    "mark": number | null,"not_attempted": boolean,"question_id": string,"reason": string | null,"set_at": string,"set_by": string | null,"source": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id": string,"reason"?: string | null,"set_at"?: string,"set_by"?: string | null,"source": string,"unit_id": string
+                  }
+                  Update: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"reason"?: string | null,"set_at"?: string,"set_by"?: string | null,"source"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "final_marks_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: false
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"home_submissions": {
                   Row: {
                     "blank_confirmed": (number)[],"booking_id": string,"checked_at": string | null,"id": string,"late": boolean,"rejected_reason": string | null,"replaces_all": boolean,"seq": number,"state": Database["public"]['Enums']["submission_state"],"submitted_at": string | null,"submitted_by": string | null
@@ -547,6 +613,84 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"marker_rates": {
+                  Row: {
+                    "exam_id": string,"group_id": string | null,"pence": number,"set_at": string,"set_by": string | null
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "exam_id": string,"group_id"?: string | null,"pence": number,"set_at": string,"set_by"?: string | null
+                  }
+                  Update: {
+                    "exam_id"?: string,"group_id"?: string | null,"pence"?: number,"set_at"?: string,"set_by"?: string | null
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_rates_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_rates_exam_id_fkey"
+      columns: ["exam_id"]
+isOneToOne: false
+      referencedRelation: "exams_public"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_rates_group_id_fkey"
+      columns: ["group_id"]
+isOneToOne: false
+      referencedRelation: "question_groups"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marker_statement_items": {
+                  Row: {
+                    "exam_id": string,"group_id": string | null,"kind": Database["public"]['Enums']["marking_kind"],"marking_id": string,"pence": number,"statement_id": string,"submitted_at": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "exam_id": string,"group_id"?: string | null,"kind": Database["public"]['Enums']["marking_kind"],"marking_id": string,"pence": number,"statement_id": string,"submitted_at": string
+                  }
+                  Update: {
+                    "exam_id"?: string,"group_id"?: string | null,"kind"?: Database["public"]['Enums']["marking_kind"],"marking_id"?: string,"pence"?: number,"statement_id"?: string,"submitted_at"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_statement_items_marking_id_fkey"
+      columns: ["marking_id"]
+isOneToOne: true
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marker_statement_items_statement_id_fkey"
+      columns: ["statement_id"]
+isOneToOne: false
+      referencedRelation: "marker_statements"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marker_statements": {
+                  Row: {
+                    "fixed_at": string,"fixed_by": string,"id": string,"marker_id": string,"month": string,"pieces": number,"total_pence": number
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "fixed_at": string,"fixed_by": string,"id"?: string,"marker_id": string,"month": string,"pieces": number,"total_pence": number
+                  }
+                  Update: {
+                    "fixed_at"?: string,"fixed_by"?: string,"id"?: string,"marker_id"?: string,"month"?: string,"pieces"?: number,"total_pence"?: number
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marker_statements_marker_id_fkey"
+      columns: ["marker_id"]
+isOneToOne: false
+      referencedRelation: "profiles"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"marking_alerts": {
                   Row: {
                     "closed_at": string | null,"closed_by": string | null,"created_at": string,"exam_id": string,"id": string,"kind": string,"page_id": string | null,"reason": string | null,"resolution": string | null,"script_id": string,"state": string,"unit_id": string | null
@@ -587,6 +731,78 @@ isOneToOne: false
       referencedColumns: ["id"]
     }
                   ]
+                },"marking_reviews": {
+                  Row: {
+                    "closed_at": string | null,"closed_by": string | null,"exam_id": string,"id": string,"kind": string,"marking_id": string,"opened_at": string,"outcome": string | null,"reason": string | null,"second_marking_id": string | null,"state": string,"unit_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"exam_id": string,"id"?: string,"kind": string,"marking_id": string,"opened_at"?: string,"outcome"?: string | null,"reason"?: string | null,"second_marking_id"?: string | null,"state"?: string,"unit_id": string
+                  }
+                  Update: {
+                    "closed_at"?: string | null,"closed_by"?: string | null,"exam_id"?: string,"id"?: string,"kind"?: string,"marking_id"?: string,"opened_at"?: string,"outcome"?: string | null,"reason"?: string | null,"second_marking_id"?: string | null,"state"?: string,"unit_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_reviews_marking_id_fkey"
+      columns: ["marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marking_reviews_second_marking_id_fkey"
+      columns: ["second_marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "marking_reviews_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: false
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marking_standard_marks": {
+                  Row: {
+                    "mark": number | null,"not_attempted": boolean,"question_id": string,"standard_id": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id": string,"standard_id": string
+                  }
+                  Update: {
+                    "mark"?: number | null,"not_attempted"?: boolean,"question_id"?: string,"standard_id"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_standard_marks_standard_id_fkey"
+      columns: ["standard_id"]
+isOneToOne: false
+      referencedRelation: "marking_standards"
+      referencedColumns: ["id"]
+    }
+                  ]
+                },"marking_standards": {
+                  Row: {
+                    "created_at": string,"exam_id": string,"id": string,"note": string | null,"retired_at": string | null,"retired_by": string | null,"set_by": string,"unit_id": string,"use": string
+                  }
+                  ComputedFields: never
+                  Insert: {
+                    "created_at"?: string,"exam_id": string,"id"?: string,"note"?: string | null,"retired_at"?: string | null,"retired_by"?: string | null,"set_by": string,"unit_id": string,"use": string
+                  }
+                  Update: {
+                    "created_at"?: string,"exam_id"?: string,"id"?: string,"note"?: string | null,"retired_at"?: string | null,"retired_by"?: string | null,"set_by"?: string,"unit_id"?: string,"use"?: string
+                  }
+                  Relationships: [
+                    {
+      foreignKeyName: "marking_standards_unit_id_fkey"
+      columns: ["unit_id"]
+isOneToOne: true
+      referencedRelation: "marking_units"
+      referencedColumns: ["id"]
+    }
+                  ]
                 },"marking_unit_exclusions": {
                   Row: {
                     "created_at": string,"marker_id": string,"reason": string,"unit_id": string
@@ -609,17 +825,23 @@ isOneToOne: false
                   ]
                 },"marking_units": {
                   Row: {
-                    "created_at": string,"exam_id": string,"group_id": string | null,"hold_reason": string | null,"id": string,"on_hold": boolean,"script_id": string,"state": string
+                    "check_state": string | null,"checked_at": string | null,"created_at": string,"exam_id": string,"final_marking_id": string | null,"group_id": string | null,"hold_reason": string | null,"id": string,"on_hold": boolean,"sample_draw": number,"script_id": string,"second_wanted": boolean | null,"state": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"exam_id": string,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"script_id": string,"state"?: string
+                    "check_state"?: string | null,"checked_at"?: string | null,"created_at"?: string,"exam_id": string,"final_marking_id"?: string | null,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"sample_draw"?: number,"script_id": string,"second_wanted"?: boolean | null,"state"?: string
                   }
                   Update: {
-                    "created_at"?: string,"exam_id"?: string,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"script_id"?: string,"state"?: string
+                    "check_state"?: string | null,"checked_at"?: string | null,"created_at"?: string,"exam_id"?: string,"final_marking_id"?: string | null,"group_id"?: string | null,"hold_reason"?: string | null,"id"?: string,"on_hold"?: boolean,"sample_draw"?: number,"script_id"?: string,"second_wanted"?: boolean | null,"state"?: string
                   }
                   Relationships: [
                     {
+      foreignKeyName: "marking_units_final_marking_id_fkey"
+      columns: ["final_marking_id"]
+isOneToOne: false
+      referencedRelation: "markings"
+      referencedColumns: ["id"]
+    },{
       foreignKeyName: "marking_units_group_id_fkey"
       columns: ["group_id"]
 isOneToOne: false
@@ -635,14 +857,14 @@ isOneToOne: false
                   ]
                 },"markings": {
                   Row: {
-                    "active_seconds": number,"id": string,"kind": Database["public"]['Enums']["marking_kind"],"last_saved_at": string | null,"lead_note": string | null,"marker_id": string,"pages_changed_at": string | null,"pages_key": string | null,"rev": number,"set_aside_at": string | null,"set_aside_reason": string | null,"started_at": string,"status": string,"structure_version": number | null,"submitted_at": string | null,"total": number | null,"unit_id": string
+                    "active_seconds": number,"feedback_at": string | null,"id": string,"kind": Database["public"]['Enums']["marking_kind"],"last_saved_at": string | null,"lead_note": string | null,"marker_id": string,"pages_changed_at": string | null,"pages_key": string | null,"rev": number,"sent_back_note": string | null,"set_aside_at": string | null,"set_aside_reason": string | null,"started_at": string,"status": string,"structure_version": number | null,"submitted_at": string | null,"total": number | null,"unit_id": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "active_seconds"?: number,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id": string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id": string
+                    "active_seconds"?: number,"feedback_at"?: string | null,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id": string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"sent_back_note"?: string | null,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id": string
                   }
                   Update: {
-                    "active_seconds"?: number,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id"?: string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id"?: string
+                    "active_seconds"?: number,"feedback_at"?: string | null,"id"?: string,"kind"?: Database["public"]['Enums']["marking_kind"],"last_saved_at"?: string | null,"lead_note"?: string | null,"marker_id"?: string,"pages_changed_at"?: string | null,"pages_key"?: string | null,"rev"?: number,"sent_back_note"?: string | null,"set_aside_at"?: string | null,"set_aside_reason"?: string | null,"started_at"?: string,"status"?: string,"structure_version"?: number | null,"submitted_at"?: string | null,"total"?: number | null,"unit_id"?: string
                   }
                   Relationships: [
                     {
@@ -1750,8 +1972,31 @@ isOneToOne: false
 "marker_conflict_set":
 { Args: { "p_marker": string,"p_note": string,"p_reason": string,"p_student": string }; Returns: Json
                            },
+"marker_payable":
+{ Args: { "p_before": string }; Returns: {
+              "exam_id": string,"group_id": string,"kind": Database["public"]['Enums']["marking_kind"],"marker_id": string,"marking_id": string,"pence": number,"submitted_at": string
+            }[]
+                           },
+"marker_rates_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marker_rates_set":
+{ Args: { "p_exam": string,"p_rates": Json,"p_reason"?: string }; Returns: Json
+                           },
 "marker_set_lead":
 { Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
+                           },
+"marker_statement_exported":
+{ Args: { "p_month": string }; Returns: Json
+                           },
+"marker_statement_month":
+{ Args: { "p_at": string }; Returns: string
+                           },
+"marker_statements_fix":
+{ Args: { "p_month": string,"p_now"?: string }; Returns: Json
+                           },
+"marker_statements_get":
+{ Args: { "p_month": string }; Returns: Json
                            },
 "marker_unapprove":
 { Args: { "p_marker": string,"p_reason": string,"p_subject": number }; Returns: Json
@@ -1759,11 +2004,20 @@ isOneToOne: false
 "markers_list":
 { Args: Record<PropertyKey, never>; Returns: Json
                            },
+"marking_after_change":
+{ Args: { "p_marking": string }; Returns: undefined
+                           },
+"marking_after_submit":
+{ Args: { "p_marking": string }; Returns: string
+                           },
 "marking_alert_can_release":
 { Args: { "p_script": string }; Returns: string
                            },
 "marking_alert_note":
 { Args: { "p_alert": string,"p_reason": string }; Returns: Json
+                           },
+"marking_alert_pages":
+{ Args: { "p_alert": string }; Returns: Json
                            },
 "marking_alert_raise":
 { Args: { "p_kind": string,"p_page": string,"p_script": string,"p_unit": string }; Returns: string
@@ -1777,20 +2031,59 @@ isOneToOne: false
 "marking_alerts_release_all":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
+"marking_approval_blocks":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_approval_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_approval_withdraw":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_approve":
+{ Args: { "p_exam": string,"p_note"?: string }; Returns: Json
+                           },
 "marking_assign":
-{ Args: { "p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
 "marking_assign_some":
 { Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_reason": string }; Returns: Json
                            },
+"marking_check_evaluate":
+{ Args: { "p_unit": string }; Returns: string
+                           },
+"marking_check_exam":
+{ Args: { "p_exam": string }; Returns: number
+                           },
+"marking_checks_backfill":
+{ Args: Record<PropertyKey, never>; Returns: number
+                           },
+"marking_checks_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_checks_set":
+{ Args: { "p_exam": string,"p_reason"?: string,"p_settings": Json }; Returns: Json
+                           },
 "marking_close":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_compare":
+{ Args: { "p_first": string,"p_second": string }; Returns: Json
+                           },
+"marking_compare_sets":
+{ Args: { "p_a": Json,"p_b": Json,"p_unit": string }; Returns: Json
                            },
 "marking_dashboard":
 { Args: { "p_now"?: string }; Returns: Json
                            },
+"marking_exam_frozen":
+{ Args: { "p_exam": string }; Returns: boolean
+                           },
 "marking_exam_get":
 { Args: { "p_exam": string,"p_now"?: string }; Returns: Json
+                           },
+"marking_exam_markers":
+{ Args: { "p_exam": string }; Returns: Json
                            },
 "marking_exam_overdue":
 { Args: { "p_exam": string,"p_now": string }; Returns: boolean
@@ -1798,14 +2091,47 @@ isOneToOne: false
 "marking_exam_sync":
 { Args: { "p_exam": string,"p_now": string }; Returns: number
                            },
+"marking_feedback":
+{ Args: { "p_marking": string }; Returns: Json
+                           },
+"marking_final_marks_from":
+{ Args: { "p_marking": string,"p_reason": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_final_marks_lead":
+{ Args: { "p_marks": Json,"p_reason": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_final_marks_remove":
+{ Args: { "p_reason": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_final_set":
+{ Args: { "p_marks": Json,"p_reason": string,"p_unit": string }; Returns: Json
+                           },
 "marking_give_back":
 { Args: { "p_reason"?: string,"p_unit": string }; Returns: Json
                            },
 "marking_holds_expire":
 { Args: { "p_now": string }; Returns: number
                            },
+"marking_is_lead":
+{ Args: Record<PropertyKey, never>; Returns: boolean
+                           },
+"marking_lead_marks_refusal":
+{ Args: { "p_every": boolean,"p_marks": Json,"p_unit": string }; Returns: Json
+                           },
 "marking_marker_blocked":
 { Args: { "p_marker": string,"p_student": string }; Returns: boolean
+                           },
+"marking_marker_clear":
+{ Args: { "p_exam": string,"p_marker": string,"p_reason": string }; Returns: Json
+                           },
+"marking_marker_cleared":
+{ Args: { "p_exam": string,"p_marker": string }; Returns: boolean
+                           },
+"marking_marker_pause":
+{ Args: { "p_exam": string,"p_marker": string,"p_reason": string }; Returns: Json
+                           },
+"marking_marker_paused":
+{ Args: { "p_exam": string,"p_marker": string }; Returns: boolean
                            },
 "marking_mask_key":
 { Args: { "p_copy": string,"p_copy_page": number,"p_page": string,"p_rotation": number }; Returns: string
@@ -1831,8 +2157,16 @@ isOneToOne: false
 "marking_pages_key":
 { Args: { "p_script": string }; Returns: string
                            },
-"marking_picture_allowed":
-{ Args: { "p_name": string }; Returns: boolean
+"marking_pass":
+{ Args: { "p_marker": string,"p_unit": string }; Returns: {
+              "assignment_id": string,"hold_until": string,"how": string,"kind": Database["public"]['Enums']["marking_kind"],"marking_id": string,"status": string
+            }[]
+                           },
+"marking_pause_apply":
+{ Args: { "p_exam": string,"p_marker": string }; Returns: number
+                           },
+"marking_picture_paths":
+{ Args: { "p_now"?: string,"p_pages": (string)[],"p_unit": string }; Returns: Json
                            },
 "marking_progress":
 { Args: { "p_exam"?: string,"p_now"?: string }; Returns: Json
@@ -1842,6 +2176,35 @@ isOneToOne: false
                            },
 "marking_reopen":
 { Args: { "p_exam": string,"p_reason": string }; Returns: Json
+                           },
+"marking_review_accept":
+{ Args: { "p_reason"?: string,"p_review": string }; Returns: Json
+                           },
+"marking_review_blind":
+{ Args: { "p_unit": string }; Returns: boolean
+                           },
+"marking_review_list":
+{ Args: { "p_exam"?: string,"p_kind"?: string }; Returns: Json
+                           },
+"marking_review_marking":
+{ Args: { "p_marking": string }; Returns: Json
+                           },
+"marking_review_open":
+{ Args: { "p_review": string }; Returns: Json
+                           },
+"marking_review_refusal":
+{ Args: { "p_unit": string }; Returns: string
+                           },
+"marking_review_sample":
+{ Args: { "p_count"?: number,"p_exam": string,"p_marker": string }; Returns: Json
+                           },
+"marking_review_sample_pieces":
+{ Args: { "p_exam": string,"p_marker": string,"p_units": (string)[] }; Returns: {
+              "marking_id": string,"second_id": string,"unit_id": string
+            }[]
+                           },
+"marking_review_settle":
+{ Args: { "p_first_rev": number,"p_marks"?: Json,"p_outcome": string,"p_reason": string,"p_review": string,"p_second_rev": number }; Returns: Json
                            },
 "marking_save":
 { Args: { "p_active_seconds"?: number,"p_marking": string,"p_now"?: string,"p_ops": Json,"p_reason"?: string,"p_rev": number }; Returns: Json
@@ -1883,23 +2246,75 @@ isOneToOne: false
               "copy_page": number,"extra": boolean,"marking_path": string,"n": number,"page_id": string,"rotation": number,"script_id": string
             }[]
                            },
+"marking_second_add":
+{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_second_drop":
+{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+                           },
+"marking_second_pairs":
+{ Args: { "p_exam": string }; Returns: {
+              "compared": boolean,"first_id": string,"first_marker_id": string,"first_total": number,"second_id": string,"second_marker_id": string,"second_total": number,"unit_id": string,"within": boolean
+            }[]
+                           },
+"marking_second_release":
+{ Args: { "p_reason": string,"p_unit": string }; Returns: undefined
+                           },
+"marking_second_stuck":
+{ Args: { "p_exam": string }; Returns: {
+              "unit_id": string
+            }[]
+                           },
+"marking_send_back":
+{ Args: { "p_note": string,"p_reason": string,"p_to": string,"p_unit": string }; Returns: Json
+                           },
+"marking_set_total":
+{ Args: { "p_set": Json,"p_unit": string }; Returns: number
+                           },
 "marking_settings_set":
 { Args: { "p_deadline": string,"p_exam": string,"p_mode": Database["public"]['Enums']["marking_mode"],"p_reason"?: string }; Returns: Json
+                           },
+"marking_standard_compare":
+{ Args: { "p_marking": string }; Returns: Json
+                           },
+"marking_standard_end":
+{ Args: { "p_actor": string,"p_reason": string,"p_standard": string }; Returns: boolean
+                           },
+"marking_standard_retire":
+{ Args: { "p_reason": string,"p_standard": string }; Returns: Json
+                           },
+"marking_standard_set":
+{ Args: { "p_note"?: string,"p_unit": string,"p_use": string }; Returns: Json
+                           },
+"marking_standards_list":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_stats":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"marking_subject_has_lead":
+{ Args: { "p_subject": number }; Returns: boolean
+                           },
+"marking_subject_markers":
+{ Args: { "p_subject": number }; Returns: number
                            },
 "marking_submit":
 { Args: { "p_marking": string,"p_now"?: string,"p_rev": number }; Returns: Json
                            },
 "marking_take_back":
-{ Args: { "p_reason": string,"p_units": (string)[] }; Returns: Json
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_reason": string,"p_units": (string)[] }; Returns: Json
                            },
 "marking_tick":
 { Args: Record<PropertyKey, never>; Returns: undefined
+                           },
+"marking_tolerance":
+{ Args: { "p_max": number,"p_percent": number }; Returns: number
                            },
 "marking_total":
 { Args: { "p_marking": string }; Returns: number
                            },
 "marking_unit_blocked":
-{ Args: { "p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_next": boolean,"p_now": string,"p_unit": string }; Returns: string
                            },
 "marking_unit_max_total":
 { Args: { "p_unit": string }; Returns: number
@@ -1912,11 +2327,19 @@ isOneToOne: false
               "label": string,"leaf": boolean,"mark_step": number,"max_mark": number,"parent_id": string,"path": (number)[],"question_id": string,"top_id": string
             }[]
                            },
+"marking_unit_settled":
+{ Args: { "p_unit": string }; Returns: boolean
+                           },
 "marking_unit_take":
-{ Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_marker": string,"p_unit": string }; Returns: undefined
+{ Args: { "p_by": string,"p_hold_until": string,"p_how": string,"p_kind"?: Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_unit": string }; Returns: undefined
                            },
 "marking_unit_take_back":
-{ Args: { "p_unit": string }; Returns: boolean
+{ Args: { "p_kind"?: Database["public"]['Enums']["marking_kind"],"p_unit": string }; Returns: boolean
+                           },
+"marking_units_allowed":
+{ Args: { "p_exam": string,"p_kind": Database["public"]['Enums']["marking_kind"],"p_marker": string,"p_next": boolean,"p_unit"?: string }; Returns: {
+              "group_id": string,"script_id": string,"unit_id": string
+            }[]
                            },
 "marking_units_candidates":
 { Args: { "p_exam": string,"p_group": string,"p_marker": string }; Returns: {
@@ -1934,8 +2357,15 @@ isOneToOne: false
 "marking_units_lock":
 { Args: { "p_units": (string)[] }; Returns: undefined
                            },
+"marking_units_offered":
+{ Args: { "p_exam": string,"p_group": string,"p_kinds": (Database["public"]['Enums']["marking_kind"])[],"p_marker": string }; Returns: {
+              "group_id": string,"kind": Database["public"]['Enums']["marking_kind"],"script_id": string,"unit_id": string
+            }[]
+                           },
 "marking_units_pick":
-{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_marker": string,"p_now": string }; Returns: (string)[]
+{ Args: { "p_count": number,"p_exam": string,"p_group": string,"p_kinds"?: (Database["public"]['Enums']["marking_kind"])[],"p_marker": string,"p_now": string }; Returns: {
+              "kind": Database["public"]['Enums']["marking_kind"],"unit_id": string
+            }[]
                            },
 "marking_units_refresh":
 { Args: { "p_script": string }; Returns: number
@@ -2215,6 +2645,14 @@ isOneToOne: false
                            },
 "script_family_notices_waiting":
 { Args: Record<PropertyKey, never>; Returns: Json
+                           },
+"script_final_marks":
+{ Args: { "p_script": string }; Returns: {
+              "mark": number,"not_attempted": boolean,"question_id": string,"source": string
+            }[]
+                           },
+"script_final_total":
+{ Args: { "p_script": string }; Returns: number
                            },
 "script_home_reject":
 { Args: { "p_actor": string,"p_booking": string,"p_now": string,"p_reason": string,"p_subs": (string)[] }; Returns: undefined

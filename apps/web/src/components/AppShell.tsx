@@ -7,7 +7,7 @@ import { createContext, useContext, useState, type ReactNode } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 /** The signed-in user, provided once per staff area by its server layout (which has already checked the role). */
-export type ShellUser = { name: string; roleLabel: string };
+export type ShellUser = { name: string; roleLabel: string; /** 3B: the marker leads a subject (their menu shows Review). */ lead?: boolean };
 const ShellUserContext = createContext<ShellUser | null>(null);
 export function ShellUserProvider({ user, children }: { user: ShellUser; children: ReactNode }) {
   return <ShellUserContext.Provider value={user}>{children}</ShellUserContext.Provider>;
@@ -65,13 +65,6 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/parent/notices", label: "Special notices" },
     ],
   },
-  examiner: {
-    name: "Examiner",
-    items: [
-      { href: "/examiner", label: "Worklist" },
-      { href: "/examiner/standardisation", label: "Standardisation" },
-    ],
-  },
   owner: {
     name: "Super administrator",
     items: [
@@ -87,6 +80,7 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
       { href: "/admin/marking", label: "Marking" },
       { href: "/admin/marking/markers", label: "Markers" },
+      { href: "/admin/marking/payments", label: "Marker payments" },
     ],
   },
   teacher: {
@@ -123,24 +117,39 @@ const roleNav: Record<string, { name: string; items: NavItem[] }> = {
       { href: "/admin/scripts/exceptions", label: "Script exceptions" },
       { href: "/admin/marking", label: "Marking" },
       { href: "/admin/marking/markers", label: "Markers" },
+      { href: "/admin/marking/payments", label: "Marker payments" },
       { href: "/admin/notices", label: "Notices" },
       { href: "/admin/audit", label: "Audit log" },
     ],
   },
 };
 
+/** 3B: the lead marker's review, under Marking in the menu of a role that marks. */
+const REVIEW_ITEM: NavItem = { href: "/marking/review", label: "Review" };
+
+/** The role's menu; for a lead marker (`lead`, which the page learns from the database), Review just under Marking. */
+function navItems(role: keyof typeof roleNav, lead: boolean): (NavItem & { sub?: boolean })[] {
+  const items = roleNav[role].items;
+  if (!lead) return items;
+  return items.flatMap((item) => (item.href === "/marking" ? [item, { ...REVIEW_ITEM, sub: true }] : [item]));
+}
+
 export function AppShell({
   role,
   title,
+  lead = false,
   children,
 }: {
   role: keyof typeof roleNav;
   title: string;
+  /** The signed-in marker leads a subject: their menu shows Review under Marking (also when the area's layout says so). */
+  lead?: boolean;
   children: ReactNode;
 }) {
   const pathname = usePathname();
   const section = roleNav[role];
   const user = useContext(ShellUserContext);
+  const items = navItems(role, lead || user?.lead === true);
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900">
@@ -152,13 +161,13 @@ export function AppShell({
           {section.name}
         </p>
         <nav className="flex flex-col gap-1 px-3">
-          {section.items.map((item) => {
+          {items.map((item) => {
             const active = pathname === item.href;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded px-3 py-2 text-sm transition ${
+                className={`rounded px-3 py-2 text-sm transition ${item.sub ? "ml-4" : ""} ${
                   active ? "bg-white text-blue-700 font-medium" : "hover:bg-blue-600"
                 }`}
               >
@@ -193,7 +202,7 @@ export function AppShell({
           </div>
           {/* Phone navigation: the sidebar is hidden below md */}
           <nav className="mt-3 flex gap-2 overflow-x-auto md:hidden">
-            {section.items.map((item) => (
+            {items.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}

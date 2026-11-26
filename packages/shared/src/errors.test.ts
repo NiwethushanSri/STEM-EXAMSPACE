@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, scanMessageFor, scriptMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, paymentMessageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -252,6 +252,40 @@ describe("markingMessageFor", () => {
     expect(markingMessageFor("structure_incomplete")).toContain("every question must be in a group");
     expect(markingMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
   });
+  it("maps the codes of the checks on the marking", () => {
+    expect(markingMessageFor("not_small_subject")).toBe("These checks can only be turned off when the subject has one approved marker.");
+    expect(markingMessageFor("needs_two_markers")).toBe("Double marking needs two approved markers. Approve another, or turn it off with a reason.");
+    expect(markingMessageFor("no_lead")).toBe("Choose a lead marker for this subject first.");
+    expect(markingMessageFor("marking_approved")).toBe("This exam's marking has been approved. An admin must withdraw the approval first.");
+  });
+  it("says why an exam's marking cannot be approved yet (3B Task 10)", () => {
+    expect(markingMessageFor("not_all_checked")).toBe("Not every script is checked yet.");
+  });
+  it("says an approved exam's marking is frozen wherever staff meet it (3B Task 10)", () => {
+    const approved = "This exam's marking has been approved. An admin must withdraw the approval first.";
+    expect(allocationMessageFor("marking_approved", "admin")).toBe(approved);
+    expect(standardMessageFor("marking_approved")).toBe(approved);
+    expect(structureMessageFor("marking_approved", "save")).toBe(approved);
+    expect(reviewMessageFor("marking_approved")).toBe(approved);
+  });
+  it("says a maximum cannot go below any mark given, a final or a standard's too (3B Task 10)", () => {
+    expect(structureMessageFor("conflict", "save")).toBe("A maximum cannot go below a mark already given.");
+  });
+  it("maps every staff code of the checks on the marking (3B Tasks 2 to 5)", () => {
+    expect(markingMessageFor("name_seen")).toBe("This marker may have seen a name on this script, so they cannot mark it.");
+    expect(markingMessageFor("not_submitted")).toBe("This script's first marking is not submitted yet.");
+    expect(markingMessageFor("settled")).toBe("The lead marker has settled this script.");
+    expect(markingMessageFor("with_lead")).toBe("This script is with the lead marker.");
+    expect(markingMessageFor("already")).toBe("This script already has a second marking, or is waiting for one.");
+    expect(markingMessageFor("not_waiting")).toBe("This script is not waiting for a second marker.");
+    expect(markingMessageFor("not_yours")).toBe("Choose a script you marked yourself.");
+    expect(markingMessageFor("too_many")).toBe("There are already 10 of these for this exam.");
+    expect(markingMessageFor("practice_first")).toBe("This marker has not been cleared for live marking on this exam.");
+    expect(markingMessageFor("paused")).toBe("This marker is paused on this exam.");
+    expect(markingMessageFor("practice_wait")).toBe("Your practice scripts are with the lead marker.");
+    expect(markingMessageFor("practice_not_ready")).toBe("Practice scripts are not ready yet.");
+    expect(markingMessageFor("locked")).toBe("This script can no longer be changed.");
+  });
   it("falls back to the generic message", () => {
     expect(markingMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
@@ -273,7 +307,11 @@ describe("allocationMessageFor", () => {
     expect(allocationMessageFor("submitted", "admin")).toBe("This script has been marked. Take it back or reassign it.");
     expect(allocationMessageFor("on_hold", "admin")).toBe("This script is on hold.");
     expect(allocationMessageFor("not_ready", "admin")).toBe("This script cannot be handed out yet.");
+    expect(allocationMessageFor("not_eligible", "admin")).toBe("This script cannot be given to this marker.");
     expect(allocationMessageFor("reason_required", "admin")).toBe("Give a reason of 3 to 300 characters.");
+  });
+  it("says why a second marking cannot go to a marker who saw a name on the script", () => {
+    expect(allocationMessageFor("name_seen", "admin")).toBe("This marker may have seen a name on this script, so they cannot mark it.");
   });
   it("falls back to the generic message", () => {
     expect(allocationMessageFor("nothing_left", "admin")).toBe("Something went wrong. Please try again.");
@@ -295,6 +333,10 @@ describe("markingWorkMessageFor", () => {
     expect(markingWorkMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
     expect(markingWorkMessageFor("forbidden")).toBe("You do not have permission to do that.");
   });
+  it("says a settled script's marks go through the lead marker", () => {
+    expect(markingWorkMessageFor("settled")).toBe("The lead marker has settled this script. Ask them if a mark should change.");
+    expect(markingScreenMessageFor("settled")).toBe("The lead marker has settled this script. Ask them if a mark should change.");
+  });
   it("says why a conflict was refused", () => {
     expect(markingWorkMessageFor("conflict", "rev")).toBe("This script was changed on another screen. Reload to carry on.");
     expect(markingWorkMessageFor("conflict", "set_aside")).toContain("no longer yours");
@@ -305,6 +347,93 @@ describe("markingWorkMessageFor", () => {
     expect(markingWorkMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(markingWorkMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("practice, seeded scripts and the pause (3B Task 5)", () => {
+  const paused = "Your marking on this exam is paused. The lead marker will be in touch.";
+  it("tells a marker why Next script gives nothing", () => {
+    expect(allocationMessageFor("paused", "marker")).toBe(paused);
+    expect(allocationMessageFor("practice_wait", "marker")).toBe("Your practice scripts are with the lead marker.");
+    expect(allocationMessageFor("practice_not_ready", "marker")).toBe("Practice scripts are not ready yet.");
+    expect(markingScreenMessageFor("practice_wait")).toBe("Your practice scripts are with the lead marker.");
+  });
+  it("tells an admin why a marker cannot be given live work", () => {
+    expect(allocationMessageFor("practice_first", "admin")).toBe("This marker has not been cleared for live marking on this exam.");
+    expect(allocationMessageFor("paused", "admin")).toBe("This marker is paused on this exam.");
+  });
+  it("says why the marking screen stops", () => {
+    expect(markingWorkMessageFor("paused")).toBe(paused);
+    expect(markingWorkMessageFor("locked")).toBe("This script can no longer be changed.");
+    expect(markingScreenMessageFor("paused")).toBe(paused);
+    expect(markingScreenMessageFor("locked")).toBe("This script can no longer be changed.");
+  });
+  it("says why a practice or seeded script cannot be made, and why a clearance is refused", () => {
+    expect(standardMessageFor("not_yours")).toBe("Choose a script you marked yourself.");
+    expect(standardMessageFor("too_many")).toBe("There are already 10 of these for this exam.");
+    expect(standardMessageFor("conflict", "switched_off")).toBe("This check is turned off for this exam.");
+    expect(standardMessageFor("conflict", "already")).toBe("This script is already used for practice or as a seeded script.");
+    expect(standardMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(standardMessageFor("not_approved")).toBe("This marker is not approved to mark this subject.");
+    expect(standardMessageFor("invalid_input")).toBe("That request was not valid. Reload the page and try again.");
+    expect(standardMessageFor("conflict", "nope")).toBe("Something went wrong. Please try again.");
+    expect(standardMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("reviewMessageFor (3B Task 7)", () => {
+  it("maps each code of the lead's review", () => {
+    expect(reviewMessageFor("forbidden")).toBe("You do not have permission to do that.");
+    expect(reviewMessageFor("invalid_input")).toBe("Check the details. A note to the marker can be 3 to 1,000 characters.");
+    expect(reviewMessageFor("not_found")).toBe("This could not be found. Refresh the page.");
+    expect(reviewMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(reviewMessageFor("conflict_of_interest")).toBe("You cannot review this script because of a declared conflict. Ask an admin.");
+    expect(reviewMessageFor("wrong_kind")).toBe("That action does not fit this review.");
+    expect(reviewMessageFor("incomplete")).toBe("Give every question a mark, or NR.");
+    expect(reviewMessageFor("mark_out_of_range")).toBe("That mark is not allowed for this question.");
+    expect(reviewMessageFor("marking_approved")).toBe("This exam's marking has been approved. An admin must withdraw the approval first.");
+    expect(reviewMessageFor("marking_closed")).toBe("Marking has closed for this exam, so nobody could mark this script again.");
+  });
+  it("says why a review action met a conflict", () => {
+    expect(reviewMessageFor("conflict", "changed")).toBe("A marker changed this script while you were looking. Reload to see it.");
+    expect(reviewMessageFor("conflict", "settled")).toBe("This review is already closed. Refresh the page.");
+    expect(reviewMessageFor("conflict", "not_submitted")).toBe("This script's first marking is not submitted.");
+    expect(reviewMessageFor("conflict", "with_lead")).toBe("This script is with the lead marker. Settle or accept it first.");
+    expect(reviewMessageFor("conflict", "not_checked")).toBe("This script is not checked yet.");
+  });
+  it("falls back to the generic message", () => {
+    expect(reviewMessageFor("conflict", "nope")).toBe("Something went wrong. Please try again.");
+    expect(reviewMessageFor("conflict")).toBe("Something went wrong. Please try again.");
+    expect(reviewMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(reviewMessageFor(null)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("paymentMessageFor (3B Task 11)", () => {
+  it("says the brief's sentences for a missing rate and a month not ended", () => {
+    expect(paymentMessageFor("rate_missing")).toBe("Set the pay rate for every exam in this month first.");
+    expect(paymentMessageFor("too_early")).toBe("This month has not ended yet.");
+  });
+  it("names the earlier month to fix first (Ruling R25)", () => {
+    expect(paymentMessageFor("earlier_month", "2027-03-01")).toBe("Fix March 2027 first.");
+    expect(paymentMessageFor("earlier_month", "2026-12-01")).toBe("Fix December 2026 first.");
+    expect(paymentMessageFor("earlier_month", "2027-01")).toBe("Fix January 2027 first.");
+    expect(paymentMessageFor("earlier_month")).toBe("Fix the earlier month first.");
+    expect(paymentMessageFor("earlier_month", "2027-13-01")).toBe("Fix the earlier month first.");
+    expect(paymentMessageFor("earlier_month", "March")).toBe("Fix the earlier month first.");
+  });
+  it("maps each other code of marker pay", () => {
+    expect(paymentMessageFor("forbidden")).toBe("You do not have permission to do that.");
+    expect(paymentMessageFor("invalid_input")).toBe(
+      "Enter each rate from £0 to £1,000, one for each question group. A reason can be 3 to 300 characters.",
+    );
+    expect(paymentMessageFor("not_found")).toBe("This exam no longer exists. Refresh the page.");
+    expect(paymentMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+  });
+  it("falls back to the generic message", () => {
+    expect(paymentMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(paymentMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(paymentMessageFor(null)).toBe("Something went wrong. Please try again.");
   });
 });
 
@@ -341,6 +470,8 @@ describe("alertMessageFor and releaseBlockedMessage", () => {
     expect(releaseBlockedMessage("picture_missing")).toBe("Release waits until every page has a marking picture.");
     expect(releaseBlockedMessage("taken_back")).toBe("Release waits until staff hand the script back to the markers.");
     expect(releaseBlockedMessage("pictures_updating")).toBe("Release waits until the new marking pictures are made.");
+    expect(releaseBlockedMessage("conflict_of_interest")).toBe("You cannot release this script because of a declared conflict. Ask an admin.");
+    expect(alertMessageFor("conflict_of_interest")).toBe("You cannot release this script because of a declared conflict. Ask an admin.");
     expect(releaseBlockedMessage("__proto__")).toBe("This cannot be released yet.");
     expect(releaseBlockedMessage(null)).toBe("This cannot be released yet.");
   });

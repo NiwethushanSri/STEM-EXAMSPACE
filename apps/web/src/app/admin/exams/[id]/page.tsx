@@ -78,7 +78,15 @@ async function Body({ params }: { params: Promise<{ id: string }> }) {
       {v.centres.length > 0 && (
         <ScanBatches examId={v.exam.id} centres={v.centres.map((c) => ({ id: c.id, venue: c.venue, room: c.room }))} batches={scans} />
       )}
-      <ExamMarkingPanel examId={v.exam.id} view={marking.view} groups={marking.groups} finishesAt={marking.finishesAt} homeUntil={marking.homeUntil} />
+      <ExamMarkingPanel
+        examId={v.exam.id}
+        view={marking.view}
+        checks={marking.checks}
+        rates={marking.rates}
+        groups={marking.groups}
+        finishesAt={marking.finishesAt}
+        homeUntil={marking.homeUntil}
+      />
       <DownloadLog entries={v.downloads} capped={v.downloadsCapped} />
     </div>
   );

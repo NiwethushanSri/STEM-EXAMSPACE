@@ -1,18 +1,23 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
-import { assertNoOwner, cleanup, clearLoginAttempts, countTestUsers, signInUI } from "./admin";
+import { ANON_KEY, SUPABASE_URL, assertNoOwner, cleanup, clearLoginAttempts, countTestUsers, signInUI } from "./admin";
 import {
+  SUPABASE_BROWSER_SCRIPT,
   annotationKinds,
   bumpRev,
+  changePicture,
   holdersOf,
+  makeLead,
   markingOf,
   marksOf,
   penStroke,
   pieceOf,
+  piecePictures,
   pinch,
   removeMarkingExam,
   seedMarkingExam,
   takeBackPieces,
   touchDrag,
+  unitHold,
   type Login,
   type SeededStudent,
 } from "./marking";
@@ -23,6 +28,8 @@ import { noSidewaysScroll } from "./scripts";
 // the first is marked and submitted, the second is submitted while the marker tries to change it (and Next script on
 // the screen then opens the third), the third takes pen and finger and then reports a name, the fourth meets a second
 // screen. Every row and file is removed afterwards.
+// Needs the Edge Functions served locally (supabase functions serve --env-file supabase/functions/.env.test.local): the
+// screen's picture links come from marking-pictures. npm run e2e:local starts them when they are not served already.
 
 let examId: string;
 let marker: Login;
@@ -250,7 +257,7 @@ test.describe("on a phone", () => {
   test("phone_is_told_to_use_a_bigger_screen", async ({ page }) => {
     const signs: string[] = [];
     page.on("request", (r) => {
-      if (r.url().includes("/storage/v1/object/sign/")) signs.push(r.url());
+      if (r.url().includes("/storage/v1/object/sign/") || r.url().includes("/functions/v1/marking-pictures")) signs.push(r.url());
     });
     await signInUI(page, marker.email, marker.password);
     await page.waitForURL((u) => !u.pathname.startsWith("/login"));
@@ -489,5 +496,119 @@ test.describe("two sessions", () => {
     await expect(p.getByTestId("page-surface").locator("img")).toHaveCount(0);
     await expect(p.locator('img[src*="/storage/v1/object/sign/"]')).toHaveCount(0);
     expect(saves).toBe(0);
+  });
+});
+
+// Picture links signed on the server (Phase 3B Task 1, Ruling R12), on an exam of its own with one script, its marker
+// and a lead marker: the marker's screen is given no picture's path and shows its pages through links the
+// marking-pictures function signed, and the marker cannot make a link themselves; then a page's picture changes and the
+// lead looks at the changed page before releasing the script.
+test.describe("picture links", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  let linkExam: string;
+  let linkMarker: Login;
+  let linkStudents: SeededStudent[];
+  let linkUnit: string;
+
+  test.beforeAll(async () => {
+    const seed = await seedMarkingExam({ scripts: 1 });
+    linkExam = seed.examId;
+    linkMarker = seed.marker;
+    linkStudents = seed.students;
+  });
+  test.afterAll(async () => {
+    if (linkExam) await removeMarkingExam(linkExam);
+  });
+
+  /** The picture has loaded (its width is known). */
+  const loaded = (img: import("@playwright/test").Locator) => img.evaluate((i: HTMLImageElement) => (i.complete ? i.naturalWidth : 0));
+
+  test("marker_cannot_make_a_picture_link_themselves", async ({ page }) => {
+    const answers: string[] = [];
+    page.on("response", async (r) => {
+      if (r.url().includes("/rest/v1/rpc/marking_unit_open") && r.request().method() === "POST") answers.push(await r.text());
+    });
+    await signInUI(page, linkMarker.email, linkMarker.password);
+    await page.waitForURL((u) => !u.pathname.startsWith("/login"));
+    await page.goto("/marking");
+    await page.getByRole("button", { name: /^Next script/ }).first().click();
+    await page.waitForURL(/\/marking\/[0-9a-f-]{36}$/);
+    linkUnit = page.url().split("/").pop()!;
+
+    // The page shows through a link the function signed; the piece's answer holds no picture's path.
+    const picture = page.getByTestId("page-surface").locator("img");
+    await expect.poll(() => loaded(picture)).toBeGreaterThan(0);
+    expect(await picture.getAttribute("src")).toContain("/storage/v1/object/sign/script-pages/");
+    expect(answers.length).toBeGreaterThan(0);
+    for (const a of answers) expect(a).not.toContain("-marking.jpg");
+
+    // With the paths read here (the service key), the marker's own session in the page can neither sign nor read them.
+    const [first] = await piecePictures(linkUnit);
+    await page.addScriptTag({ path: SUPABASE_BROWSER_SCRIPT });
+    const tried = await page.evaluate(
+      async ({ url, key, email, password, paths }) => {
+        type Sb = typeof import("@supabase/supabase-js");
+        const sb = (window as unknown as { supabase: Sb }).supabase.createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+        const signIn = await sb.auth.signInWithPassword({ email, password });
+        if (signIn.error) return [`sign-in failed: ${signIn.error.message}`];
+        const out: string[] = [];
+        for (const p of paths) {
+          const link = await sb.storage.from("script-pages").createSignedUrl(p, 3600);
+          const read = await sb.storage.from("script-pages").download(p);
+          out.push(`${link.error ? "no link" : "link"} ${read.error ? "no read" : "read"}`);
+        }
+        await sb.auth.signOut({ scope: "local" });
+        return out;
+      },
+      { url: SUPABASE_URL, key: ANON_KEY, email: linkMarker.email, password: linkMarker.password, paths: [first.markingPath, first.fullPath] },
+    );
+    expect(tried).toEqual(["no link no read", "no link no read"]);
+  });
+
+  test("lead_views_the_changed_page_before_release", async ({ page }) => {
+    const lead = await makeLead(linkExam);
+    const { scriptNumber } = await pieceOf(linkUnit);
+    const changed = (await piecePictures(linkUnit))[1];
+    const newPath = await changePicture(changed.pageId);
+    await expect.poll(() => unitHold(linkUnit)).toBe("true picture_changed");
+
+    let links = 0;
+    page.on("request", (r) => {
+      if (r.url().includes("/functions/v1/marking-pictures") && r.method() === "POST") links++;
+    });
+    await signInUI(page, lead.email, lead.password);
+    await page.waitForURL((u) => !u.pathname.startsWith("/login"));
+    await page.goto("/marking");
+    const attention = page.getByRole("region", { name: "Needs your attention", exact: true });
+    await attention.getByRole("button", { name: `View pages of script ${scriptNumber}` }).click();
+
+    // The viewer opens on the changed page, marked, with its new picture.
+    const viewer = page.getByRole("dialog", { name: `Pages of script ${scriptNumber}` });
+    await expect(viewer).toContainText("Page 2 of 3");
+    await expect(viewer.getByText("Changed", { exact: true })).toBeVisible();
+    const two = viewer.getByRole("img", { name: "Page 2" });
+    await expect.poll(() => loaded(two)).toBeGreaterThan(0);
+    expect(await two.getAttribute("src")).toContain(newPath);
+    // The other pages are there too.
+    await viewer.getByRole("button", { name: "Previous page" }).click();
+    await expect(viewer).toContainText("Page 1 of 3");
+    await expect.poll(() => loaded(viewer.getByRole("img", { name: "Page 1" }))).toBeGreaterThan(0);
+    expect(links).toBeGreaterThanOrEqual(2);
+    const html = await page.content();
+    for (const s of linkStudents) {
+      expect(html).not.toContain(s.firstName);
+      expect(html).not.toContain(s.lastName);
+    }
+    await viewer.getByRole("button", { name: "Close" }).click();
+    await expect(viewer).toHaveCount(0);
+
+    // Then the lead releases it, and the marker's piece is no longer on hold.
+    await attention.getByRole("button", { name: `Release script ${scriptNumber}` }).click();
+    const dialog = page.getByRole("dialog", { name: `Release script ${scriptNumber}` });
+    await dialog.getByLabel("Reason").fill("The new picture is fine");
+    await dialog.getByRole("button", { name: "Release", exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(() => unitHold(linkUnit)).toBe("false null");
   });
 });

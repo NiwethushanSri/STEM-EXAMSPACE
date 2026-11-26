@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { keyAction } from "./marking-keys";
 import {
   ACCESS_CHECK_MS,
+  ACCESS_TICK_MS,
   accessCheckDue,
   accessCheckOutcome,
   firstLeaf,
@@ -9,8 +10,12 @@ import {
   markControls,
   markText,
   parseOpened,
+  parseSubmitted,
   questionMarkText,
   questionPageIndexes,
+  saveStatusWords,
+  stopsTheScreen,
+  dropsUnsaved,
   zoomStepIn,
   zoomStepOut,
 } from "./marking-screen";
@@ -24,7 +29,10 @@ const opened = {
     group_label: null, deadline: null, hold_until: "2026-11-22T12:00:00Z", closed: false,
     first_name: "Wilhelmina",
   },
-  marking: { id: U(2), rev: 4, status: "in_progress", lead_note: "See 2(b)", total: 3, max_total: 10, pages_changed: false },
+  marking: {
+    id: U(2), rev: 4, status: "in_progress", lead_note: "See 2(b)", total: 3, max_total: 10, pages_changed: false,
+    practice: false, sent_back_note: "Look again at 2(b)",
+  },
   structure: {
     version: 1,
     questions: [
@@ -38,10 +46,10 @@ const opened = {
     mark_scheme_file: { id: U(70), storage_path: `${U(60)}/${U(70)}.pdf` },
   },
   pages: [
-    { n: 1, page_id: U(20), copy_page: 1, extra: false, marking_path: "e/u/1-1/0-marking.jpg", rotation: 0 },
-    { n: 2, page_id: U(21), copy_page: 2, extra: false, marking_path: "e/u/1-1/1-marking.jpg", rotation: 0 },
-    { n: 3, page_id: U(22), copy_page: null, extra: true, marking_path: null, rotation: 90 },
-    { n: 4, page_id: U(23), copy_page: 3, extra: false, marking_path: "e/u/1-1/2-marking.jpg", rotation: 0 },
+    { n: 1, page_id: U(20), copy_page: 1, extra: false, has_picture: true, rotation: 0 },
+    { n: 2, page_id: U(21), copy_page: 2, extra: false, has_picture: true, rotation: 0, marking_path: "e/u/1-1/1-marking.jpg" },
+    { n: 3, page_id: U(22), copy_page: null, extra: true, has_picture: false, rotation: 90 },
+    { n: 4, page_id: U(23), copy_page: 3, extra: false, has_picture: true, rotation: 0 },
   ],
   marks: [{ question_id: U(10), mark: 3, na: false }, { question_id: U(12), mark: null, na: true }],
   annotations: [
@@ -61,15 +69,17 @@ describe("parseOpened", () => {
       groupLabel: null, holdUntil: "2026-11-22T12:00:00Z", closed: false,
     });
     expect(JSON.stringify(p)).not.toContain("Wilhelmina");
-    expect(p.marking).toEqual({ id: U(2), rev: 4, status: "in_progress", pagesChanged: false });
+    expect(p.marking).toEqual({ id: U(2), rev: 4, status: "in_progress", pagesChanged: false, practice: false, sentBackNote: "Look again at 2(b)" });
     expect(p.markSchemePath).toBe(`${U(60)}/${U(70)}.pdf`);
     expect(p.optionGroups).toEqual([{ id: U(80), label: "Answer 1 of these", choose: 1 }]);
-    expect(p.pages.map((x) => [x.n, x.copyPage, x.extra, x.markingPath])).toEqual([
-      [1, 1, false, "e/u/1-1/0-marking.jpg"],
-      [2, 2, false, "e/u/1-1/1-marking.jpg"],
-      [3, null, true, null],
-      [4, 3, false, "e/u/1-1/2-marking.jpg"],
+    expect(p.pages.map((x) => [x.n, x.copyPage, x.extra, x.hasPicture])).toEqual([
+      [1, 1, false, true],
+      [2, 2, false, true],
+      [3, null, true, false],
+      [4, 3, false, true],
     ]);
+    // A picture's path is never kept, even if one were sent (3B: links come from the marking-pictures function).
+    expect(JSON.stringify(p)).not.toContain("-marking.jpg");
   });
 
   it("labels questions as printed and knows which carry marks", () => {
@@ -96,11 +106,77 @@ describe("parseOpened", () => {
     expect(r.piece.saved.annotations?.[1].points).toEqual([[0.1, 0.1], [0.2, 0.2]]);
   });
 
+  it("reads practice and the note sent back, and reads their absence as no", () => {
+    const r = parseOpened({ ...opened, marking: { ...opened.marking, practice: true, sent_back_note: null } });
+    if (!r.ok) throw new Error("not ok");
+    expect([r.piece.marking.practice, r.piece.marking.sentBackNote]).toEqual([true, null]);
+    const older = Object.fromEntries(Object.entries(opened.marking).filter(([k]) => k !== "practice" && k !== "sent_back_note"));
+    const o = parseOpened({ ...opened, marking: older });
+    if (!o.ok) throw new Error("not ok");
+    expect([o.piece.marking.practice, o.piece.marking.sentBackNote]).toEqual([false, null]);
+  });
+
   it("returns the refusal code, or internal for an answer that makes no sense", () => {
     expect(parseOpened({ ok: false, code: "on_hold" })).toEqual({ ok: false, code: "on_hold" });
     expect(parseOpened({ ok: false })).toEqual({ ok: false, code: "internal" });
     expect(parseOpened(null)).toEqual({ ok: false, code: "internal" });
     expect(parseOpened({ ok: true, unit: {}, marking: {}, structure: {} })).toEqual({ ok: false, code: "internal" });
+  });
+});
+
+describe("parseSubmitted", () => {
+  it("reads the new rev and the feedback, and nothing else", () => {
+    expect(parseSubmitted({ ok: true, rev: 7, total: 8, max_total: 10, feedback: null, script_state: "marked" })).toEqual({ ok: true, rev: 7, feedback: null });
+    expect(parseSubmitted({ ok: true, rev: 7, total: 8, max_total: 10, feedback: "practice" })).toEqual({ ok: true, rev: 7, feedback: "practice" });
+    expect(parseSubmitted({ ok: true, rev: 7 })).toEqual({ ok: true, rev: 7, feedback: null });
+  });
+  it("reads only the two kinds of feedback: practice, and a seeded script outside tolerance", () => {
+    expect(parseSubmitted({ ok: true, rev: 7, feedback: "seed" })).toEqual({ ok: true, rev: 7, feedback: "seed" });
+    expect(parseSubmitted({ ok: true, rev: 7, feedback: "live" })).toEqual({ ok: true, rev: 7, feedback: null });
+    expect(parseSubmitted({ ok: true, rev: 7, feedback: 1 })).toEqual({ ok: true, rev: 7, feedback: null });
+  });
+  it("returns a refusal's code, its reason and the questions still to mark", () => {
+    expect(parseSubmitted({ ok: false, code: "incomplete", missing: ["1", "2(a)", 3] })).toEqual({ ok: false, code: "incomplete", missing: ["1", "2(a)"] });
+    expect(parseSubmitted({ ok: false, code: "conflict", reason: "rev", rev: 9 })).toEqual({ ok: false, code: "conflict", reason: "rev", missing: [] });
+    expect(parseSubmitted({ ok: false, code: "on_hold" })).toEqual({ ok: false, code: "on_hold", missing: [] });
+  });
+  it("is internal for an answer that makes no sense", () => {
+    expect(parseSubmitted(null)).toEqual({ ok: false, code: "internal", missing: [] });
+    expect(parseSubmitted({ ok: true })).toEqual({ ok: false, code: "internal", missing: [] });
+    expect(parseSubmitted({ ok: false })).toEqual({ ok: false, code: "internal", missing: [] });
+  });
+});
+
+describe("refusals that stop the screen", () => {
+  it("paused, locked and settled take the page away with their sentence, as on_hold does", () => {
+    for (const c of ["on_hold", "pictures_updating", "hold_expired", "marking_closed", "paused", "locked", "settled"]) expect(stopsTheScreen(c), c).toBe(true);
+    for (const c of ["incomplete", "mark_out_of_range", "reason_required", "invalid_input", "conflict", "internal", "__proto__", null, undefined]) {
+      expect(stopsTheScreen(c), String(c)).toBe(false);
+    }
+  });
+  it("drops what was not saved only for a refusal the server never takes back", () => {
+    expect(["locked", "settled"].map(dropsUnsaved)).toEqual([true, true]);
+    // A hold or a pause can end: what was not saved stays stored and goes when the piece is next opened.
+    expect(["paused", "on_hold", "pictures_updating", "hold_expired", "marking_closed", null].map(dropsUnsaved)).toEqual([false, false, false, false, false, false]);
+  });
+});
+
+describe("the save status beside the index", () => {
+  it("a save stopped by locked or settled says why, and never Saved", () => {
+    for (const status of ["saved", "refused"] as const) {
+      expect(saveStatusWords({ readOnly: false, status, stop: { code: "locked" } })).toBe("This script can no longer be changed.");
+      expect(saveStatusWords({ readOnly: false, status, stop: { code: "settled" } })).toBe(
+        "The lead marker has settled this script. Ask them if a mark should change.",
+      );
+    }
+  });
+  it("otherwise says what the save queue says, as before", () => {
+    expect(saveStatusWords({ readOnly: false, status: "saved", stop: null })).toBe("Saved");
+    expect(saveStatusWords({ readOnly: false, status: "saving", stop: null })).toBe("Saving…");
+    expect(saveStatusWords({ readOnly: false, status: "on_hold", stop: null })).toBe("Not saved");
+    // A pause keeps the change stored, to be sent when it ends: it is not saved.
+    expect(saveStatusWords({ readOnly: false, status: "refused", stop: { code: "paused" } })).toBe("Not saved");
+    expect(saveStatusWords({ readOnly: true, status: "saved", stop: null })).toBe("Read only");
   });
 });
 
@@ -157,9 +233,18 @@ describe("zoom steps and lists", () => {
 });
 
 describe("the minute check of a shown page", () => {
-  const base = { visible: true, covered: false, path: "e/u/1-1/0-marking.jpg", lastAt: 0, now: ACCESS_CHECK_MS };
+  const base = { visible: true, covered: false, pageId: U(20), lastAt: 0, now: ACCESS_CHECK_MS };
+  it("access_check_is_due_at_55_seconds", () => {
+    expect(ACCESS_CHECK_MS).toBe(55_000);
+    expect(accessCheckDue({ ...base, lastAt: 0, now: 54_999 })).toBe(false);
+    expect(accessCheckDue({ ...base, lastAt: 0, now: 55_000 })).toBe(true);
+  });
+  it("tick_is_15_seconds", () => {
+    expect(ACCESS_TICK_MS).toBe(15_000);
+    // The first tick after the check falls due runs it: at most 70 seconds after the last check.
+    expect(ACCESS_CHECK_MS + ACCESS_TICK_MS).toBeLessThanOrEqual(70_000);
+  });
   it("withdrawn_page_check_runs_each_minute_while_in_view", () => {
-    expect(ACCESS_CHECK_MS).toBe(60_000);
     expect(accessCheckDue(base)).toBe(true);
     expect(accessCheckDue({ ...base, now: ACCESS_CHECK_MS - 1 })).toBe(false);
     expect(accessCheckDue({ ...base, lastAt: 30_000, now: 90_000 })).toBe(true);
@@ -167,19 +252,19 @@ describe("the minute check of a shown page", () => {
   it("does not run while the tab is hidden, under a cover, or with no picture on the page", () => {
     expect(accessCheckDue({ ...base, visible: false })).toBe(false);
     expect(accessCheckDue({ ...base, covered: true })).toBe(false);
-    expect(accessCheckDue({ ...base, path: null })).toBe(false);
+    expect(accessCheckDue({ ...base, pageId: null })).toBe(false);
   });
   it("a tab back in view checks at once when a minute has gone by", () => {
     expect(accessCheckDue({ ...base, lastAt: 10_000, now: 10 * 60_000 })).toBe(true);
     expect(accessCheckDue({ ...base, lastAt: 10 * 60_000 - 5_000, now: 10 * 60_000 })).toBe(false);
   });
   it("a refused link means the page is withdrawn; a failure to ask says nothing", () => {
-    expect(accessCheckOutcome({ signed: true, status: null })).toBe("ok");
-    expect(accessCheckOutcome({ signed: false, status: 400 })).toBe("gone");
-    expect(accessCheckOutcome({ signed: false, status: 403 })).toBe("gone");
-    expect(accessCheckOutcome({ signed: false, status: 404 })).toBe("gone");
-    expect(accessCheckOutcome({ signed: false, status: 500 })).toBe("unknown");
-    expect(accessCheckOutcome({ signed: false, status: null })).toBe("unknown");
+    expect(accessCheckOutcome({ ok: true, status: null })).toBe("ok");
+    expect(accessCheckOutcome({ ok: false, status: 400 })).toBe("gone");
+    expect(accessCheckOutcome({ ok: false, status: 403 })).toBe("gone");
+    expect(accessCheckOutcome({ ok: false, status: 409 })).toBe("gone");
+    expect(accessCheckOutcome({ ok: false, status: 500 })).toBe("unknown");
+    expect(accessCheckOutcome({ ok: false, status: null })).toBe("unknown");
   });
 });
 

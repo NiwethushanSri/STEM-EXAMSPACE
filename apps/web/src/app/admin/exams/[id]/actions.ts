@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { markingMessageFor } from "@stem/shared";
+import { checksProblem, type CheckSettings } from "@/lib/exam-marking";
 import { reasonProblem } from "@/lib/exception-queue";
 import type { FileBegun, StructurePayload, StructureResult } from "@/lib/exam-structure";
 import { beginMarkSchemeFile, markSchemeFileStored, removeMarkSchemeFile, saveStructure } from "@/lib/exam-structure-server";
@@ -190,12 +191,14 @@ export type MarkingActionResult = { ok: true; message: string } | { ok: false; m
 
 type LooseRpc = (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
 
-/** Calls one marking function (the database checks every rule again); done words a successful answer. */
+/** Calls one marking function (the database checks every rule again); done words a successful answer, and `words`
+ * replaces the usual message for a code where this function means something else by it. */
 async function callMarking(
   examId: string,
   fn: string,
   args: Record<string, unknown>,
   done: (answer: Record<string, unknown>) => string,
+  words: Record<string, string> = {},
 ): Promise<MarkingActionResult> {
   const supabase = await createClient();
   // p_deadline may be null (no deadline), which the generated argument types do not allow.
@@ -205,7 +208,8 @@ async function callMarking(
   const a = data as Record<string, unknown>;
   if (a.ok === true) return { ok: true, message: done(a) };
   const code = typeof a.code === "string" ? a.code : null;
-  return code === "reason_required" ? { ok: false, message: markingMessageFor(code), reasonRequired: true } : { ok: false, message: markingMessageFor(code) };
+  const message = code && Object.hasOwn(words, code) ? words[code] : markingMessageFor(code);
+  return code === "reason_required" ? { ok: false, message, reasonRequired: true } : { ok: false, message };
 }
 
 const readyLine = (n: unknown) => (n === 1 ? "1 script is ready to mark." : `${typeof n === "number" ? n : 0} scripts are ready to mark.`);
@@ -226,6 +230,38 @@ export async function saveMarkingSettingsAction(
   const problem = reasonProblem(reason, false);
   if (problem) return { ok: false, message: problem, reasonRequired: true };
   return callMarking(examId, "marking_settings_set", { p_mode: settings.mode, p_deadline: deadline, p_reason: reason || null }, () => "Marking settings saved.");
+}
+
+/** The checks on the marking: double marking (the share second-marked, and the difference that goes to the lead
+ * marker), seeded scripts and practice. Turning one off needs a reason and a subject with one approved marker; once
+ * marking has opened any change needs a reason. */
+export async function saveChecksAction(examId: string, settings: CheckSettings, reason?: string): Promise<MarkingActionResult> {
+  await requireStaff(["admin", "owner"]);
+  if (!isUuid(examId) || !settings || typeof settings !== "object") return { ok: false, message: GENERIC };
+  const { doubleMarking, samplePercent, tolerancePercent, seeds, seedEvery, practice } = settings;
+  if (typeof doubleMarking !== "boolean" || typeof seeds !== "boolean" || typeof practice !== "boolean") return { ok: false, message: GENERIC };
+  const problem = checksProblem(settings);
+  if (problem) return { ok: false, message: problem };
+  const why = (reason ?? "").trim();
+  const reasonBad = reasonProblem(why, false);
+  if (reasonBad) return { ok: false, message: reasonBad, reasonRequired: true };
+  return callMarking(
+    examId,
+    "marking_checks_set",
+    {
+      p_settings: {
+        double_marking: doubleMarking,
+        sample_percent: samplePercent,
+        tolerance_percent: tolerancePercent,
+        seeds,
+        seed_every: seedEvery,
+        practice,
+      },
+      p_reason: why || null,
+    },
+    () => "Checks saved.",
+    { invalid_input: "Check the numbers and try again." },
+  );
 }
 
 /** Opens marking: the verified scripts that may be handed out are made ready to mark. */

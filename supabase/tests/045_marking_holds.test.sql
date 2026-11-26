@@ -50,6 +50,23 @@ create function pg_temp.seen(p_names text[]) returns int language sql stable as 
   select count(*)::int from storage.objects where bucket_id = 'script-pages' and name = any (p_names) $$;
 create function pg_temp.put(p_names text[]) returns void language sql as $$
   insert into storage.objects (bucket_id, name) select 'script-pages', n from unnest(p_names) n on conflict do nothing $$;
+-- 3B (Ruling R12): a marker or lead reads no picture from storage; links are signed for what marking_picture_paths
+-- gives. The pieces that show the page whose current marking picture is p_name (read as postgres), and how many of
+-- these pictures the caller is given by marking_picture_paths, asking with each such piece. Only a page's current
+-- marking picture is found this way: an old or full picture is checked by asking for its page instead.
+create function pg_temp.shown(p_name text) returns table (unit_id uuid, page_id uuid) language sql stable security definer as $$
+  with pages as (select p.id, p.upload_id from public.script_pages p where p.marking_path = p_name and p.replaced_at is null),
+  scripts as (
+    select l.script_id, pg.id as page_id from pages pg
+    join public.script_page_links l on l.page_id = pg.id join public.scripts s on s.id = l.script_id and s.version = l.version
+    union
+    select s.id, pg.id from pages pg join public.script_uploads up on up.id = pg.upload_id
+    join public.home_submissions hs on hs.id = up.submission_id join public.scripts s on s.booking_id = hs.booking_id)
+  select u.id, x.page_id from scripts x join public.marking_units u on u.script_id = x.script_id $$;
+create function pg_temp.got(p_names text[]) returns int language sql as $$
+  select count(distinct n)::int from unnest(p_names) n
+  where exists (select 1 from pg_temp.shown(n) s
+                where public.marking_picture_paths(s.unit_id, array[s.page_id]) -> 'paths' -> 0 ->> 'marking_path' = n) $$;
 -- A new verified script of an exam, and its pages.
 create function pg_temp.script(p_name text, p_exam text, p_source public.script_source default 'home') returns void language plpgsql as $$
 begin
@@ -173,7 +190,7 @@ create function pg_temp.remask(p_upload uuid, p_tag text) returns void language 
   update public.script_pages set marking_path = replace(marking_path, '-marking.jpg', '-' || p_tag || '-marking.jpg')
   where upload_id = p_upload and replaced_at is null and marking_path is not null $$;
 grant execute on function pg_temp.uid(text), pg_temp.k(text), pg_temp.u(text), pg_temp.r(text), pg_temp.code(jsonb), pg_temp.why(jsonb),
-  pg_temp.mk(uuid, numeric), pg_temp.tick(uuid), pg_temp.rev(text), pg_temp.path(text), pg_temp.full(text), pg_temp.seen(text[]),
+  pg_temp.mk(uuid, numeric), pg_temp.tick(uuid), pg_temp.rev(text), pg_temp.path(text), pg_temp.full(text), pg_temp.seen(text[]), pg_temp.shown(text), pg_temp.got(text[]),
   pg_temp.found_in(text[], text), pg_temp.alert(text, text) to public;
 
 insert into public.subjects (name, kind) values ('ZZ Marking holds', 'school'), ('ZZ Marking holds two', 'school');
@@ -200,7 +217,7 @@ select pg_temp.structure('eq');
 insert into public.question_groups (exam_id, label, position) values (pg_temp.k('eq'), 'G1', 1), (pg_temp.k('eq'), 'G2', 2);
 update public.exam_questions q set group_id = g.id from public.question_groups g
 where q.exam_id = pg_temp.k('eq') and q.parent_id is null and g.exam_id = q.exam_id and g.label = 'G' || q.label;
-insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eq'), 'by_question');
+insert into public.exam_marking (exam_id, mode) values (pg_temp.k('eq'), 'by_question') on conflict (exam_id) do update set mode = excluded.mode;
 select pg_temp.script('g1', 'eq');
 select pg_temp.open('eq');
 -- Exam en: never opened.
@@ -265,23 +282,25 @@ select is(array[pg_temp.marks('mk:a1'), pg_temp.rev('mk:a1')::text,
   array['1=2', '1', '1'], 'the marks and the tick are as m1 saved them');
 select pg_temp.put(array[pg_temp.r('old_a1') #>> '{}', pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1'), pg_temp.full('p:a1:2')]);
 select tests.as_user(pg_temp.uid('m1'));
-select is(pg_temp.seen(array[pg_temp.r('old_a1') #>> '{}', pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0,
-  'm1 reads neither the old picture nor the new one, nor the piece''s other pages');
+select is(array[pg_temp.got(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')])::text,
+                pg_temp.code(public.marking_picture_paths(pg_temp.u('a1'), array[pg_temp.k('p:a1:2')]))],
+  array['0', 'on_hold'], 'm1 reads neither the new picture nor the piece''s other pages: asked for the changed page, the piece is on hold');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('lead'));
-select is(array[pg_temp.seen(array[pg_temp.path('p:a1:2')]), pg_temp.seen(array[pg_temp.path('p:a1:1')]),
-                pg_temp.seen(array[pg_temp.r('old_a1') #>> '{}']), pg_temp.seen(array[pg_temp.full('p:a1:2')])],
-  array[1, 1, 0, 0], 'the lead reads the script''s marking pictures while the alert is open: never the old one or a full picture');
+select is(array[pg_temp.got(array[pg_temp.path('p:a1:2')])::text, pg_temp.got(array[pg_temp.path('p:a1:1')])::text,
+                public.marking_picture_paths(pg_temp.u('a1'), array[pg_temp.k('p:a1:2')]) -> 'paths' -> 0 ->> 'marking_path'],
+  array['1', '1', pg_temp.path('p:a1:2')],
+  'the lead reads the script''s marking pictures while the alert is open: asked for the changed page, its new picture, never the old one or a full picture');
 select tests.as_postgres();
 insert into public.marker_conflicts (marker_id, student_id, recorded_at) values (pg_temp.uid('lead'), pg_temp.student('a1'), now());
 select tests.as_user(pg_temp.uid('lead'));
-select is(pg_temp.seen(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0, 'but none while a conflict with the candidate is declared');
+select is(pg_temp.got(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0, 'but none while a conflict with the candidate is declared');
 select tests.as_postgres();
 delete from public.marker_conflicts where marker_id = pg_temp.uid('lead');
 select tests.as_user(pg_temp.uid('lead'));
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('lead2'));
-select is(pg_temp.seen(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0, 'the lead of another subject reads none');
+select is(pg_temp.got(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0, 'the lead of another subject reads none');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('m2'));
-select is(pg_temp.seen(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0, 'nor another marker');
+select is(pg_temp.got(array[pg_temp.path('p:a1:2'), pg_temp.path('p:a1:1')]), 0, 'nor another marker');
 select tests.as_postgres();
 select pg_temp.area('p:a1:2');
 update public.script_pages set marking_path = replace(marking_path, '-remask-marking.jpg', '-again-marking.jpg') where id = pg_temp.k('p:a1:2');
@@ -331,12 +350,12 @@ select is(pg_temp.why(pg_temp.r('rel_a1b')), 'conflict closed', 'a closed alert 
 select tests.as_user(pg_temp.uid('m1'));
 insert into res values ('open_a1', public.marking_unit_open(pg_temp.u('a1')));
 insert into res values ('s_a1b', public.marking_save(pg_temp.k('mk:a1'), 1, jsonb_build_array(pg_temp.mk(pg_temp.k('q:e:1'), 3))));
-select is(array[pg_temp.code(pg_temp.r('open_a1')), pg_temp.code(pg_temp.r('s_a1b')), pg_temp.seen(array[pg_temp.path('p:a1:2')])::text],
+select is(array[pg_temp.code(pg_temp.r('open_a1')), pg_temp.code(pg_temp.r('s_a1b')), pg_temp.got(array[pg_temp.path('p:a1:2')])::text],
   array['ok', 'ok', '1'], 'm1 carries on: the piece opens, saves and shows its new picture');
 select tests.as_postgres();
 select is(pg_temp.marks('mk:a1'), '1=3', 'with the new mark');
 select tests.as_user(pg_temp.uid('lead'));
-select is(pg_temp.seen(array[pg_temp.path('p:a1:2')]), 0, 'the lead reads a1''s pictures no more: it has no open alert');
+select is(pg_temp.got(array[pg_temp.path('p:a1:2')]), 0, 'the lead reads a1''s pictures no more: it has no open alert');
 select tests.as_postgres();
 
 -- ---------------------------------------------------------------------------------------------
@@ -442,13 +461,13 @@ select pg_temp.put(array[pg_temp.path('p:g1:2'), pg_temp.path('p:g1:1')]);
 select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.seen(array[pg_temp.path('p:g1:2'), pg_temp.path('p:g1:1')]), 2, 'staff read the script''s marking pictures');
 select tests.as_postgres(); select tests.as_user(pg_temp.uid('lead'));
-select is(pg_temp.seen(array[pg_temp.path('p:g1:2'), pg_temp.path('p:g1:1')]), 0,
+select is(pg_temp.got(array[pg_temp.path('p:g1:2'), pg_temp.path('p:g1:1')]), 0,
   'the lead reads no picture of a script whose name shows');
 select tests.as_postgres();
 -- Not even with another alert open on the script (made here for the check, then removed).
 insert into public.marking_alerts (exam_id, kind, script_id) values (pg_temp.k('eq'), 'pages_set_aside', pg_temp.k('g1'));
 select tests.as_user(pg_temp.uid('lead'));
-select is(pg_temp.seen(array[pg_temp.path('p:g1:1')]), 0, 'not even while another alert of the script is open');
+select is(pg_temp.got(array[pg_temp.path('p:g1:1')]), 0, 'not even while another alert of the script is open');
 select tests.as_postgres();
 delete from public.marking_alerts where script_id = pg_temp.k('g1') and kind = 'pages_set_aside';
 
@@ -568,7 +587,8 @@ select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
 select is(pg_temp.code(public.marking_script_hand_back(pg_temp.k('a3'), 'ab')), 'reason_required', 'hand_back_with_same_pages_keeps_submitted: a reason given is 3 to 300 characters');
 insert into res values ('hb_a3', public.marking_script_hand_back(pg_temp.k('a3'), 'Pages are fine'));
 select tests.as_postgres();
-select is(pg_temp.r('hb_a3'), '{"ok": true, "state": "marked", "reopened": 0}'::jsonb, 'handed back with the same pages, the script is marked again');
+-- Phase 3B: with the checks off its submitted piece was checked, and stays so: the script is checked again.
+select is(pg_temp.r('hb_a3'), '{"ok": true, "state": "checked", "reopened": 0}'::jsonb, 'handed back with the same pages, the script is marked again (checked: the checks are off)');
 select is(array[pg_temp.us('a3'), pg_temp.hold('a3'), pg_temp.ms('a3', 'm2'), pg_temp.holder('a3'), pg_temp.alerts('a3'), pg_temp.marks('mk:a3')],
   array['submitted', '-', 'submitted', '-', '', '1=1,2(a)=1,2(b)=1'], 'the submitted marking is kept as it was; nothing to check');
 select is((select pages_changed_at from public.markings where id = pg_temp.k('mk:a3')), null::timestamptz, 'and its pages are not marked as changed');
@@ -589,7 +609,7 @@ select public.marking_submit(pg_temp.k('mk:c1'), 1);
 select tests.as_postgres();
 insert into res select 'key_c1', to_jsonb(public.marking_pages_key(pg_temp.k('c1')));
 select pg_temp.set_aside('c1', 4);
-select is(array[pg_temp.st('c1'), pg_temp.alerts('c1'), pg_temp.notices('c1')::text], array['marked', 'pages_set_aside open', '1'],
+select is(array[pg_temp.st('c1'), pg_temp.alerts('c1'), pg_temp.notices('c1')::text], array['checked', 'pages_set_aside open', '1'],
   'set_aside_scan_page_raises_alert_and_adds_nothing: an alert that pages were set aside, and its email');
 select is((select array[a.page_id::text, coalesce(a.unit_id::text, '-')] from public.marking_alerts a where a.id = pg_temp.alert('c1', 'pages_set_aside')),
   array[pg_temp.k('set_aside:c1')::text, '-'], 'about the page set aside');
@@ -970,7 +990,7 @@ select is(array[pg_temp.code(pg_temp.r('tb_a2')), pg_temp.st('a2'), pg_temp.hold
   array['ok', 'needs_attention', 'taken_back', 'm1 next'], 'an admin takes a2 back: it needs attention (a page has no marking picture); m1 keeps the piece');
 select pg_temp.put(array[pg_temp.path('p:a2:1'), pg_temp.path('p:a2:2')]);
 select tests.as_user(pg_temp.uid('lead'));
-select is(pg_temp.seen(array[pg_temp.path('p:a2:1'), pg_temp.path('p:a2:2')]), 0, 'the lead reads no picture of a script taken back, alerts open or not');
+select is(pg_temp.got(array[pg_temp.path('p:a2:1'), pg_temp.path('p:a2:2')]), 0, 'the lead reads no picture of a script taken back, alerts open or not');
 select tests.as_postgres();
 -- Staff have the marking picture made again (as the remask records it, then works the script out again).
 update public.script_pages set marking_path = replace(pg_temp.full('p:a2:3'), '-full.jpg', '-remask-marking.jpg') where id = pg_temp.k('p:a2:3');
@@ -1017,8 +1037,7 @@ select is(array(select f from unnest(array[
 select is(array(select f from unnest(array[
     'public.marking_name_visible(uuid, uuid)', 'public.marking_script_take_back(uuid, text)', 'public.marking_script_hand_back(uuid, text)',
     'public.marking_alerts_list(uuid, text)', 'public.marking_alert_release(uuid, text)', 'public.marking_alert_note(uuid, text)',
-    'public.marking_alerts_release_all(uuid, text)',
-    'public.marking_picture_allowed(text)']) f
+    'public.marking_alerts_release_all(uuid, text)']) f
   where has_function_privilege('anon', f, 'execute') or not has_function_privilege('authenticated', f, 'execute')), '{}'::text[],
   'the others are for signed-in users only');
 select is((select array_agg(t.tgname::text order by t.tgname) from pg_trigger t

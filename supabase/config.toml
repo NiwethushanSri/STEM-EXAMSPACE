@@ -433,6 +433,10 @@ verify_jwt = true
 [functions.paper-copy]
 verify_jwt = true
 
+# Marking picture links: signed for the caller's own token, after the database's check.
+[functions.marking-pictures]
+verify_jwt = true
+
 [functions.paper-release-notify]
 verify_jwt = false
 

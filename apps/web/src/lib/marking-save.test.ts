@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Op } from "./marking-model";
+import { applyOps, fromServer, type Op } from "./marking-model";
 import { createSaveQueue, restorePending, type SaveResult, type SaveStatus } from "./marking-save";
 
 const note = (i: number): Op => ({ op: "note", text: `n${i}` });
@@ -293,6 +293,74 @@ describe("save queue", () => {
     again.q.push([note(2)]);
     await again.q.flush();
     expect(revs).toEqual([5, 8]);
+  });
+
+  // 3B Task 6, fix round 1 (Ruling R12): a refusal the server never takes back stops the screen with the last saved
+  // marks on it. The queue says which batches the server accepted (onSaved), and drop() leaves it stopped, empty and
+  // silent: never "saved".
+  for (const code of ["locked", "settled"]) {
+    it(`save_stopped_by_${code}_drops_the_change_and_never_says_saved`, async () => {
+      const mark = (n: number): Op => ({ op: "mark", question_id: "q1", mark: n, na: false });
+      const sent: Op[][] = [];
+      const accepted: Op[][] = [];
+      const storage = makeStorage();
+      const statuses: { s: SaveStatus; code?: string }[] = [];
+      const q = createSaveQueue({
+        markingId: "m1",
+        rev: 5,
+        storage,
+        send: async (rev, ops) => {
+          sent.push(ops);
+          return sent.length === 1 ? { ok: true, rev: rev + 1 } : { ok: false, code };
+        },
+        onSaved: (ops) => accepted.push(ops),
+        onStatus: (s, c) => statuses.push({ s, code: c }),
+      });
+      q.push([mark(3)]);
+      await q.flush();
+      q.push([mark(4)]);
+      expect(await q.flush()).toBe(false);
+      expect(statuses.at(-1)).toEqual({ s: "refused", code });
+      expect(q.lastRefusal()).toBe(code);
+
+      // Only what the server accepted is the last saved state: the screen puts 3 back, not the refused 4.
+      expect(accepted).toEqual([[mark(3)]]);
+      const saved = accepted.reduce(applyOps, fromServer({ marks: [{ question_id: "q1", mark: 1, na: false }] }));
+      expect(saved.marks.q1).toEqual({ mark: 3, na: false });
+
+      // drop: the refused change and its stored copy go, and the queue stays stopped without a word.
+      const said = statuses.length;
+      q.drop();
+      expect(q.pending()).toBe(0);
+      expect(storage.m.has("stem-marking-pending-m1")).toBe(false);
+      expect(statuses.length).toBe(said);
+      expect(q.lastRefusal()).toBe(code);
+      q.push([mark(5)]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(sent.length).toBe(2);
+      // Nothing was said after the refusal: the last word is still "refused".
+      expect(statuses.length).toBe(said);
+      expect(statuses.at(-1)).toEqual({ s: "refused", code });
+    });
+  }
+
+  it("onSaved hears a batch the server accepted even when it was discarded while in flight", async () => {
+    let release: (r: SaveResult) => void = () => {};
+    const accepted: Op[][] = [];
+    const q = createSaveQueue({
+      markingId: "m1",
+      rev: 5,
+      storage: makeStorage(),
+      send: () => new Promise<SaveResult>((r) => (release = r)),
+      onSaved: (ops) => accepted.push(ops),
+      onStatus: () => {},
+    });
+    q.push([note(1)]);
+    const done = q.flush();
+    q.discard();
+    release({ ok: true, rev: 6 });
+    await done;
+    expect(accepted).toEqual([[note(1)]]);
   });
 
   it("flush with nothing queued resolves", async () => {

@@ -2,7 +2,7 @@ import { Suspense, type ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { homeFor, roleLabel, type AppRole } from "@stem/shared";
 import { ShellUserProvider } from "@/components/AppShell";
-import { getSessionProfile, type SessionProfile } from "@/lib/supabase/server";
+import { createClient, getSessionProfile, type SessionProfile } from "@/lib/supabase/server";
 
 /**
  * The real authorisation check, read from the database on every call: the caller must hold one of
@@ -18,11 +18,22 @@ export async function requireStaff(roles: readonly AppRole[]): Promise<SessionPr
   return me;
 }
 
-/** Layout body for a staff area: waits for the role check (a real redirect for the wrong role) and gives AppShell the user. */
-export async function StaffLayout({ allowed, children }: { allowed: readonly AppRole[]; children: ReactNode }) {
+/** Whether the signed-in marker leads a subject (marking_is_lead, 3B Task 13: one light question instead of the whole of
+ * marking_my_work; false when it cannot say). */
+async function leadsASubject(): Promise<boolean> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("marking_is_lead");
+  return !error && data === true;
+}
+
+/** Layout body for a staff area: waits for the role check (a real redirect for the wrong role) and gives AppShell the user.
+ * `markingMenu` (3B, a teacher's or a corrector's area): the menu shows Review under Marking for a lead marker, on every
+ * page of the area; it is asked once when the area is entered, as a layout stays across its pages. */
+export async function StaffLayout({ allowed, markingMenu = false, children }: { allowed: readonly AppRole[]; markingMenu?: boolean; children: ReactNode }) {
   const me = await requireStaff(allowed);
+  const lead = markingMenu && (me.role === "teacher" || me.role === "corrector") ? await leadsASubject() : false;
   return (
-    <ShellUserProvider user={{ name: `${me.firstName} ${me.lastName}`.trim(), roleLabel: roleLabel(me.role) }}>
+    <ShellUserProvider user={{ name: `${me.firstName} ${me.lastName}`.trim(), roleLabel: roleLabel(me.role), lead }}>
       {children}
     </ShellUserProvider>
   );

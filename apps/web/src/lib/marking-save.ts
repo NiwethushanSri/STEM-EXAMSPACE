@@ -89,6 +89,10 @@ export type SaveQueue = {
   resume(): void;
   /** Drops the unsent operations and their stored copy (the marker chose to after a refusal). */
   discard(): void;
+  /** 3B: drops the unsent operations and their stored copy and stays stopped, saying nothing: for a refusal the server
+   * will never take back (the screen puts the last saved state back). Unlike discard, it never sends again and never
+   * says "saved". */
+  drop(): void;
   /** The code of the refusal that stopped the queue, or null. */
   lastRefusal(): string | null;
   /** Stops every timer (React cleanup). Unsent operations stay in storage. */
@@ -109,6 +113,8 @@ export function createSaveQueue(opts: {
   debounceMs?: number;
   storage?: Store;
   onStatus: (s: SaveStatus, code?: string) => void;
+  /** 3B: each batch the server accepted, in order (also one discarded while it was on its way: the server has it). */
+  onSaved?: (ops: Op[]) => void;
 }): SaveQueue {
   const debounceMs = opts.debounceMs ?? 800;
   const storage = opts.storage ?? defaultStorage();
@@ -179,6 +185,7 @@ export function createSaveQueue(opts: {
         }
         return;
       }
+      if (result.ok) opts.onSaved?.(batch);
       if (mine !== epoch) continue; // discarded while in flight
       if (result.ok) {
         queue.splice(0, batch.length);
@@ -262,6 +269,13 @@ export function createSaveQueue(opts: {
       failures = 0;
       waitStart = null;
       setStatus("saved");
+    },
+    drop() {
+      epoch++;
+      queue.length = 0;
+      clearTimers();
+      persist();
+      waitStart = null;
     },
     lastRefusal: () => refusal,
     dispose() {

@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   alertKindText,
+  alertPagesViewable,
   deadlineText,
   holdText,
   nextScriptTarget,
   firstShownText,
   listHasMore,
+  parseAlertPages,
   parseAlerts,
   parseMyWork,
   parseProgress,
   parseUnits,
   pieceHoldLine,
   pieceStateLabel,
+  practiceText,
   releaseBlockedText,
   type MyPiece,
 } from "./marking-lists";
@@ -71,6 +74,8 @@ const piece = (over: Partial<MyPiece>): MyPiece => ({
   holdReason: null,
   pagesChanged: false,
   lastSavedAt: null,
+  practice: false,
+  sentBack: false,
   ...over,
 });
 
@@ -142,6 +147,27 @@ describe("parseMyWork", () => {
   it("keeps only the fields it knows, so nothing else reaches the page", () => {
     expect(JSON.stringify(parseMyWork(answer))).not.toContain("Wilhelmina");
   });
+  it("reads the pause and practice of each exam, and practice and a note sent back on each piece", () => {
+    const w = parseMyWork({
+      ...answer,
+      exams: [
+        { ...answer.exams[0], paused: true, practice: { needed: 3, done: 1, waiting: false } },
+        { ...answer.exams[0], exam_id: "e2", paused: false, practice: null },
+        { ...answer.exams[0], exam_id: "e3", practice: { needed: "3", done: 1 } },
+      ],
+      pieces: [{ ...answer.pieces[0], practice: true, sent_back: true }, { ...answer.pieces[0], unit_id: "u2" }],
+    });
+    expect(w!.exams.map((e) => [e.paused, e.practice])).toEqual([
+      [true, { needed: 3, done: 1, waiting: false }],
+      [false, null],
+      // A practice line that makes no sense is read as none (the database checks again on Next script).
+      [false, null],
+    ]);
+    expect(w!.pieces.map((p) => [p.practice, p.sentBack])).toEqual([
+      [true, true],
+      [false, false],
+    ]);
+  });
   it("is null for a refusal or a broken answer", () => {
     expect(parseMyWork({ ok: false, code: "forbidden" })).toBeNull();
     expect(parseMyWork(null)).toBeNull();
@@ -154,6 +180,15 @@ describe("parseMyWork", () => {
       exams: [],
       pieces: [],
     });
+  });
+});
+
+describe("practiceText", () => {
+  it("practice_text_cases: practice to do, done and with the lead, not ready", () => {
+    expect(practiceText({ needed: 3, done: 1, waiting: false })).toBe("Practice first: 1 of 3 done");
+    expect(practiceText({ needed: 3, done: 0, waiting: false })).toBe("Practice first: 0 of 3 done");
+    expect(practiceText({ needed: 2, done: 2, waiting: true })).toBe("Your practice scripts are with the lead marker.");
+    expect(practiceText({ needed: 0, done: 0, waiting: false })).toBe("Practice scripts are not ready yet.");
   });
 });
 
@@ -218,6 +253,21 @@ describe("parseProgress and parseUnits", () => {
     });
     expect(parseProgress({ ok: false, code: "forbidden" })).toBeNull();
   });
+  it("reads each exam's checks (3B), none when they are missing", () => {
+    const exam = { exam_id: "e1", title: "Physics mock", scripts: { marked: 14, checked: 12 } };
+    const p = parseProgress({
+      ok: true,
+      exams: [
+        { ...exam, checks: { waiting_second: 2, with_lead: 3, stuck_second: 1, paused_markers: 1, approved_at: "2026-12-20T10:00:00Z" } },
+        { ...exam, exam_id: "e2" },
+      ],
+    });
+    expect(p![0]).toMatchObject({
+      scripts: { marked: 14, checked: 12 },
+      checks: { waitingSecond: 2, withLead: 3, stuckSecond: 1, pausedMarkers: 1, approvedAt: "2026-12-20T10:00:00Z" },
+    });
+    expect(p![1].checks).toEqual({ waitingSecond: 0, withLead: 0, stuckSecond: 0, pausedMarkers: 0, approvedAt: null });
+  });
   it("reads each piece of an exam, with the index number and no candidate name", () => {
     const u = parseUnits({
       ok: true,
@@ -244,7 +294,19 @@ describe("parseProgress and parseUnits", () => {
       ],
     });
     expect(u![0]).toMatchObject({ unitId: "u1", indexNumber: "SE-2026-0001", markerName: "Ann Marker", how: "assigned", waiting: "picture_unchecked" });
+    expect(u![0]).toMatchObject({ checkState: null, second: null });
     expect(JSON.stringify(u)).not.toContain("Quarterfield");
+  });
+  it("3B: reads each piece's check and who has its second pass", () => {
+    const u = parseUnits({
+      ok: true,
+      units: [
+        { unit_id: "u1", script_number: "P1-0007", state: "submitted", check_state: "waiting_second", second: { marker_id: "m2", marker_name: "Bob Marker", state: "taken", how: "next" } },
+        { unit_id: "u2", script_number: "P1-0008", state: "submitted", check_state: "checked", second: { marker_id: "m2", state: "lost" } },
+      ],
+    });
+    expect(u![0]).toMatchObject({ checkState: "waiting_second", second: { markerId: "m2", markerName: "Bob Marker", state: "taken" } });
+    expect(u![1]).toMatchObject({ checkState: "checked", second: null });
   });
 });
 
@@ -282,7 +344,44 @@ describe("parseAlerts and their words", () => {
     expect(releaseBlockedText("picture_missing")).toBe("Release waits until every page has a marking picture.");
     expect(releaseBlockedText("taken_back")).toBe("Release waits until staff hand the script back to the markers.");
     expect(releaseBlockedText("pictures_updating")).toBe("Release waits until the new marking pictures are made.");
+    expect(releaseBlockedText("conflict_of_interest")).toBe("You cannot release this script because of a declared conflict. Ask an admin.");
     expect(releaseBlockedText("something_new")).toBe("This cannot be released yet.");
+  });
+  it("offers the pages of a changed picture, except to a lead with a conflict", () => {
+    const row = parseAlerts({ ok: true, alerts: [alert] })![0];
+    expect(alertPagesViewable(row)).toBe(true);
+    expect(alertPagesViewable({ ...row, releaseBlocked: null })).toBe(true);
+    expect(alertPagesViewable({ ...row, releaseBlocked: "conflict_of_interest" })).toBe(false);
+    expect(alertPagesViewable({ ...row, kind: "name_visible", releaseBlocked: null })).toBe(false);
+  });
+  it("reads an alert's pages for the viewer, the changed one marked, and no path", () => {
+    const pages = {
+      ok: true,
+      unit_id: "u1",
+      script_number: "P1-0007",
+      index_number: "SE-2026-0001",
+      pages: [
+        { n: 1, page_id: "p1", copy_page: 1, changed: false, has_picture: true },
+        { n: 2, page_id: "p2", copy_page: 2, changed: true, has_picture: true, marking_path: "e/u/1-1/1-marking.jpg" },
+        { n: 3, page_id: "p3", copy_page: null, changed: false, has_picture: false },
+        { n: "4", page_id: "p4" },
+      ],
+    };
+    const r = parseAlertPages(pages);
+    expect(r).toEqual({
+      ok: true,
+      unitId: "u1",
+      scriptNumber: "P1-0007",
+      indexNumber: "SE-2026-0001",
+      pages: [
+        { n: 1, pageId: "p1", copyPage: 1, changed: false, hasPicture: true },
+        { n: 2, pageId: "p2", copyPage: 2, changed: true, hasPicture: true },
+        { n: 3, pageId: "p3", copyPage: null, changed: false, hasPicture: false },
+      ],
+    });
+    expect(parseAlertPages({ ok: false, code: "conflict_of_interest" })).toEqual({ ok: false, code: "conflict_of_interest" });
+    expect(parseAlertPages({ ...pages, unit_id: null })).toEqual({ ok: false, code: "internal" });
+    expect(parseAlertPages(null)).toEqual({ ok: false, code: "internal" });
   });
   it("says what each kind of alert is about", () => {
     for (const k of ["picture_changed", "picture_missing", "name_visible", "pages_set_aside", "pages_changed"] as const) {

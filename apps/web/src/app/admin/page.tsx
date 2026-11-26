@@ -1,13 +1,15 @@
 import { Suspense } from "react";
 import Link from "next/link";
-import { AppShell, Card } from "@/components/AppShell";
+import { AppShell, Badge, Card } from "@/components/AppShell";
 import { FamilyNotices } from "@/components/scripts/FamilyNotices";
 import { AccountsOverview } from "@/components/accounts/AccountsSection";
 import { DeadlineLine } from "@/components/marking/MarkingProgress";
 import {
+  checkingAlerts,
   markingAlerts,
   parseMarkingDashboard,
   parseScriptsDashboard,
+  redFirst,
   scriptsDashboardAlerts,
   type MarkingDashboard,
   type ScriptsDashboard,
@@ -220,16 +222,17 @@ async function ScriptsOverview() {
   );
 }
 
-/** The marking figures (public.marking_dashboard): what is left, on hold and waiting for staff, the alerts, and a row
- * per exam whose marking is open or closed in the last 14 days. No candidate name. */
+/** The marking figures (public.marking_dashboard): what is left, on hold and waiting for staff, the alerts (3B: those of
+ * the checks too, every red one first), and a row per exam whose marking is open, closed in the last 14 days, or not
+ * approved, with its checks (scripts) and whether its marking is approved. No candidate name. */
 function MarkingDashboardView({ d, now }: { d: MarkingDashboard; now: Date }) {
-  const alerts = markingAlerts(d);
+  const alerts = redFirst([...markingAlerts(d), ...checkingAlerts(d)]);
   return (
     <div className="mb-6 space-y-4" data-testid="marking-dashboard">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Tile label="Left to mark" value={d.left} href="/admin/marking" testId="tile-marking-left" />
         <Tile label="On hold in marking" value={d.onHold} href="/admin/marking" testId="tile-marking-on-hold" />
-        <Tile label="Marking alerts open" value={d.alertsOpen} href="/admin/marking" testId="tile-marking-alerts" />
+        <Tile label="Scripts with open alerts" value={d.alertsOpen} href="/admin/marking" testId="tile-marking-alerts" />
         <Tile label="Marking pictures to check" value={d.picturesToCheck} href="/admin/scripts/exceptions?tab=checks" testId="tile-marking-pictures" />
       </div>
 
@@ -237,14 +240,14 @@ function MarkingDashboardView({ d, now }: { d: MarkingDashboard; now: Date }) {
 
       <Card title="Marking">
         {d.exams.length === 0 ? (
-          <p className="text-sm text-slate-500">No exam is being marked, and no marking closed in the last 14 days.</p>
+          <p className="text-sm text-slate-500">No exam is being marked or waiting for its marking to be approved, and no marking closed in the last 14 days.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm" data-testid="marking-exams">
-              <caption className="sr-only">Marking left, marked and on hold per exam</caption>
+              <caption className="sr-only">Marking left, marked, checked and on hold per exam</caption>
               <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  {["Exam", "Left", "Marked", "On hold", "Deadline"].map((h) => (
+                  {["Exam", "Left", "Marked", "Checked", "With the lead marker", "Waiting for a second marker", "On hold", "Deadline"].map((h) => (
                     <th key={h} scope="col" className="py-2 pr-4 font-medium">
                       {h}
                     </th>
@@ -259,9 +262,17 @@ function MarkingDashboardView({ d, now }: { d: MarkingDashboard; now: Date }) {
                         {e.title}
                         {e.paper ? ` (${e.paper})` : ""}
                       </Link>
+                      {e.approved && (
+                        <span className="ml-2">
+                          <Badge tone="slate">Approved</Badge>
+                        </span>
+                      )}
                     </th>
                     <td className="py-2 pr-4">{e.left}</td>
                     <td className="py-2 pr-4">{e.marked}</td>
+                    <td className="py-2 pr-4">{e.checked}</td>
+                    <td className="py-2 pr-4">{e.withLead}</td>
+                    <td className="py-2 pr-4">{e.waitingSecond}</td>
                     <td className="py-2 pr-4">{e.onHold}</td>
                     <td className="py-2 pr-4">
                       <DeadlineLine deadline={e.deadline} overdue={e.overdue} now={now} />

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { assertNoOwner, cleanup, clearLoginAttempts, countTestUsers, signInUI, svc } from "./admin";
-import { pieceState, remaskStates, removeMarkingExam, seedStaffMarkingExam, setPaperHiddenAreas, type Login, type SeededScript } from "./marking";
+import { clearMarker, pieceState, remaskStates, removeMarkingExam, seedStaffMarkingExam, setPaperHiddenAreas, type Login, type SeededScript } from "./marking";
 import { requireProcessor, waitForDb } from "./scripts";
 
 // The staff side of marking (Phase 3A Task 13) against the local stack and the running processing server (npm run
@@ -126,6 +126,9 @@ test("admin_sets_a_deadline_and_opens_marking", async ({ page }) => {
 });
 
 test("admin_assigns_two_scripts_and_takes_one_back", async ({ page }) => {
+  // Practice is on (the exam's default checks), so a marker gets live work only once cleared (3B Task 5): the lead
+  // marker clears them, through the function, as their own page will.
+  await clearMarker(seed.lead, seed.examId, seed.marker.id);
   await signIn(page, seed.admin);
   await page.goto(`/admin/marking?exam=${seed.examId}`);
   const scripts = page.getByRole("region", { name: `Scripts: ${seed.title} (Paper 1)`, exact: true });
@@ -152,10 +155,11 @@ test("admin_assigns_two_scripts_and_takes_one_back", async ({ page }) => {
   await noCandidateName(page, "the admin marking page");
   await noSidewaysScroll(page, "the admin marking page");
 
-  // The admin home page has the exam's marking row: 2 left, none marked, none on hold, the deadline.
+  // The admin home page has the exam's marking row: 2 left, none marked, checked, with the lead marker or waiting for a
+  // second marker (3B), none on hold, the deadline.
   await page.goto("/admin");
   const row = page.getByTestId("marking-exam").filter({ hasText: seed.title });
-  await expect(row.getByRole("cell")).toHaveText(["2", "0", "0", /^Mark by /]);
+  await expect(row.getByRole("cell")).toHaveText(["2", "0", "0", "0", "0", "0", /^Mark by /]);
   await noSidewaysScroll(page, "the admin home page");
 });
 
@@ -170,7 +174,7 @@ test("a_hidden_area_change_puts_the_marked_piece_on_hold", async ({ page }) => {
   // The admin home page says so.
   await signIn(page, seed.admin);
   await page.goto("/admin");
-  await expect(page.getByTestId("marking-exam").filter({ hasText: seed.title }).getByRole("cell")).toHaveText(["2", "0", "1", /^Mark by /]);
+  await expect(page.getByTestId("marking-exam").filter({ hasText: seed.title }).getByRole("cell")).toHaveText(["2", "0", "0", "0", "0", "1", /^Mark by /]);
   await expect(page.getByTestId("marking-alerts")).toContainText(/\d+ scripts? (is|are) on hold in marking\./);
 
   // The exam's progress card offers "Release all": it needs only the exam, so it is there when the alerts list is not.

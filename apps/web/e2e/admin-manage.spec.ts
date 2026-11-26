@@ -136,8 +136,9 @@ test("mock_student_page_redirects", async ({ page }) => {
   await expect(page).toHaveURL(/\/admin$/);
   await page.goto("/student/results");
   await expect(page).toHaveURL(/\/admin$/);
-  await page.goto("/examiner");
-  await expect(page).toHaveURL(/\/admin$/);
+  // The examiner demonstration pages are gone (3B Task 13): there is no such page, for anyone.
+  expect((await page.goto("/examiner"))?.status()).toBe(404);
+  expect((await page.goto("/examiner/standardisation"))?.status()).toBe(404);
   await page.goto("/admin/results");
   await expect(page.getByText("Preview — sample data")).toBeVisible();
 });

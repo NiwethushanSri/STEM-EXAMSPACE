@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Badge, Card } from "@/components/AppShell";
 import { ConfirmDialog } from "@/components/accounts/ConfirmDialog";
 import { ReasonDialog } from "@/components/papers/ReasonDialog";
+import { ChecksSettings } from "@/components/marking/ChecksSettings";
+import { PayRates } from "@/components/marking/PayRates";
 import {
   closeMarkingAction,
   openMarkingAction,
@@ -12,7 +15,8 @@ import {
   saveMarkingSettingsAction,
   type MarkingActionResult,
 } from "@/app/admin/exams/[id]/actions";
-import { markingChecks, type MarkingGroup, type MarkingMode, type MarkingView } from "@/lib/exam-marking";
+import { markingChecks, type ChecksView, type MarkingGroup, type MarkingMode, type MarkingView } from "@/lib/exam-marking";
+import type { RatesView } from "@/lib/marker-pay";
 import { utcToLondonParts } from "@/lib/london-time";
 import { formatLondon } from "@/lib/money";
 
@@ -21,16 +25,25 @@ const FIELD = "mt-1 rounded border border-slate-300 px-3 py-2 text-sm disabled:b
 
 type Dialog = "open" | "close" | "reopen" | "deadline";
 
-/** How the exam is marked, its marking deadline, the checks before marking opens, and Open, Close and Reopen. */
+/** How the exam is marked, its marking deadline, the checks on the marking, what opening waits for, and Open, Close
+ * and Reopen. 3B Task 10: once marking has opened, a link to the exam's approval page ("Approve marking", or
+ * "Approved"); an approved exam says so and offers no Reopen until an admin withdraws the approval. 3B Task 12: what
+ * markers are paid for the exam's marking (Marker pay). */
 export function ExamMarkingPanel({
   examId,
   view,
+  checks,
+  rates,
   groups,
   finishesAt,
   homeUntil,
 }: {
   examId: string;
   view: MarkingView | null;
+  /** Null when the checks could not be loaded. */
+  checks: ChecksView | null;
+  /** The marker pay rates; null when they could not be loaded. */
+  rates: RatesView | null;
   groups: MarkingGroup[];
   /** When the exam finishes: the deadline must be after it. */
   finishesAt: string;
@@ -46,10 +59,26 @@ export function ExamMarkingPanel({
       </Card>
     );
   }
-  return <Panel examId={examId} view={view} groups={groups} finishesAt={finishesAt} homeUntil={homeUntil} />;
+  return <Panel examId={examId} view={view} checks={checks} rates={rates} groups={groups} finishesAt={finishesAt} homeUntil={homeUntil} />;
 }
 
-function Panel({ examId, view, groups, finishesAt, homeUntil }: { examId: string; view: MarkingView; groups: MarkingGroup[]; finishesAt: string; homeUntil: string }) {
+function Panel({
+  examId,
+  view,
+  checks,
+  rates,
+  groups,
+  finishesAt,
+  homeUntil,
+}: {
+  examId: string;
+  view: MarkingView;
+  checks: ChecksView | null;
+  rates: RatesView | null;
+  groups: MarkingGroup[];
+  finishesAt: string;
+  homeUntil: string;
+}) {
   const router = useRouter();
   const saved = view.deadline ? utcToLondonParts(view.deadline) : { date: "", time: "" };
   const [mode, setMode] = useState<MarkingMode>(view.mode);
@@ -63,6 +92,8 @@ function Panel({ examId, view, groups, finishesAt, homeUntil }: { examId: string
 
   const opened = view.openedAt !== null;
   const closed = view.closedAt !== null;
+  // 3B Task 10: an approved exam's marking cannot be reopened until an admin withdraws the approval.
+  const approved = checks?.approved === true;
 
   function show(d: Dialog) {
     setDialogError(null);
@@ -113,6 +144,14 @@ function Panel({ examId, view, groups, finishesAt, homeUntil }: { examId: string
           <>
             <Badge tone="slate">Not open</Badge>
             <span className="ml-2">Marking has not opened for this exam.</span>
+          </>
+        ) : approved ? (
+          <>
+            <Badge tone="green">Approved</Badge>
+            <span className="ml-2">
+              This exam&apos;s marking is approved. Marking closed on {formatLondon(view.closedAt ?? "")} (UK time), and nothing about it can
+              change until an admin withdraws the approval.
+            </span>
           </>
         ) : closed ? (
           <>
@@ -185,6 +224,10 @@ function Panel({ examId, view, groups, finishesAt, homeUntil }: { examId: string
         </button>
       </form>
 
+      <ChecksSettings examId={examId} checks={checks} />
+
+      <PayRates examId={examId} rates={rates} />
+
       <div className="mt-6 border-t border-slate-100 pt-4">
         <h3 className="text-sm font-semibold text-slate-800">{opened ? "Progress" : "Before marking opens"}</h3>
         <ul data-testid="marking-checks" className="mt-2 list-inside list-disc space-y-1 text-sm text-slate-700">
@@ -203,10 +246,18 @@ function Panel({ examId, view, groups, finishesAt, homeUntil }: { examId: string
               Close marking
             </button>
           )}
-          {opened && closed && (
+          {opened && closed && !approved && (
             <button type="button" disabled={busy} onClick={() => show("reopen")} className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
               Reopen marking
             </button>
+          )}
+          {opened && (
+            <Link
+              href={`/admin/marking/${examId}/approval`}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+            >
+              {approved ? "Approved" : "Approve marking"}
+            </Link>
           )}
         </div>
       </div>

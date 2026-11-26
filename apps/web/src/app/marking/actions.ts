@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { alertMessageFor, allocationMessageFor } from "@stem/shared";
+import { alertMessageFor, allocationMessageFor, markingScreenMessageFor } from "@stem/shared";
 import { reasonProblem } from "@/lib/exception-queue";
+import { FEEDBACK_FAILED, parseFeedback, type Feedback } from "@/lib/marking-feedback";
 import { MARKING_ROLES } from "@/lib/marking-lists";
 import { requireStaff } from "@/lib/staff-gate";
 import { createClient } from "@/lib/supabase/server";
@@ -11,6 +12,7 @@ import { isUuid } from "@/lib/uuid";
 /** What these actions send back; they never throw for expected failures. */
 export type MarkingActionResult = { ok: true; message: string } | { ok: false; message: string };
 export type NextScriptResult = { ok: true; unitId: string } | { ok: false; message: string };
+export type FeedbackResult = { ok: true; feedback: Feedback } | { ok: false; message: string };
 
 type Rpc = (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
 type Answer = Record<string, unknown>;
@@ -50,6 +52,19 @@ export async function giveBack(unitId: string, reason?: string): Promise<Marking
   const a = await call("marking_give_back", { p_unit: unitId, p_reason: (reason ?? "").trim() || null });
   if (!a) return { ok: false, message: MARKER_GENERIC };
   return a.ok === true ? { ok: true, message: "Script given back." } : { ok: false, message: allocationMessageFor(code(a), "marker") };
+}
+
+/** The marker's own marks beside the lead marker's, after a practice script or a seeded script marked outside
+ * tolerance (marking_feedback). It changes nothing; the database answers only the marking's own marker, and only once
+ * the feedback was shown. */
+export async function markingFeedback(markingId: string): Promise<FeedbackResult> {
+  await requireStaff(MARKING_ROLES);
+  if (!isUuid(markingId)) return { ok: false, message: FEEDBACK_FAILED };
+  const supabase = await createClient();
+  const { data, error } = await (supabase.rpc as unknown as Rpc)("marking_feedback", { p_marking: markingId });
+  const r = error ? null : parseFeedback(data);
+  if (r?.ok) return { ok: true, feedback: r.feedback };
+  return { ok: false, message: !r || r.code === "internal" ? FEEDBACK_FAILED : markingScreenMessageFor(r.code) };
 }
 
 /** Runs one alert function with a reason (3 to 300 characters); the database checks the lead or admin again. */

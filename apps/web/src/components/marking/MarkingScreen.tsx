@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useEffectEvent, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type MouseEvent, type ReactNode, type RefObject, type SetStateAction } from "react";
 import { markingScreenMessageFor, type Json } from "@stem/shared";
 import { giveBack, nextScript } from "@/app/marking/actions";
+import { FeedbackPanel } from "@/components/marking/FeedbackPanel";
 import { MarkPanel, focusMarkBox } from "@/components/marking/MarkPanel";
 import { PageCanvas } from "@/components/marking/PageCanvas";
 import { QuestionList } from "@/components/marking/QuestionList";
@@ -15,34 +16,37 @@ import { holdText, nextScriptTarget, parseMyWork } from "@/lib/marking-lists";
 import { nextQuestionId, unitTotal, validMark } from "@/lib/marking-marks";
 import { act, applyOps, fromServer, redo, undo, type MarkingState, type Op, type SavedAnnotation } from "@/lib/marking-model";
 import { ZOOM_MAX, ZOOM_MIN, isPhone } from "@/lib/marking-pointer";
+import { fetchPictureLinks } from "@/lib/marking-pictures";
 import { createSaveQueue, restorePending, type SaveQueue, type SaveResult, type SaveStatus } from "@/lib/marking-save";
 import {
-  ACCESS_CHECK_MS,
+  ACCESS_TICK_MS,
   accessCheckDue,
   accessCheckOutcome,
+  dropsUnsaved,
   firstLeaf,
   labelList,
   parseOpened,
+  parseSubmitted,
   questionPageIndexes,
+  saveStatusWords,
+  stopsTheScreen,
   zoomStepIn,
   zoomStepOut,
   type OpenedPiece,
+  type ScreenPage,
   type ScreenQuestion,
+  type SubmitFeedback,
 } from "@/lib/marking-screen";
 import { createClient } from "@/lib/supabase/client";
 
-/** Marking pictures and the mark scheme PDF are shown through signed links that last this long (seconds). */
+/** Marking pictures (signed by the marking-pictures function) and the mark scheme PDF are shown through signed links
+ * that last this long (seconds). */
 export const MARKING_URL_SECONDS = 120;
 
 const BUTTON = `inline-flex min-h-11 items-center justify-center rounded px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS}`;
 const PRIMARY = `${BUTTON} bg-blue-600 text-white hover:bg-blue-700`;
 const QUIET = `${BUTTON} border border-slate-300 bg-white text-slate-900 hover:bg-slate-50`;
 
-const SAVE_WORDS: Partial<Record<SaveStatus, string>> = {
-  saved: "Saved",
-  saving: "Saving…",
-  offline: "Not saved: no connection. Your work is kept on this screen and will be sent when you are back online.",
-};
 /** Save stops that take the page away until the marker goes back (or the lead releases the hold). */
 const COVER_CODES: Partial<Record<SaveStatus, string>> = {
   on_hold: "on_hold",
@@ -60,6 +64,8 @@ const NEXT_FAILED = "Could not find a script. Check your connection and try agai
 const LINK_FRESH_MS = (MARKING_URL_SECONDS - 30) * 1000;
 const NO_ANNOTATIONS: SavedAnnotation[] = [];
 const NO_URLS: Record<string, string> = {};
+/** The page whose picture the screen shows or asks for: the page's id when it has a marking picture. */
+const pictureOf = (p: ScreenPage | null | undefined): string | null => (p?.hasPicture ? p.pageId : null);
 
 type Obj = Record<string, unknown>;
 const obj = (v: unknown): Obj | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Obj) : null);
@@ -82,7 +88,7 @@ export function MarkingScreen({ unitId }: { unitId: string }) {
   const [opened, setOpened] = useState(false);
   if (width !== null && !isPhone(width) && !opened) setOpened(true);
   const [visit, setVisit] = useState(0);
-  const refusedPaths = useRef(new Set<string>());
+  const refusedPages = useRef(new Set<string>());
   // Next.js keeps a page it leaves, hidden (Activity, with Cache Components), and can show it again (Back). The piece
   // is then opened afresh, with the server's marks and rev and what is stored unsent, never the copy kept from before.
   useLayoutEffect(() => () => setVisit((v) => v + 1), []);
@@ -98,13 +104,13 @@ export function MarkingScreen({ unitId }: { unitId: string }) {
           </Link>
         </main>
       )}
-      {opened && <Workspace key={visit} unitId={unitId} active={!phone} onReload={() => setVisit((v) => v + 1)} refusedPaths={refusedPaths} />}
+      {opened && <Workspace key={visit} unitId={unitId} active={!phone} onReload={() => setVisit((v) => v + 1)} refusedPages={refusedPages} />}
     </>
   );
 }
 
 /** Opens the piece, then hands it to the desk; a refusal (or a failure) is said in plain words. */
-function Workspace({ unitId, active, onReload, refusedPaths }: { unitId: string; active: boolean; onReload: () => void; refusedPaths: RefObject<Set<string>> }) {
+function Workspace({ unitId, active, onReload, refusedPages }: { unitId: string; active: boolean; onReload: () => void; refusedPages: RefObject<Set<string>> }) {
   const [result, setResult] = useState<ReturnType<typeof parseOpened> | null>(null);
   useEffect(() => {
     let live = true;
@@ -145,7 +151,7 @@ function Workspace({ unitId, active, onReload, refusedPaths }: { unitId: string;
       </>,
     );
   }
-  return <Desk piece={result.piece} active={active} onReload={onReload} refusedPaths={refusedPaths} />;
+  return <Desk piece={result.piece} active={active} onReload={onReload} refusedPages={refusedPages} />;
 }
 
 type QueueHooks = {
@@ -157,11 +163,46 @@ type QueueHooks = {
   onReasonRequired: () => void;
   /** The refusal that stopped the queue, in plain words. */
   onRefused: (message: string) => void;
+  /** A refusal that takes the page away (stopsTheScreen: paused, locked, settled), by its code. */
+  onStop: (code: string) => void;
+  /** A batch of operations the server accepted. */
+  onSaved: (ops: Op[]) => void;
+};
+
+type Stop = { code: string; reason?: string };
+
+/** What the screen keeps of its marking for a save that stops it: the state the server last confirmed, and the one on
+ * screen. */
+type StopTarget = {
+  queue: RefObject<SaveQueue | null>;
+  setStop: Dispatch<SetStateAction<Stop | null>>;
+  saved: RefObject<MarkingState>;
+  modelRef: RefObject<MarkingState>;
+  setModel: Dispatch<SetStateAction<MarkingState>>;
+};
+
+/** What a save refused with a code that stops the screen does (3B Ruling R12): the page is covered with the refusal's
+ * sentence and input stops. For a change the server never takes (locked, settled), the queue drops it and stays
+ * stopped, and the marks, NR, annotations and note go back to what the server last confirmed, so the screen shows
+ * only what is saved (and the piece opens again as it was saved). A pause keeps the change, as a hold does. */
+const stopWith = (t: StopTarget) => (code: string) => {
+  if (dropsUnsaved(code)) {
+    t.queue.current?.drop();
+    t.modelRef.current = t.saved.current;
+    t.setModel(t.saved.current);
+  }
+  t.setStop({ code });
+};
+
+/** Keeps the state the server last confirmed up to date with each batch it accepts. */
+const savedWith = (saved: RefObject<MarkingState>) => (ops: Op[]) => {
+  saved.current = applyOps(saved.current, ops);
 };
 
 /**
  * The save queue of one marking at `atRev`. Its send throws on a network, PostgREST, server or sign-in error (the
- * queue tries again) and otherwise returns marking_save's answer; any refusal is final and stops the queue.
+ * queue tries again) and otherwise returns marking_save's answer; any refusal is final and stops the queue. One that
+ * stops the screen (paused, locked, settled) covers the page as on_hold does; any other is said in a banner.
  */
 function queueAt(atRev: number, h: QueueHooks): SaveQueue {
   const send = async (rev: number, ops: Op[], activeSeconds: number, reason?: string): Promise<SaveResult> => {
@@ -193,17 +234,20 @@ function queueAt(atRev: number, h: QueueHooks): SaveQueue {
     markingId: h.markingId,
     rev: atRev,
     send,
+    onSaved: h.onSaved,
     onStatus: (s, code) => {
       h.setStatus(s);
       if (s === "reason_required") h.onReasonRequired();
-      if (s === "refused") h.onRefused(markingScreenMessageFor(code ?? null, typeof h.last.current?.reason === "string" ? h.last.current.reason : null));
+      if (s !== "refused") return;
+      if (code && stopsTheScreen(code)) h.onStop(code);
+      else h.onRefused(markingScreenMessageFor(code ?? null, typeof h.last.current?.reason === "string" ? h.last.current.reason : null));
     },
   });
 }
 
 type DialogKind = "name" | "give_back" | "reason" | null;
 
-function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; active: boolean; onReload: () => void; refusedPaths: RefObject<Set<string>> }) {
+function Desk({ piece, active, onReload, refusedPages }: { piece: OpenedPiece; active: boolean; onReload: () => void; refusedPages: RefObject<Set<string>> }) {
   const router = useRouter();
   const markingId = piece.marking.id;
   const readOnly = piece.unit.closed;
@@ -215,10 +259,13 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     const pending = readOnly ? [] : restorePending(markingId, piece.marking.rev);
     const state = pending.length > 0 ? applyOps(base, pending) : base;
     const first = leaves.find((q) => !state.marks[q.id] || (state.marks[q.id].mark === null && !state.marks[q.id].na)) ?? leaves[0] ?? null;
-    return { state, pending, first };
+    return { base, state, pending, first };
   });
   const [model, setModel] = useState<MarkingState>(boot.state);
   const modelRef = useRef(boot.state);
+  /** The marks, NR, annotations and note as the server last confirmed them (as opened, then each batch it accepted),
+   * with nothing to undo: what the screen goes back to when a save is refused for good. */
+  const saved = useRef(boot.base);
   const [status, setStatus] = useState<SaveStatus>(boot.pending.length > 0 ? "saving" : "saved");
   const [submitted, setSubmitted] = useState(piece.marking.status === "submitted");
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -237,14 +284,21 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   /** Submit is running: input stops until it answers (the ref stops it at once, before the next render). */
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
-  /** A refusal of Submit that takes the page away (a hold, marking closed, the script no longer the marker's). */
-  const [stop, setStop] = useState<{ code: string; reason?: string } | null>(null);
+  /** A refusal that takes the page away: of Submit (a hold, marking closed, the script no longer the marker's, a
+   * pause) or of a save (stopsTheScreen: paused, locked, settled). */
+  const [stop, setStop] = useState<Stop | null>(null);
+  /** 3B: a practice script, or a seeded script marked outside tolerance, once submitted: its feedback takes the page's
+   * place. A submitted practice script opens on it again (practice is announced); a seeded one never does. */
+  const [feedback, setFeedback] = useState<SubmitFeedback | null>(
+    !readOnly && piece.marking.practice && piece.marking.status === "submitted" ? "practice" : null,
+  );
   const [notice, setNotice] = useState<string | null>(null);
   const [schemeMessage, setSchemeMessage] = useState<string | null>(null);
+  /** The pictures' links, whether each failed and how often it was tried: all by page id. */
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [failed, setFailed] = useState<Record<string, boolean>>({});
   const tries = useRef<Record<string, number>>({});
-  /** When each picture's link was signed, and the pictures whose link is being asked for. */
+  /** When each page's link was signed, and the pages whose link is being asked for. */
   const signedAt = useRef<Record<string, number>>({});
   const asking = useRef(new Set<string>());
   const queue = useRef<SaveQueue | null>(null);
@@ -254,12 +308,18 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
 
   // A change after submit asks for its reason, unless another box is open (its banner offers the reason then).
   const askReason = () => setDialog((d) => d ?? "reason");
-  const hooksFor = (): QueueHooks => ({ markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: askReason, onRefused: setRefusal });
+  const hooksFor = (): QueueHooks => ({
+    markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: askReason, onRefused: setRefusal,
+    onStop: stopWith({ queue, setStop, saved, modelRef, setModel }), onSaved: savedWith(saved),
+  });
 
   // The save queue lives as long as the screen; operations left from an earlier visit at this rev are sent first.
   useEffect(() => {
     if (readOnly) return;
-    const q = queueAt(piece.marking.rev, { markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog((d) => d ?? "reason"), onRefused: setRefusal });
+    const q = queueAt(piece.marking.rev, {
+      markingId, rev, last, setStatus, setHoldUntil, onReasonRequired: () => setDialog((d) => d ?? "reason"), onRefused: setRefusal,
+      onStop: stopWith({ queue, setStop, saved, modelRef, setModel }), onSaved: savedWith(saved),
+    });
     queue.current = q;
     if (boot.pending.length > 0) q.push(boot.pending);
     // The queue in use (Submit starts a new one) warns before the tab closes with changes not yet sent.
@@ -297,8 +357,9 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   );
   const missing = totals.missing.map((id) => questions.find((q) => q.id === id)?.label ?? "");
   const coverCode = stop?.code ?? COVER_CODES[status] ?? null;
-  /** The page is taken away (a hold, new pictures, the hold ended, marking closed): no picture is shown or asked for. */
-  const covered = readOnly || coverCode !== null;
+  /** The page is taken away (a hold, new pictures, the hold ended, marking closed, a pause, a locked or settled script),
+   * or the feedback took its place: no picture is shown or asked for. */
+  const covered = readOnly || coverCode !== null || feedback !== null;
   const stale = status === "stale";
   const stopped = busy || covered || stale || status === "refused" || status === "reason_required";
   const pageId = page?.pageId ?? null;
@@ -306,37 +367,40 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const questionPages = pagesFor(current, questions, pages);
 
   // ---------------------------------------------------------------------------------------------
-  // Pictures: signed links for the marking pictures marking_unit_open returned, and no other, asked for when the page
-  // is shown and when its thumbnail appears (a link older than LINK_FRESH_MS is asked for again, and the old one is
-  // not shown). A refused link means the picture may have changed: the piece is opened again (once per picture).
-  // Under a cover, and read only after marking closed (Ruling R11): none.
+  // Pictures: links for the pages of the piece that have a marking picture, by page id, from the marking-pictures
+  // function (the database checks the piece as the marker; the screen never holds a picture's path). They are asked
+  // for when the page is shown and when its thumbnail appears (a link older than LINK_FRESH_MS is asked for again, and
+  // the old one is not shown). A refused link means the piece or the page may have changed: the piece is opened again
+  // (once per page). Under a cover, and read only after marking closed (Ruling R11): none.
   // ---------------------------------------------------------------------------------------------
-  const sign = (path: string) => {
-    if (asking.current.has(path)) return;
-    asking.current.add(path);
+  const sign = (pageId: string) => {
+    if (asking.current.has(pageId)) return;
+    asking.current.add(pageId);
     const onSigned = () => {
-      signedAt.current[path] = Date.now();
+      signedAt.current[pageId] = Date.now();
     };
-    void signPicture(path, { setUrls, setFailed, refusedPaths, onReload, onSigned }).finally(() => asking.current.delete(path));
+    void signPicture(piece.unit.id, pageId, { setUrls, setFailed, refusedPages, onReload, onSigned }).finally(() => asking.current.delete(pageId));
   };
-  const showPicture = (path: string | null) => {
-    if (!path || covered) return;
-    const at = signedAt.current[path];
+  const showPicture = (pageId: string | null) => {
+    if (!pageId || covered) return;
+    const at = signedAt.current[pageId];
     if (at !== undefined && Date.now() - at < LINK_FRESH_MS) return;
     if (at !== undefined) {
-      delete signedAt.current[path];
-      setUrls((m) => withoutKey(m, path));
+      delete signedAt.current[pageId];
+      setUrls((m) => withoutKey(m, pageId));
     }
-    sign(path);
+    sign(pageId);
   };
-  const showShownPicture = useEffectEvent(() => showPicture(page?.markingPath ?? null));
+  const shownPicture = pictureOf(page);
+  const showShownPicture = useEffectEvent(() => showPicture(shownPicture));
   useEffect(() => {
     showShownPicture();
-  }, [page?.markingPath, covered]);
+  }, [shownPicture, covered]);
 
   // A page withdrawn while the marker only reads (another marker reported a name, staff pressed "A name still shows",
-  // the hold ended) must not stay on screen until their next save. Every minute while the screen is in view, the link
-  // of the shown picture is asked for again: the storage rule answers for the piece as it is now. Given, nothing
+  // the hold ended) must not stay on screen until their next save. About every minute while the screen is in view (due
+  // 55 seconds after the last check, looked at every 15 seconds: at most 70 seconds apart), the link of the shown
+  // picture is asked for again (fetchPictureLinks): the database answers for the piece as it is now. Given, nothing
   // changes on screen. Refused, the picture is taken off at once and the piece is asked for again (marking_unit_open):
   // its refusal becomes the cover, in its own words; if the piece is still the marker's (the picture itself changed),
   // it is opened afresh.
@@ -344,19 +408,17 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   const lastAccessCheck = useRef<number | null>(null);
   const checkingAccess = useRef(false);
   const checkAccess = useEffectEvent(async () => {
-    const path = page?.markingPath ?? null;
+    const pageId = pictureOf(page);
     const now = Date.now();
     if (checkingAccess.current || !active) return;
-    if (!path || !accessCheckDue({ visible: document.visibilityState === "visible", covered, path, lastAt: lastAccessCheck.current ?? now, now })) return;
+    if (!pageId || !accessCheckDue({ visible: document.visibilityState === "visible", covered, pageId, lastAt: lastAccessCheck.current ?? now, now })) return;
     checkingAccess.current = true;
     lastAccessCheck.current = now;
     try {
-      const signed = await createClient().storage.from("script-pages").createSignedUrl(path, MARKING_URL_SECONDS);
-      const status = typeof signed.error?.status === "number" ? signed.error.status : null;
-      if (accessCheckOutcome({ signed: !signed.error && !!signed.data?.signedUrl, status }) !== "gone") return;
-      delete signedAt.current[path];
-      setUrls((m) => withoutKey(m, path));
-      setFailed((m) => ({ ...m, [path]: true }));
+      if (accessCheckOutcome(await fetchPictureLinks(piece.unit.id, [pageId])) !== "gone") return;
+      delete signedAt.current[pageId];
+      setUrls((m) => withoutKey(m, pageId));
+      setFailed((m) => ({ ...m, [pageId]: true }));
       const again = await createClient().rpc("marking_unit_open", { p_unit: piece.unit.id });
       const answer = again.error ? null : parseOpened(again.data);
       if (answer && !answer.ok) setStop({ code: answer.code });
@@ -369,7 +431,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   });
   useEffect(() => {
     lastAccessCheck.current = Date.now();
-    const every = setInterval(() => void checkAccess(), ACCESS_CHECK_MS);
+    const every = setInterval(() => void checkAccess(), ACCESS_TICK_MS);
     const onVisible = () => void checkAccess();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -413,7 +475,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     const next = Math.max(0, Math.min(pages.length - 1, i));
     if (next !== pageIndex) setSelectedId(null);
     // Its link is asked for now, before the page is drawn, so one that has run out is never shown.
-    showPicture(pages[next]?.markingPath ?? null);
+    showPicture(pictureOf(pages[next]));
     setPageIndex(next);
   };
   const openList = () => {
@@ -533,20 +595,20 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   // Pictures.
   // ---------------------------------------------------------------------------------------------
   // A picture that fails to load is asked for once more; a load counts as a fresh start.
-  const pictureError = (path: string) => {
-    const n = (tries.current[path] ?? 0) + 1;
-    tries.current[path] = n;
-    if (n === 1) sign(path);
-    else setFailed((m) => ({ ...m, [path]: true }));
+  const pictureError = (pageId: string) => {
+    const n = (tries.current[pageId] ?? 0) + 1;
+    tries.current[pageId] = n;
+    if (n === 1) sign(pageId);
+    else setFailed((m) => ({ ...m, [pageId]: true }));
   };
-  const pictureLoaded = (path: string) => {
-    tries.current[path] = 0;
+  const pictureLoaded = (pageId: string) => {
+    tries.current[pageId] = 0;
   };
-  const retryPicture = (path: string) => {
-    tries.current[path] = 0;
-    setFailed((m) => ({ ...m, [path]: false }));
-    setUrls((m) => withoutKey(m, path));
-    sign(path);
+  const retryPicture = (pageId: string) => {
+    tries.current[pageId] = 0;
+    setFailed((m) => ({ ...m, [pageId]: false }));
+    setUrls((m) => withoutKey(m, pageId));
+    sign(pageId);
   };
 
   const openScheme = async () => {
@@ -591,9 +653,20 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     if (q && !(await q.flush())) return;
     const atRev = rev.current;
     const { data, error } = await createClient().rpc("marking_submit", { p_marking: markingId, p_rev: atRev });
-    const d = obj(data);
-    if (error || !d) return setNotice(markingScreenMessageFor("internal"));
-    if (d.ok === true && typeof d.rev === "number") {
+    const d = parseSubmitted(error ? null : data);
+    if (d.ok && d.feedback) {
+      // A practice script, or a seeded one outside tolerance: the attempt is locked and its feedback takes the page's
+      // place. Nothing can be changed on it, so nothing (normally nothing: input stops while Submit runs) is kept.
+      rev.current = d.rev;
+      q?.discard();
+      q?.dispose();
+      queue.current = null;
+      setStatus("saved");
+      setSubmitted(true);
+      setFeedback(d.feedback);
+      return;
+    }
+    if (d.ok) {
       // Submit moves the rev on: the queue starts again from it, with no reason yet for this visit. Anything still
       // waiting in the old queue (input stops while Submit runs, so normally nothing) moves to the new one, and the
       // server asks for its reason. Its stored copy is how it moves; if that cannot be read, the piece is opened again
@@ -610,15 +683,13 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
       if (moved.length > 0) next.push(moved);
       return;
     }
-    const code = typeof d.code === "string" ? d.code : "internal";
-    const reason = typeof d.reason === "string" ? d.reason : undefined;
+    const { code, reason, missing: labels } = d;
     if (code === "conflict" && (reason === "rev" || reason === undefined)) return setStatus("stale");
     if (code === "conflict" && reason === "submitted") return setNotice(markingScreenMessageFor(code, reason));
     if (code === "incomplete") {
-      const labels = Array.isArray(d.missing) ? d.missing.filter((x): x is string => typeof x === "string") : [];
       return setNotice(`${markingScreenMessageFor(code)}${labels.length ? ` Still to mark: ${labelList(labels)}.` : ""}`);
     }
-    if (["on_hold", "pictures_updating", "hold_expired", "marking_closed", "forbidden", "not_found"].includes(code) || code === "conflict") {
+    if (stopsTheScreen(code) || code === "forbidden" || code === "not_found" || code === "conflict") {
       return setStop({ code, reason });
     }
     setNotice(markingScreenMessageFor(code, reason));
@@ -649,7 +720,7 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
     router.push("/marking");
   };
 
-  const statusWords = readOnly ? "Read only" : (SAVE_WORDS[status] ?? "Not saved");
+  const statusWords = saveStatusWords({ readOnly, status, stop });
   const holdLine = !readOnly && !submitted && now !== null ? holdText(holdUntil, new Date(now)) : null;
   const canGiveBack = !readOnly && !submitted;
 
@@ -701,9 +772,11 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
           </svg>
           Marking
         </Link>
-        <button type="button" aria-expanded={listOpen} onClick={openList} className={`${QUIET} min-[1200px]:hidden`}>
-          Questions
-        </button>
+        {!feedback && (
+          <button type="button" aria-expanded={listOpen} onClick={openList} className={`${QUIET} min-[1200px]:hidden`}>
+            Questions
+          </button>
+        )}
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold text-slate-900">{piece.unit.examTitle}</h1>
           <p className="truncate text-sm text-slate-600">
@@ -717,13 +790,17 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
             {piece.unit.indexNumber ?? "–"}
           </span>
           <span className="rounded-full border border-slate-300 bg-slate-100 px-2.5 py-0.5 text-sm font-medium text-slate-700">Name hidden</span>
+          {/* Practice is announced; every other kind of piece, a seeded one too, shows nothing here. */}
+          {piece.marking.practice && (
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-0.5 text-sm font-medium text-blue-800">Practice</span>
+          )}
         </div>
         <p data-testid="save-status" role="status" className="max-w-md text-sm text-slate-700">
           {statusWords}
         </p>
         {holdLine && <p className="text-sm text-slate-600">{holdLine}</p>}
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {!readOnly && page && (
+          {!readOnly && page && !feedback && (
             <button type="button" className={QUIET} disabled={busy || covered} onClick={() => setDialog("name")}>
               Name visible
             </button>
@@ -756,10 +833,11 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
       </header>
 
       <Banners
-        submitted={submitted && !readOnly}
+        submitted={submitted && !readOnly && !feedback && !stopped}
         pagesChanged={piece.marking.pagesChanged && !submitted}
+        sentBackNote={readOnly || feedback ? null : piece.marking.sentBackNote}
         status={status}
-        refusal={status === "refused" ? refusal : null}
+        refusal={status === "refused" && !stop ? refusal : null}
         notice={notice}
         onReload={onReload}
         onUndoLast={() => {
@@ -769,73 +847,85 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
         onReason={() => setDialog("reason")}
       />
 
-      <div className="relative flex min-h-0 flex-1">
-        <aside className="hidden w-60 shrink-0 border-r border-slate-200 bg-white min-[1200px]:block">{list}</aside>
-        {listOpen && (
-          <div className="fixed inset-0 z-40 flex min-[1200px]:hidden">
-            <div role="dialog" aria-modal="true" aria-label="Questions" className="flex h-full w-72 max-w-[85vw] flex-col border-r border-slate-200 bg-white shadow-xl">
-              <div className="flex justify-end border-b border-slate-200 p-2">
-                <button type="button" autoFocus className={QUIET} onClick={closeList}>
-                  Close
-                </button>
-              </div>
-              <div className="min-h-0 flex-1">{list}</div>
+      {feedback ? (
+        // The attempt's feedback takes the page's place: the marks beside the lead marker's, then Next script.
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl p-4 sm:p-6">
+            <div className="space-y-5 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <FeedbackPanel markingId={markingId} />
+              <NextScriptButton unitId={piece.unit.id} saveFirst={saveFirst} onSame={onReload} />
             </div>
-            <button type="button" aria-label="Close the questions" className={`flex-1 bg-slate-900/30 ${FOCUS}`} onClick={closeList} />
           </div>
-        )}
-        <main className="flex min-w-0 flex-1 flex-col">
-          <PageCanvas
-            page={page}
-            pageIndex={pageIndex}
-            pageCount={pages.length}
-            onPage={showPage}
-            url={!covered && page?.markingPath && !failed[page.markingPath] ? (urls[page.markingPath] ?? null) : null}
-            pictureFailed={!!(page?.markingPath && failed[page.markingPath])}
-            onPictureError={() => page?.markingPath && pictureError(page.markingPath)}
-            onPictureLoad={() => page?.markingPath && pictureLoaded(page.markingPath)}
-            onRetryPicture={() => page?.markingPath && retryPicture(page.markingPath)}
-            annotations={pageAnnotations}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onPut={(a: SavedAnnotation) => apply([{ op: "ann_put", ...a }])}
-            onErase={(ids) => {
-              apply(ids.map((id) => ({ op: "ann_del" as const, id })));
-              if (selectedId && ids.includes(selectedId)) setSelectedId(null);
-            }}
-            questionId={current?.id ?? null}
-            tool={tool}
-            onTool={setTool}
-            touchDevice={touchDevice}
-            fingerDraw={fingerDraw}
-            onFingerDraw={setFingerDraw}
-            zoom={zoom}
-            onZoom={(z) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)))}
-            onZoomIn={() => setZoom((z) => zoomStepIn(z))}
-            onZoomOut={() => setZoom((z) => zoomStepOut(z))}
-            onFitWidth={() => setZoom(1)}
-            canUndo={model.undo.length > 0}
-            canRedo={model.redo.length > 0}
-            onUndo={onUndo}
-            onRedo={onRedo}
-            onDeleteSelected={deleteSelected}
-            disabled={stopped}
-            cover={coverBody}
-          />
         </main>
-        <aside className="w-[300px] shrink-0 border-l border-slate-200 bg-white min-[1200px]:w-[340px]">
-          <MarkPanel
-            question={current}
-            entry={entry}
-            onMark={(mark, na) => current && setMark(current.id, mark, na)}
-            disabled={stopped}
-            note={model.note}
-            onNote={(text) => apply([{ op: "note", text }])}
-            onOpenScheme={piece.markSchemePath ? () => void openScheme() : null}
-            schemeMessage={schemeMessage}
-          />
-        </aside>
-      </div>
+      ) : (
+        <div className="relative flex min-h-0 flex-1">
+          <aside className="hidden w-60 shrink-0 border-r border-slate-200 bg-white min-[1200px]:block">{list}</aside>
+          {listOpen && (
+            <div className="fixed inset-0 z-40 flex min-[1200px]:hidden">
+              <div role="dialog" aria-modal="true" aria-label="Questions" className="flex h-full w-72 max-w-[85vw] flex-col border-r border-slate-200 bg-white shadow-xl">
+                <div className="flex justify-end border-b border-slate-200 p-2">
+                  <button type="button" autoFocus className={QUIET} onClick={closeList}>
+                    Close
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1">{list}</div>
+              </div>
+              <button type="button" aria-label="Close the questions" className={`flex-1 bg-slate-900/30 ${FOCUS}`} onClick={closeList} />
+            </div>
+          )}
+          <main className="flex min-w-0 flex-1 flex-col">
+            <PageCanvas
+              page={page}
+              pageIndex={pageIndex}
+              pageCount={pages.length}
+              onPage={showPage}
+              url={!covered && shownPicture && !failed[shownPicture] ? (urls[shownPicture] ?? null) : null}
+              pictureFailed={!!(shownPicture && failed[shownPicture])}
+              onPictureError={() => shownPicture && pictureError(shownPicture)}
+              onPictureLoad={() => shownPicture && pictureLoaded(shownPicture)}
+              onRetryPicture={() => shownPicture && retryPicture(shownPicture)}
+              annotations={pageAnnotations}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onPut={(a: SavedAnnotation) => apply([{ op: "ann_put", ...a }])}
+              onErase={(ids) => {
+                apply(ids.map((id) => ({ op: "ann_del" as const, id })));
+                if (selectedId && ids.includes(selectedId)) setSelectedId(null);
+              }}
+              questionId={current?.id ?? null}
+              tool={tool}
+              onTool={setTool}
+              touchDevice={touchDevice}
+              fingerDraw={fingerDraw}
+              onFingerDraw={setFingerDraw}
+              zoom={zoom}
+              onZoom={(z) => setZoom(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)))}
+              onZoomIn={() => setZoom((z) => zoomStepIn(z))}
+              onZoomOut={() => setZoom((z) => zoomStepOut(z))}
+              onFitWidth={() => setZoom(1)}
+              canUndo={model.undo.length > 0}
+              canRedo={model.redo.length > 0}
+              onUndo={onUndo}
+              onRedo={onRedo}
+              onDeleteSelected={deleteSelected}
+              disabled={stopped}
+              cover={coverBody}
+            />
+          </main>
+          <aside className="w-[300px] shrink-0 border-l border-slate-200 bg-white min-[1200px]:w-[340px]">
+            <MarkPanel
+              question={current}
+              entry={entry}
+              onMark={(mark, na) => current && setMark(current.id, mark, na)}
+              disabled={stopped}
+              note={model.note}
+              onNote={(text) => apply([{ op: "note", text }])}
+              onOpenScheme={piece.markSchemePath ? () => void openScheme() : null}
+              schemeMessage={schemeMessage}
+            />
+          </aside>
+        </div>
+      )}
 
       {dialog === "name" && page && (
         <NameVisibleDialog
@@ -868,32 +958,36 @@ function Desk({ piece, active, onReload, refusedPaths }: { piece: OpenedPiece; a
   );
 }
 
-/** Asks for a picture's 120-second signed link. A link refused by storage (the picture may have changed, or the
- * piece is no longer the marker's to see) opens the piece again, once per picture; any other failure is shown. */
+/** Asks the marking-pictures function for a page's 120-second link. A refusal (the piece may no longer be the marker's
+ * to see, or the page no longer its) opens the piece again, once per page until its link is given again; any other
+ * failure is shown. */
 async function signPicture(
-  path: string,
+  unitId: string,
+  pageId: string,
   h: {
     setUrls: Dispatch<SetStateAction<Record<string, string>>>;
     setFailed: Dispatch<SetStateAction<Record<string, boolean>>>;
-    refusedPaths: RefObject<Set<string>>;
+    refusedPages: RefObject<Set<string>>;
     onReload: () => void;
     onSigned: () => void;
   },
 ): Promise<void> {
-  const { data, error } = await createClient().storage.from("script-pages").createSignedUrl(path, MARKING_URL_SECONDS);
-  if (!error && data?.signedUrl) {
+  const links = await fetchPictureLinks(unitId, [pageId]);
+  const url = links.ok ? links.urls[pageId] : undefined;
+  if (url) {
+    // Given again: a later refusal of this page opens the piece again.
+    h.refusedPages.current.delete(pageId);
     h.onSigned();
-    h.setUrls((m) => ({ ...m, [path]: data.signedUrl }));
-    h.setFailed((m) => ({ ...m, [path]: false }));
+    h.setUrls((m) => ({ ...m, [pageId]: url }));
+    h.setFailed((m) => ({ ...m, [pageId]: false }));
     return;
   }
-  const refused = typeof error?.status === "number" && error.status >= 400 && error.status < 500;
-  if (refused && !h.refusedPaths.current.has(path)) {
-    h.refusedPaths.current.add(path);
+  if (accessCheckOutcome(links) === "gone" && !h.refusedPages.current.has(pageId)) {
+    h.refusedPages.current.add(pageId);
     h.onReload();
     return;
   }
-  h.setFailed((m) => ({ ...m, [path]: true }));
+  h.setFailed((m) => ({ ...m, [pageId]: true }));
 }
 
 function withoutKey<T>(m: Record<string, T>, key: string): Record<string, T> {
@@ -965,6 +1059,7 @@ function pagesFor(q: ScreenQuestion | null, questions: ScreenQuestion[], pages: 
 function Banners({
   submitted,
   pagesChanged,
+  sentBackNote,
   status,
   refusal,
   notice,
@@ -974,6 +1069,8 @@ function Banners({
 }: {
   submitted: boolean;
   pagesChanged: boolean;
+  /** 3B: the lead marker's note when they sent the piece back to this marker. */
+  sentBackNote: string | null;
   status: SaveStatus;
   refusal: string | null;
   notice: string | null;
@@ -987,6 +1084,11 @@ function Banners({
       {submitted && (
         <p role="status" className={`${box} border-blue-200 bg-blue-50 text-blue-900`}>
           Submitted. You can still change it until marking closes.
+        </p>
+      )}
+      {sentBackNote && (
+        <p role="note" data-testid="sent-back-note" className={`${box} whitespace-pre-wrap border-amber-200 bg-amber-50 text-amber-900`}>
+          The lead marker sent this back: {sentBackNote}
         </p>
       )}
       {pagesChanged && <p className={`${box} border-amber-200 bg-amber-50 text-amber-900`}>Pages of this script changed. Check your marks and submit again.</p>}

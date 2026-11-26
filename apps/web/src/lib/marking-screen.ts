@@ -2,11 +2,13 @@
  * draws with: full question labels ("2(b)(i)"), a question's pages, a mark in plain words, and the zoom steps. The
  * parser keeps only the fields it knows, so nothing else reaches the screen; the function itself names no candidate
  * (the index number only, Ruling R4). The database checks every rule again. */
+import { markingScreenMessageFor } from "@stem/shared";
 import type { AnnotationKind } from "@/lib/annotations";
 import { ANNOTATION_KINDS } from "@/lib/annotations";
 import { markButtons, type MarkEntry } from "@/lib/marking-marks";
 import type { OpenedMarking } from "@/lib/marking-model";
 import { ZOOM_MAX, ZOOM_MIN } from "@/lib/marking-pointer";
+import type { SaveStatus } from "@/lib/marking-save";
 
 export type ScreenPoint = { id: string; label: string | null; marks: number; marksTo: number | null; text: string };
 export type ScreenQuestion = {
@@ -28,7 +30,9 @@ export type ScreenQuestion = {
   alternatives: string;
   points: ScreenPoint[];
 };
-export type ScreenPage = { n: number; pageId: string; copyPage: number | null; extra: boolean; markingPath: string | null; rotation: number };
+/** A page of the piece. Its picture's path is never sent (3B): hasPicture says it has a marking picture, whose link the
+ * screen asks the marking-pictures function for by the page's id. */
+export type ScreenPage = { n: number; pageId: string; copyPage: number | null; extra: boolean; hasPicture: boolean; rotation: number };
 export type MarkingStatus = "in_progress" | "submitted" | "set_aside";
 export type OpenedPiece = {
   unit: {
@@ -41,7 +45,10 @@ export type OpenedPiece = {
     holdUntil: string | null;
     closed: boolean;
   };
-  marking: { id: string; rev: number; status: MarkingStatus; pagesChanged: boolean };
+  /** practice: a practice piece (practice is announced; every other kind, a seeded one too, says false).
+   * sentBackNote: the lead marker's note when the piece was sent back to this marker. Every kind of pass is read the
+   * same way. */
+  marking: { id: string; rev: number; status: MarkingStatus; pagesChanged: boolean; practice: boolean; sentBackNote: string | null };
   questions: ScreenQuestion[];
   optionGroups: { id: string; label: string; choose: number }[];
   markSchemePath: string | null;
@@ -58,23 +65,10 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
 const KINDS = new Set<string>(ANNOTATION_KINDS);
 const isPoint = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && p.every((n) => typeof n === "number" && Number.isFinite(n));
 
-/** marking_unit_open's answer: the piece, or the code it was refused with ("internal" when the answer makes no sense). */
-export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | { ok: false; code: string } {
-  const d = obj(data);
-  if (!d) return { ok: false, code: "internal" };
-  if (d.ok !== true) return { ok: false, code: str(d.code) ?? "internal" };
-  const u = obj(d.unit);
-  const m = obj(d.marking);
-  const s = obj(d.structure);
-  const unitId = str(u?.id);
-  const markingId = str(m?.id);
-  const rev = num(m?.rev);
-  const status = str(m?.status);
-  if (!u || !m || !s || !unitId || !markingId || rev === null || (status !== "in_progress" && status !== "submitted" && status !== "set_aside")) {
-    return { ok: false, code: "internal" };
-  }
-
-  const rows = list(s.questions).filter((q) => str(q.id) && str(q.label));
+/** The questions of a structure as marking_unit_open and marking_review_open give them (structure.questions), with
+ * full labels ("2(b)(i)") and which of them carry marks. A row without an id or a label is left out. */
+export function parseQuestions(raw: unknown): ScreenQuestion[] {
+  const rows = list(raw).filter((q) => str(q.id) && str(q.label));
   const byId = new Map(rows.map((q) => [q.id as string, q]));
   const hasChild = new Set(rows.flatMap((q) => (str(q.parent_id) ? [q.parent_id as string] : [])));
   const fullLabel = (q: Obj): { label: string; depth: number } => {
@@ -88,7 +82,7 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
     }
     return { label: chain[0] + chain.slice(1).map((l) => `(${l})`).join(""), depth: chain.length - 1 };
   };
-  const questions: ScreenQuestion[] = rows.map((q) => {
+  return rows.map((q) => {
     const { label, depth } = fullLabel(q);
     const pages = Array.isArray(q.pages) ? q.pages.filter((p): p is number => typeof p === "number" && Number.isInteger(p)) : [];
     return {
@@ -112,12 +106,54 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
       }),
     };
   });
+}
+
+/** A marking's annotations as marking_unit_open and marking_review_open give them: a kind it does not know, or one
+ * without its place, is left out. */
+export function parseAnnotations(raw: unknown): NonNullable<OpenedMarking["annotations"]> {
+  return list(raw).flatMap((a) => {
+    const id = str(a.id);
+    const pageId = str(a.page_id);
+    const kind = str(a.kind);
+    const x = num(a.x);
+    const y = num(a.y);
+    if (!id || !pageId || !kind || !KINDS.has(kind) || x === null || y === null) return [];
+    return [{
+      id,
+      page_id: pageId,
+      kind: kind as AnnotationKind,
+      x,
+      y,
+      points: Array.isArray(a.points) && a.points.every(isPoint) ? (a.points as [number, number][]) : null,
+      text: str(a.text),
+      question_id: str(a.question_id),
+    }];
+  });
+}
+
+/** marking_unit_open's answer: the piece, or the code it was refused with ("internal" when the answer makes no sense). */
+export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | { ok: false; code: string } {
+  const d = obj(data);
+  if (!d) return { ok: false, code: "internal" };
+  if (d.ok !== true) return { ok: false, code: str(d.code) ?? "internal" };
+  const u = obj(d.unit);
+  const m = obj(d.marking);
+  const s = obj(d.structure);
+  const unitId = str(u?.id);
+  const markingId = str(m?.id);
+  const rev = num(m?.rev);
+  const status = str(m?.status);
+  if (!u || !m || !s || !unitId || !markingId || rev === null || (status !== "in_progress" && status !== "submitted" && status !== "set_aside")) {
+    return { ok: false, code: "internal" };
+  }
+
+  const questions = parseQuestions(s.questions);
 
   const pages: ScreenPage[] = list(d.pages).flatMap((p) => {
     const pageId = str(p.page_id);
     const n = num(p.n);
     if (!pageId || n === null) return [];
-    return [{ n, pageId, copyPage: num(p.copy_page), extra: p.extra === true, markingPath: str(p.marking_path), rotation: num(p.rotation) ?? 0 }];
+    return [{ n, pageId, copyPage: num(p.copy_page), extra: p.extra === true, hasPicture: p.has_picture === true, rotation: num(p.rotation) ?? 0 }];
   });
 
   const saved: OpenedMarking = {
@@ -126,24 +162,7 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
       const q = str(x.question_id);
       return q ? [{ question_id: q, mark: num(x.mark), na: x.na === true }] : [];
     }),
-    annotations: list(d.annotations).flatMap((a) => {
-      const id = str(a.id);
-      const pageId = str(a.page_id);
-      const kind = str(a.kind);
-      const x = num(a.x);
-      const y = num(a.y);
-      if (!id || !pageId || !kind || !KINDS.has(kind) || x === null || y === null) return [];
-      return [{
-        id,
-        page_id: pageId,
-        kind: kind as AnnotationKind,
-        x,
-        y,
-        points: Array.isArray(a.points) && a.points.every(isPoint) ? (a.points as [number, number][]) : null,
-        text: str(a.text),
-        question_id: str(a.question_id),
-      }];
-    }),
+    annotations: parseAnnotations(d.annotations),
   };
 
   const file = obj(s.mark_scheme_file);
@@ -160,7 +179,9 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
         holdUntil: str(u.hold_until),
         closed: u.closed === true,
       },
-      marking: { id: markingId, rev, status, pagesChanged: m.pages_changed === true },
+      marking: {
+        id: markingId, rev, status, pagesChanged: m.pages_changed === true, practice: m.practice === true, sentBackNote: str(m.sent_back_note),
+      },
       questions,
       optionGroups: list(s.option_groups).flatMap((o) => {
         const id = str(o.id);
@@ -172,6 +193,66 @@ export function parseOpened(data: unknown): { ok: true; piece: OpenedPiece } | {
       saved,
     },
   };
+}
+
+/** The feedback a submit can bring (3B): a practice script, or a seeded script marked outside tolerance. */
+export type SubmitFeedback = "practice" | "seed";
+
+/** What marking_submit answers, in the screen's shape: the new rev and the feedback to show (null: none, as for every
+ * live, second and seeded piece within tolerance; anything else it might send is read as none), or the refusal's
+ * code, its reason (a conflict's) and the labels of the questions still to mark (incomplete). "internal" when the
+ * answer makes no sense. The script's state is no longer sent (3B). */
+export type SubmitAnswer =
+  | { ok: true; rev: number; feedback: SubmitFeedback | null }
+  | { ok: false; code: string; reason?: string; missing: string[] };
+
+export function parseSubmitted(data: unknown): SubmitAnswer {
+  const d = obj(data);
+  if (d?.ok === true) {
+    const rev = num(d.rev);
+    const feedback = d.feedback === "practice" || d.feedback === "seed" ? d.feedback : null;
+    return rev === null ? { ok: false, code: "internal", missing: [] } : { ok: true, rev, feedback };
+  }
+  const code = str(d?.code);
+  if (!d || !code) return { ok: false, code: "internal", missing: [] };
+  const reason = str(d.reason);
+  const missing = Array.isArray(d.missing) ? d.missing.filter((x): x is string => typeof x === "string") : [];
+  return reason === null ? { ok: false, code, missing } : { ok: false, code, reason, missing };
+}
+
+/** Refusals that take the page away until the marker goes back, with the refusal's own sentence in its place: the
+ * script is on hold, its pictures are being made again, the hold ended, marking closed (3A); the marker is paused on
+ * the exam, the attempt was locked once its feedback was shown, or the lead marker settled the script (3B). Input
+ * stops at once. */
+const SCREEN_STOPS = new Set(["on_hold", "pictures_updating", "hold_expired", "marking_closed", "paused", "locked", "settled"]);
+/** Of those, the refusals the server never takes back. */
+const FINAL_STOPS = new Set(["locked", "settled"]);
+
+export function stopsTheScreen(code: string | null | undefined): boolean {
+  return typeof code === "string" && SCREEN_STOPS.has(code);
+}
+
+/** Whether a stop drops the changes not yet saved: only for a refusal the server never takes back (they would be
+ * refused again each time the piece opened). A hold or a pause can end, so what was not saved then stays stored and
+ * goes when the piece is next opened. */
+export function dropsUnsaved(code: string | null | undefined): boolean {
+  return typeof code === "string" && FINAL_STOPS.has(code);
+}
+
+const SAVE_WORDS: Partial<Record<SaveStatus, string>> = {
+  saved: "Saved",
+  saving: "Saving…",
+  offline: "Not saved: no connection. Your work is kept on this screen and will be sent when you are back online.",
+};
+
+/** The save status beside the index: "Read only" once marking has closed; for a save stopped by a refusal the server
+ * never takes back (locked, settled: the screen is back to the last saved marks), that refusal's sentence, never
+ * "Saved" (3B Ruling R12); otherwise what the save queue says ("Saved", "Saving…", no connection), or "Not saved"
+ * while it is stopped. */
+export function saveStatusWords(s: { readOnly: boolean; status: SaveStatus; stop: { code: string; reason?: string } | null }): string {
+  if (s.readOnly) return "Read only";
+  if (s.stop && dropsUnsaved(s.stop.code)) return markingScreenMessageFor(s.stop.code, s.stop.reason);
+  return SAVE_WORDS[s.status] ?? "Not saved";
 }
 
 /** A mark as the marker reads it: "3", "2.5", "NR", or a dash for none yet. */
@@ -233,22 +314,27 @@ export function zoomStepOut(z: number): number {
   return [...ZOOM_STEPS].reverse().find((v) => v < z - 1e-6) ?? ZOOM_MIN;
 }
 
-/** How often the marking screen asks whether the page it shows may still be seen (ms). */
-export const ACCESS_CHECK_MS = 60_000;
+/** How long after the last check the marking screen asks again whether the page it shows may still be seen (ms). */
+export const ACCESS_CHECK_MS = 55_000;
 
-/** Whether the check runs now: only while the screen is in view, with a page's picture on it, and at most once a
- * minute (a tab coming back into view checks at once if a minute has gone by). */
-export function accessCheckDue(s: { visible: boolean; covered: boolean; path: string | null; lastAt: number; now: number }): boolean {
-  return s.visible && !s.covered && s.path !== null && s.now - s.lastAt >= ACCESS_CHECK_MS;
+/** How often the marking screen looks whether that check is due (ms). With the check due at 55 seconds, it lands at
+ * most 70 seconds after the last (Ruling R23). */
+export const ACCESS_TICK_MS = 15_000;
+
+/** Whether the check runs now: only while the screen is in view, with a page's picture on it (pageId: the shown
+ * page, when it has one), and once 55 seconds have gone by since the last (a tab coming back into view checks at once
+ * if they have). */
+export function accessCheckDue(s: { visible: boolean; covered: boolean; pageId: string | null; lastAt: number; now: number }): boolean {
+  return s.visible && !s.covered && s.pageId !== null && s.now - s.lastAt >= ACCESS_CHECK_MS;
 }
 
-/** What asking for the shown picture's link again says. The storage rule answers for the piece as it is now: a link
- * given means the marker may still see the page ("ok"); a refusal (4xx) means they may not, or the picture is no
- * longer this one ("gone"); anything else (no connection, a server error) says nothing, and the next check asks
- * again ("unknown"). */
-export function accessCheckOutcome(r: { signed: boolean; status: number | null }): "ok" | "gone" | "unknown" {
-  if (r.signed) return "ok";
-  return r.status !== null && r.status >= 400 && r.status < 500 ? "gone" : "unknown";
+/** What asking for the shown picture's link again says (fetchPictureLinks). The database answers for the piece as it
+ * is now: a link given means the marker may still see the page ("ok"); a refusal (4xx) means they may not, or the
+ * page is no longer the piece's ("gone"); anything else (no connection, a server error) says nothing, and the next
+ * check asks again ("unknown"). */
+export function accessCheckOutcome(r: { ok: boolean; status?: number | null }): "ok" | "gone" | "unknown" {
+  if (r.ok) return "ok";
+  return typeof r.status === "number" && r.status >= 400 && r.status < 500 ? "gone" : "unknown";
 }
 
 /** At most `max` labels, then "and N more". */

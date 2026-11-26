@@ -174,12 +174,6 @@ export const paperAllocations = [
   { paper: "Chemistry Mock 1 · Paper 2", mode: "Physical", examiner: "K Cheung", papers: 120, marked: 40 },
 ];
 
-export const examinerProgress = [
-  { name: "M Venables", assigned: 270, marked: 260, accuracy: "In tolerance" },
-  { name: "A Pathmanathan", assigned: 180, marked: 180, accuracy: "In tolerance" },
-  { name: "K Cheung", assigned: 120, marked: 40, accuracy: "Inaccurate" },
-];
-
 export const auditLog = [
   { time: "1 Nov 2026 19:04", user: "M Venables", action: "Submitted 10 papers", target: "Physics Mock 2" },
   { time: "1 Nov 2026 18:20", user: "Admin", action: "Approved student", target: "Dilan Jayawardena" },
