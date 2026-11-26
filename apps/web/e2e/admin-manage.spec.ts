@@ -125,16 +125,18 @@ test("delete_account_student", async ({ page }) => {
   expect(await profileByEmail(student.email)).toBeNull();
 });
 
-test("mock_student_page_redirects", async ({ page }) => {
+test("family_homes_redirect_visitors_and_other_roles", async ({ page }) => {
   await page.goto("/student");
   await expect(page).toHaveURL(/\/login/);
-  await page.goto("/parent/results");
+  await page.goto("/parent");
   await expect(page).toHaveURL(/\/login/);
 
   const admin = await createAccount({ role: "admin" });
   await signInUI(page, admin.email, admin.password);
   await expect(page).toHaveURL(/\/admin$/);
-  await page.goto("/student/results");
+  await page.goto("/student");
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.goto("/parent");
   await expect(page).toHaveURL(/\/admin$/);
   // The examiner demonstration pages are gone (3B Task 13): there is no such page, for anyone.
   expect((await page.goto("/examiner"))?.status()).toBe(404);

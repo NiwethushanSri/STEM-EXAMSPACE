@@ -17,9 +17,9 @@ const AREAS: Record<string, readonly AppRole[]> = {
   "/corrector": ["corrector"],
   // Markers and the staff who run marking; who may mark is the database's approval.
   "/marking": ["corrector", "teacher", "admin", "owner"],
-  // Mock sample-data areas: nobody may open them until their part of the build; visitors go home.
-  "/student": [],
-  "/parent": [],
+  // The family homes: each role opens its own.
+  "/student": ["student"],
+  "/parent": ["parent"],
 };
 
 function areaOf(pathname: string): string | null {
