@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(37);
+select plan(38);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -762,6 +762,30 @@ select is(array[pg_temp.r('bf2') #>> '{}', (pg_temp.snapshot() = pg_temp.r('bf_b
     has_function_privilege('service_role', 'public.marking_checks_backfill()', 'execute')::text],
   array['0', 'true', 'false', 'false', 'false'],
   'backfill_twice_changes_nothing: a second call changes no exam, piece or final mark and writes no audit row; nobody can call it from the API');
+
+-- ---------------------------------------------------------------------------------------------
+-- approval_blocks_count_scripts_not_pieces (Ruling R33): exam qa is marked by question (two groups, so two pieces a
+-- script). qa1's two pieces are with the lead marker, qa2's two wait for a second marker, qa3's two are on hold: 1 each,
+-- not 2. Written as postgres.
+-- ---------------------------------------------------------------------------------------------
+insert into kv values ('qa', tests.marking_exam(pg_temp.subj('ZZ Appr')));
+with g as (insert into public.question_groups (exam_id, label, position) values (pg_temp.k('qa'), 'G1', 1), (pg_temp.k('qa'), 'G2', 2) returning id, position)
+insert into public.exam_questions (exam_id, label, position, max_mark, pages, group_id)
+select pg_temp.k('qa'), 'Q' || g.position, g.position, 5, '{1}', g.id from g;
+update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('qa');
+insert into kv select x, tests.verified_script(pg_temp.k('qa'), 'home') from unnest(array['qa1', 'qa2', 'qa3']) x;
+select tests.open_marking(pg_temp.k('qa'));
+update public.marking_units u set state = 'submitted',
+  check_state = case u.script_id when pg_temp.k('qa1') then 'to_lead' when pg_temp.k('qa2') then 'waiting_second' else 'checked' end,
+  on_hold = (u.script_id = pg_temp.k('qa3')), hold_reason = case when u.script_id = pg_temp.k('qa3') then 'picture_changed' end
+where u.exam_id = pg_temp.k('qa');
+insert into res values ('qa', pg_temp.get('admin', 'qa'));
+select is(array[(select count(*)::text from public.marking_units u where u.exam_id = pg_temp.k('qa')),
+    (select x ->> 'count' from jsonb_array_elements(pg_temp.r('qa') -> 'blocks') x where x ->> 'code' = 'with_lead'),
+    (select x ->> 'count' from jsonb_array_elements(pg_temp.r('qa') -> 'blocks') x where x ->> 'code' = 'waiting_second'),
+    (select x ->> 'count' from jsonb_array_elements(pg_temp.r('qa') -> 'blocks') x where x ->> 'code' = 'on_hold')],
+  array['6', '1', '1', '1'],
+  'approval_blocks_count_scripts_not_pieces: a script with both pieces with the lead marker, one waiting for a second marker and one on hold are 1 each');
 
 -- ---------------------------------------------------------------------------------------------
 -- No answer names a candidate.

@@ -240,7 +240,7 @@ function MarkingDashboardView({ d, now }: { d: MarkingDashboard; now: Date }) {
 
       <Card title="Marking">
         {d.exams.length === 0 ? (
-          <p className="text-sm text-slate-500">No exam is being marked, and no marking closed in the last 14 days.</p>
+          <p className="text-sm text-slate-500">No exam is being marked or waiting for its marking to be approved, and no marking closed in the last 14 days.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm" data-testid="marking-exams">

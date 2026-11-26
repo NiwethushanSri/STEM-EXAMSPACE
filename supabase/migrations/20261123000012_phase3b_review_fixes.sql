@@ -21,6 +21,8 @@
 --     second-marked showed none); and an open routine sample review of an exam whose marking is approved is left out of
 --     the list and its counts (it can no longer be accepted; it is not closed, and comes back if the approval is
 --     withdrawn).
+--   marking_review_list also (Ruling R33): counts.stuck_second counts distinct scripts, as marking_dashboard does.
+--   marking_approval_blocks also (Ruling R33): with_lead, waiting_second and on_hold count scripts (distinct), not pieces.
 --   marking_dashboard (20261123000011), issues 4 to 6 (Rulings R28, R30): an exam whose marking has opened is listed
 --     while it is open, closed in the last 14 days, or not approved, however long ago it closed; checked, with_lead and
 --     waiting_second (each row and so the totals) and stuck_second count scripts, not pieces (checked: scripts in the
@@ -62,7 +64,7 @@ as $$
     select s.id, s.state from public.scripts s where s.exam_id = p_exam and s.state not in ('withdrawn', 'void')
   ),
   u as materialized (
-    select u.id, u.check_state, u.on_hold from public.marking_units u join s on s.id = u.script_id where u.exam_id = p_exam
+    select u.id, u.script_id, u.check_state, u.on_hold from public.marking_units u join s on s.id = u.script_id where u.exam_id = p_exam
   ),
   -- Only a script that may show a page staff confirmed or assigned whose marking picture is not the one checked (its
   -- current version links it, or it came with the script's hand-in), as script_marking_checks_due finds them, is asked
@@ -94,9 +96,9 @@ as $$
       (select count(*)::int from s) as scripts,
       (select count(*)::int from s where s.state not in ('checked', 'final')) as scripts_not_checked,
       (select count(*)::int from s where s.state in ('receiving', 'checking', 'needs_attention', 'verified')) as with_staff,
-      (select count(*)::int from u where u.check_state = 'to_lead') as with_lead,
-      (select count(*)::int from u where u.check_state = 'waiting_second') as waiting_second,
-      (select count(*)::int from u where u.on_hold) as on_hold,
+      (select count(distinct u.script_id)::int from u where u.check_state = 'to_lead') as with_lead,
+      (select count(distinct u.script_id)::int from u where u.check_state = 'waiting_second') as waiting_second,
+      (select count(distinct u.script_id)::int from u where u.on_hold) as on_hold,
       (select count(*)::int from public.marking_alerts a join s on s.id = a.script_id
        where a.exam_id = p_exam and a.state = 'open') as alerts_open,
       (select count(*)::int from maybe where exists (select 1 from public.script_pages_to_check(maybe.id))) as pictures_to_check,
@@ -352,7 +354,7 @@ $$;
 -- p_kind (difference, paused_marker or sample) narrows the items, not the counts. A lead's list leaves out the reviews
 -- they are refused (marking_review_refusal) or blind to (marking_review_blind). counts: open reviews of each kind;
 -- to_clear: markers of those exams who did every practice script they may do and are not cleared yet; stuck_second:
--- pieces waiting for a second marker whom nobody can be (marking_second_stuck). No candidate's name. Returns {ok,
+-- scripts with a piece waiting for a second marker whom nobody can be (marking_second_stuck; R33: scripts, not pieces). No candidate's name. Returns {ok,
 -- counts: {difference, paused_marker, sample, to_clear, stuck_second}, items: [{review_id, kind, exam_id, exam_title,
 -- unit_id, script_number, index_number, group_label, first: {marker_id, name, total}, second: {marker_id, name,
 -- total}|null, max_total, opened_at, party}], more}; party is true when the caller is one of the two markers.
@@ -455,7 +457,9 @@ begin
         and exists (select 1 from public.markings k join public.marking_units u on u.id = k.unit_id
                     where u.exam_id = x.exam_id and k.marker_id = a.marker_id and k.kind = 'practice' and k.status = 'submitted')
         and not exists (select 1 from public.marking_units_allowed(x.exam_id, a.marker_id, 'practice', true))),
-    'stuck_second', (select count(*)::int from unnest(v_exams) x(exam_id) cross join lateral public.marking_second_stuck(x.exam_id) t));
+    'stuck_second', (select count(distinct u.script_id)::int
+                     from unnest(v_exams) x(exam_id) cross join lateral public.marking_second_stuck(x.exam_id) t
+                     join public.marking_units u on u.id = t.unit_id));
   return jsonb_build_object('ok', true, 'counts', v_counts, 'items', v_items, 'more', v_more);
 end;
 $$;

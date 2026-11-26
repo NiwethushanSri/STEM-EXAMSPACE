@@ -44,7 +44,7 @@ Phase 3A let markers mark a script without seeing a name. Phase 3B checks that m
   - "{n} scripts wait for the lead marker."
   - "{n} markers are paused."
   - "{n} exams are ready for their marking to be approved."
-  "On hold in marking", "Checked", "With the lead marker", "Waiting for a second marker", the stuck scripts and the open alerts count scripts, not pieces: a script marked by question with three pieces on hold counts once. The tile for open alerts is now called "Scripts with open alerts". "Left" and "Marked" still count pieces. The progress card on /marking and /admin/marking counts scripts the same way.
+  "On hold in marking", "Checked", "With the lead marker", "Waiting for a second marker", the stuck scripts and the open alerts count scripts, not pieces: a script marked by question with three pieces on hold counts once. The tile for open alerts is now called "Scripts with open alerts". "Left" and "Marked" still count pieces. The approval page's and the Review page's counts of scripts with the lead marker, waiting for a second marker, on hold and stuck count scripts too. The progress card on /marking and /admin/marking counts "checked", "with the lead marker" and "waiting for a second marker" as scripts the same way, and its "on hold" figure counts pieces.
 - **The last demonstration pages are gone**: /examiner and /examiner/standardisation now show "page not found", and the menu entry is removed.
 - **One email**, to the lead marker and admins, when a marker is paused after three seeded scripts outside the tolerance. It names neither the marker nor any candidate.
 
@@ -88,8 +88,8 @@ Do not deploy until you give the go-ahead.
 
 **Steps**
 
-1. **Migrations 20261123000001 to 20261123000012**, after Phase 3A's 20261122000001 to 20261122000015 (`npm run db:push`, by your go-ahead only). 001 is Phase 3A's carry-overs; 002 signs picture links on the server and removes the markers' own access to the picture store; 003 adds the tables and settings for the checks; 004 hands out second markings; 005 is the check itself, the "Checked" state and final marks; 006 adds practice, seeded scripts and the pause; 007 the lead's review; 008 the marker statistics; 009 approval; 010 marker pay; 011 the dashboard figures and alerts; 012 the final review's fixes. No new scheduled job: `marking-tick` (every minute) also applies pauses now.
-   **Exams already marking when Phase 3B goes in have the three checks (double marking, seeded scripts, practice) turned off by migration 012, with the reason "Marked before the checks existed" recorded, and the scripts they marked before are checked on their first marks. An admin can turn double marking back on for such an exam, with a reason.**
+1. **Migrations 20261123000001 to 20261123000012**, after Phase 3A's 20261122000001 to 20261122000015 (`npm run db:push`, by your go-ahead only). 001 is Phase 3A's carry-overs; 002 signs picture links on the server and removes the markers' own access to the picture store; 003 adds the tables and settings for the checks; 004 hands out second markings; 005 is the check itself, the "Checked" state and final marks; 006 adds practice, seeded scripts and the pause; 007 the lead's review; 008 the marker statistics; 009 approval; 010 marker pay; 011 the dashboard figures and alerts; 012 the final review's fixes. No new scheduled job: `marking-tick` (every minute) also applies pauses now. Push migrations 20261123000001 to 20261123000012 together, in one push: never push 003 to 011 without 012, because 012 turns the checks off on every exam already marking.
+   **Exams already marking when Phase 3B goes in have the three checks (double marking, seeded scripts, practice) turned off by migration 012, with the reason "Marked before the checks existed" recorded, and the scripts they marked before are checked on their first marks. An admin can turn double marking back on for such an exam, with a reason; it then applies to scripts marked from then on, and scripts already checked are not second-marked.**
 2. **Edge Functions: deploy the new `marking-pictures` and redeploy `script-notify`.** The shared email code changed too (the "marker paused" email was added), so deploy every function with `npm run fn:deploy`. No new secret is needed.
 3. **The website.**
 
@@ -125,6 +125,7 @@ On the local test copy only, on 25 November 2026, one suite at a time:
 - Browser tests: **not run on the final version**, because too little memory was free on this computer (about 0.4 to 0.7 GB; they need at least 2 GB, and the full run 3 GB). The marking browser tests last ran in Task 6 of this part (the marker's screens: 5 of 5; the Phase 3A marking tests: 11 of 11 and 8 of 8). The new staff test (marking-checks-admin.spec.ts) and the checks Task 13 added to marking-checks.spec.ts (a script sent back, a change to a settled script refused, a first look at the Review pages and the admin's check column) have never run. The new staff pages (Review, statistics, approval, payments) have not been seen in a browser.
 - The website build: not run on the final version (memory, as above).
 - After the final review's fixes (migration 012, 26 November): the database test files 043, 049 and 053 to 063 run one at a time, 965 checks, all passing; the full database run was not repeated (about 0.8 GB free: it is the 2 GB gate under "Before you start"). Website tests: 585 passed; shared code tests: 219 passed; type checks clean; the linter clean (3 old warnings). The review screen's phone layout has not been seen in a browser.
+- After the last fix (26 November 2026: the approval and Review pages count scripts, the admin home sentence): the database test files 059, 061 and 063 run one at a time, 85, 38 and 38 checks, all passing (the two new checks failed before the change); website tests: 585 passed; type checks clean; the linter clean (3 old warnings). The full database run was not repeated (free memory was between 0.1 and 1.1 GB during this work, under the 2 GB gate).
 - Timed with large made-up exams: the admin home page with 50 more exams listed about 0.07 seconds; hand-out and the marker's list as in Phase 3A; marker statistics at 1,500 second-marked pieces about 0.1 seconds; the approval page at 1,500 second-marked scripts with 300 pictures to check about half a second; statements at 3,000 markings well under a second to read and to fix.
 
 ## Known limits
@@ -137,6 +138,8 @@ On the local test copy only, on 25 November 2026, one suite at a time:
 - **A seeded script whose hold ran out comes back to the same marker** through "Next script". It is a weak tell; nothing on the screen says so.
 - **An approved exam whose marking closed more than 14 days ago leaves the admin home page**, and is no longer tested there for a script that arrived or changed after the approval (Ruling R28). Its approval page still says so, and Phase 4 must still refuse to prepare its results.
 - **The timing tests are sensitive to memory on this computer.** Two of them (the hand-out test from Phase 3A and the check test from this part) failed in some full runs during this part while very little memory was free, and passed when run alone. None failed in the final full run, and no limit was loosened for this.
+- **A former lead marker can still be offered a script they only opened.** A lead marker who opened a script's review but never closed it, and later stops being the lead, can still be offered that script's second marking, because the system records who closed a review, not who opened it.
+- **On an exam marked by question group, some figures count each question group of a script separately:** the approval page's "Second-marked" and "Final marks changed", the admin home's "Left" and "Marked", and the progress card's "on hold".
 - **The full browser run, the website build and a real iPad check still gate the deploy** (see "Before you start").
 
 ### Settled by the final review
@@ -148,6 +151,7 @@ The final review of the whole branch decided the items left for it. The timing t
 - Results read `public.script_final_marks(script)` and `public.script_final_total(script)` and nothing else. They never add piece totals: a piece's total applies "answer 2 of these" inside the piece only.
 - **Results may be prepared only while the exam's marking is approved, and never while the approval is stale** (a script arrived or changed after it: `marking_approval_get` says `stale`). Phase 4 must refuse to prepare results in that case (Ruling R22).
 - Phase 4 must refuse `marking_approval_withdraw` once results are published.
+- The admin home and the progress card count a script as checked only in the state 'checked'. When Phase 4 adds the state 'final', both must count it too, as the approval page already does.
 - The annotated script a family sees is the marking named by `marking_units.final_marking_id`.
 - A family re-mark is a `remark` marking; the hand-out rule and the pay rule already list it.
 

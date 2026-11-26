@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(84);
+select plan(85);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -817,6 +817,27 @@ select is(array[pg_temp.r('w_held') #>> '{counts,stuck_second}', jsonb_array_len
     pg_temp.list('admin', pg_temp.k('w')) #>> '{counts,stuck_second}'],
   array['0', '0', '1'],
   'second_stuck_leaves_out_a_held_piece: while t2 holds w1''s second pass it is not stuck; given back, with nobody allowed, it is stuck again');
+-- review_list_stuck_counts_scripts (Ruling R33): exam wq is marked by question (two groups, so two pieces a script). Its
+-- one script's two pieces were first-marked by t1 and wait for a second marker; t2 has a declared conflict for the
+-- candidate and the lead tl is paused there: nobody can second-mark either piece. Rows written directly (as exam big).
+insert into kv values ('wq', tests.marking_exam(pg_temp.subj('ZZ Rev Two')));
+with g as (insert into public.question_groups (exam_id, label, position) values (pg_temp.k('wq'), 'G1', 1), (pg_temp.k('wq'), 'G2', 2) returning id, position)
+insert into public.exam_questions (exam_id, label, position, max_mark, pages, group_id)
+select pg_temp.k('wq'), 'Q' || g.position, g.position, 5, '{1}', g.id from g;
+update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('wq');
+insert into kv values ('wq1', tests.verified_script(pg_temp.k('wq'), 'home'));
+select tests.open_marking(pg_temp.k('wq'), '{"double_marking": true, "sample_percent": 100, "seeds": false, "practice": false}');
+insert into public.markings (unit_id, kind, marker_id, status, rev, total, submitted_at)
+select u.id, 'live', pg_temp.uid('t1'), 'submitted', 1, 2, now() from public.marking_units u where u.exam_id = pg_temp.k('wq');
+update public.marking_units set state = 'submitted', check_state = 'waiting_second', second_wanted = true where exam_id = pg_temp.k('wq');
+insert into public.marker_conflicts (marker_id, student_id, recorded_at)
+select pg_temp.uid('t2'), b.student_id, now() from public.scripts s join public.bookings b on b.id = s.booking_id where s.id = pg_temp.k('wq1');
+insert into public.exam_markers (exam_id, marker_id, paused_at) values (pg_temp.k('wq'), pg_temp.uid('tl'), now());
+select is(array[(select count(*)::text from public.marking_units u where u.exam_id = pg_temp.k('wq')),
+                (select count(*)::text from public.marking_second_stuck(pg_temp.k('wq'))),
+                pg_temp.list('admin', pg_temp.k('wq')) #>> '{counts,stuck_second}', pg_temp.list('tl', pg_temp.k('wq')) #>> '{counts,stuck_second}'],
+  array['2', '2', '1', '1'],
+  'review_list_stuck_counts_scripts: two pieces of one script that nobody can second-mark are 1 on the Review page, for the lead and an admin');
 insert into res values ('g_next', pg_temp.next('m7', 'g'));
 select pg_temp.mark('m7', (pg_temp.r('g_next') ->> 'unit_id')::uuid, array[1, 1, 1], 'g:m7');
 insert into res values ('g_list', pg_temp.list('lead', pg_temp.k('g')));
