@@ -229,7 +229,7 @@ export type ProgressExam = {
   /** waiting: verified, not yet ready to mark; marked: marked or checked; checked (3B): checked. */
   scripts: { waiting: number; readyToMark: number; marking: number; marked: number; checked: number };
   units: { open: number; taken: number; submitted: number; onHold: number };
-  /** 3B: pieces waiting for a second marker, with the lead marker, and waiting for one whom nobody can be; markers
+  /** 3B: scripts waiting for a second marker, with the lead marker, and waiting for one whom nobody can be; markers
    * paused on the exam; when its marking was approved. */
   checks: { waitingSecond: number; withLead: number; stuckSecond: number; pausedMarkers: number; approvedAt: string | null };
   markers: ProgressMarker[];

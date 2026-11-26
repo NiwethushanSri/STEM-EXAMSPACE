@@ -9,6 +9,7 @@ import {
   markingAlerts,
   parseMarkingDashboard,
   parseScriptsDashboard,
+  redFirst,
   scriptsDashboardAlerts,
   type MarkingDashboard,
   type ScriptsDashboard,
@@ -222,16 +223,16 @@ async function ScriptsOverview() {
 }
 
 /** The marking figures (public.marking_dashboard): what is left, on hold and waiting for staff, the alerts (3B: those of
- * the checks too), and a row per exam whose marking is open or closed in the last 14 days, with its checks and whether
- * its marking is approved. No candidate name. */
+ * the checks too, every red one first), and a row per exam whose marking is open, closed in the last 14 days, or not
+ * approved, with its checks (scripts) and whether its marking is approved. No candidate name. */
 function MarkingDashboardView({ d, now }: { d: MarkingDashboard; now: Date }) {
-  const alerts = [...markingAlerts(d), ...checkingAlerts(d)];
+  const alerts = redFirst([...markingAlerts(d), ...checkingAlerts(d)]);
   return (
     <div className="mb-6 space-y-4" data-testid="marking-dashboard">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Tile label="Left to mark" value={d.left} href="/admin/marking" testId="tile-marking-left" />
         <Tile label="On hold in marking" value={d.onHold} href="/admin/marking" testId="tile-marking-on-hold" />
-        <Tile label="Marking alerts open" value={d.alertsOpen} href="/admin/marking" testId="tile-marking-alerts" />
+        <Tile label="Scripts with open alerts" value={d.alertsOpen} href="/admin/marking" testId="tile-marking-alerts" />
         <Tile label="Marking pictures to check" value={d.picturesToCheck} href="/admin/scripts/exceptions?tab=checks" testId="tile-marking-pictures" />
       </div>
 

@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(98);
+select plan(99);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -259,8 +259,8 @@ select is(array[pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'total', pg_tem
                 pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'last_saved_at', pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'marker_id',
                 pg_temp.unit(pg_temp.r('d_lead_list'), 'x2') ->> 'marker_name', pg_temp.unit(pg_temp.r('d_lead_list'), 'x3') ->> 'marker_name',
                 pg_temp.unit(pg_temp.r('d_lead_list'), 'x3') ->> 'total'],
-  array[null, null, null, null, null, 'Mara One', '3.0'],
-  'lead_is_blind_to_pieces_waiting_for_a_second_marking: holding nothing, the lead sees nothing of x2''s first marking; x3''s shows');
+  array[null, null, null, null, null, 'Mara One', null],
+  'lead_is_blind_to_pieces_waiting_for_a_second_marking: holding nothing, the lead sees nothing of x2''s first marking; x3''s marker shows, never its total (the final review''s issue 2)');
 
 -- ---------------------------------------------------------------------------------------------
 -- lead_may_take_a_second_pass
@@ -300,8 +300,8 @@ insert into res values ('f_admin_list', public.marking_units_list(pg_temp.k('e')
 select tests.as_postgres();
 select is(array[pg_temp.unit(pg_temp.r('f_lead_list'), 'x2') ->> 'total', pg_temp.unit(pg_temp.r('f_lead_list'), 'x2') ->> 'submitted_at',
                 pg_temp.unit(pg_temp.r('f_lead_list'), 'x3') ->> 'total', pg_temp.unit(pg_temp.r('f_admin_list'), 'x2') ->> 'total'],
-  array[null, null, '3.0', '3.0'],
-  'lead_second_marker_never_sees_the_first_total: the lead''s list gives x2''s total and submit time as null while they hold its second pass; x3''s, and the admin''s, are shown');
+  array[null, null, null, '3.0'],
+  'lead_second_marker_never_sees_the_first_total: the lead''s list gives x2''s total and submit time as null while they hold its second pass, and x3''s total too; the admin''s is shown');
 
 -- ---------------------------------------------------------------------------------------------
 -- second_hold_expires_and_frees_only_the_second_pass
@@ -743,6 +743,23 @@ select is(array[pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'total', pg_temp.u
                 (pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'last_saved_at' is not null)::text,
                 (pg_temp.unit(pg_temp.r('bl_admin'), 'x2') ->> 'submitted_at' is not null)::text],
   array['3.0', 'Mara One', 'true', 'true', 'true'], 'an admin sees the first marking in full');
+
+-- ---------------------------------------------------------------------------------------------
+-- lead_reads_no_first_total_in_progress_or_checked (the final review's issue 2): m2's live marking of y1 is in progress
+-- (saved, not submitted) and z1 is checked; neither waits for a second marker, and the lead holds neither.
+-- ---------------------------------------------------------------------------------------------
+select tests.as_user(pg_temp.uid('lead'));
+insert into res values ('lt_lead', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres(); select tests.as_user(pg_temp.uid('admin'));
+insert into res values ('lt_admin', public.marking_units_list(pg_temp.k('e')));
+select tests.as_postgres();
+select is(array[pg_temp.us('y1'), (select check_state from public.marking_units where id = pg_temp.u('z1')),
+                pg_temp.unit(pg_temp.r('lt_lead'), 'y1') ->> 'total', pg_temp.unit(pg_temp.r('lt_lead'), 'z1') ->> 'total',
+                (pg_temp.unit(pg_temp.r('lt_lead'), 'y1') ->> 'marker_name' is not null)::text,
+                (pg_temp.unit(pg_temp.r('lt_lead'), 'z1') ->> 'marker_name' is not null)::text,
+                pg_temp.unit(pg_temp.r('lt_admin'), 'y1') ->> 'total', pg_temp.unit(pg_temp.r('lt_admin'), 'z1') ->> 'total'],
+  array['taken', 'checked', null, null, 'true', 'true', '1.0', '3.0'],
+  'lead_reads_no_first_total_in_progress_or_checked: the lead''s list gives no first total, of a marking in progress or of a checked piece; an admin''s gives both');
 
 -- ---------------------------------------------------------------------------------------------
 -- second_rule_and_blocked_agree: for every user of c and every piece of e, whatever its state and holders, the rule

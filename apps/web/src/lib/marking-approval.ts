@@ -9,8 +9,10 @@ const count = (v: unknown): number => (typeof v === "number" && Number.isSafeInt
 const text = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v : null);
 const time = (v: unknown): string | null => (typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : null);
 
-/** What still blocks approval, in the order the database gives them. */
+/** What still blocks approval, in the order the database gives them. no_scripts: no script has arrived (its count is
+ * 0). */
 export const BLOCK_CODES = [
+  "no_scripts",
   "scripts_not_checked",
   "with_lead",
   "waiting_second",
@@ -67,7 +69,7 @@ export type Approval = {
 };
 
 /** marking_approval_get's answer, or the code it was refused with; null for an answer it cannot read. A block this page
- * does not know is left out. */
+ * does not know is left out, and so is one with nothing to count, except no_scripts (whose count is 0). */
 export function parseApproval(data: unknown): { ok: true; approval: Approval } | { ok: false; code: string } | null {
   const d = obj(data);
   if (!d) return null;
@@ -90,7 +92,9 @@ export function parseApproval(data: unknown): { ok: true; approval: Approval } |
       stale: d.stale === true,
       blocks: d.blocks.flatMap((v): ApprovalBlock[] => {
         const b = obj(v);
-        return b && isBlock(b.code) && count(b.count) > 0 ? [{ code: b.code, count: count(b.count), withStaff: count(b.with_staff) }] : [];
+        return b && isBlock(b.code) && (count(b.count) > 0 || b.code === "no_scripts")
+          ? [{ code: b.code, count: count(b.count), withStaff: count(b.with_staff) }]
+          : [];
       }),
       scripts: { checked: count(scripts?.checked), withdrawn: count(scripts?.withdrawn), void: count(scripts?.void), other: count(scripts?.other) },
       noScript: count(d.no_script),
@@ -127,11 +131,14 @@ const scripts = (n: number) => `${n} ${n === 1 ? "script" : "scripts"}`;
 /** "1 script is", "3 scripts are". */
 const scriptsAre = (n: number) => `${scripts(n)} ${n === 1 ? "is" : "are"}`;
 
-/** One plain sentence for what blocks approval: "3 scripts are with the lead marker.", "2 scripts wait for a second
- * marker.", "1 script is still with staff."; "" for a block this page does not know. */
+/** One plain sentence for what blocks approval: "No script has arrived for this exam yet.", "3 scripts are with the
+ * lead marker.", "2 scripts wait for a second marker.", "1 script is still with staff."; "" for a block this page does
+ * not know. */
 export function blockText(b: ApprovalBlock): string {
   const n = b.count;
   switch (b.code) {
+    case "no_scripts":
+      return "No script has arrived for this exam yet.";
     case "scripts_not_checked":
       if (b.withStaff >= n) return `${scriptsAre(n)} still with staff.`;
       if (b.withStaff === 0) return `${scriptsAre(n)} not checked yet.`;

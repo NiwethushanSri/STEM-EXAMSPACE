@@ -71,6 +71,12 @@ describe("parseApproval", () => {
     expect(parseApproval([])).toBeNull();
     expect(parseApproval({ ok: true })).toBeNull();
   });
+  it("approval_parse_keeps_no_scripts_though_its_count_is_0", () => {
+    const r = parseApproval({ ...answer, can_approve: false, stale: false, blocks: [{ code: "no_scripts", count: 0 }] });
+    expect(r?.ok).toBe(true);
+    if (!r || !r.ok) return;
+    expect(r.approval.blocks).toEqual([{ code: "no_scripts", count: 0, withStaff: 0 }]);
+  });
 });
 
 describe("blockText", () => {
@@ -90,6 +96,7 @@ describe("blockText", () => {
     expect(blockText({ code: "pause_pending", count: 1, withStaff: 0 })).toBe(
       "1 paused marker's scripts have not gone to the lead marker yet. This clears within a minute.",
     );
+    expect(blockText({ code: "no_scripts", count: 0, withStaff: 0 })).toBe("No script has arrived for this exam yet.");
   });
 });
 

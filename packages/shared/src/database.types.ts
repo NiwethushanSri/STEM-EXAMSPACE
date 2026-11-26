@@ -2055,6 +2055,9 @@ isOneToOne: false
 "marking_check_exam":
 { Args: { "p_exam": string }; Returns: number
                            },
+"marking_checks_backfill":
+{ Args: Record<PropertyKey, never>; Returns: number
+                           },
 "marking_checks_get":
 { Args: { "p_exam": string }; Returns: Json
                            },

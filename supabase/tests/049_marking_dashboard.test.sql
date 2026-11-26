@@ -10,7 +10,8 @@ select tests.assert_no_owner();
 --      (withdrawn after opening, so its piece is on hold and counted nowhere);
 --   b: deadline in 3 hours; script b1 (open);
 --   c: deadline a day ago, closed 3 days ago (still listed); script c1, assigned to m1 8 days ago;
---   d: closed 20 days ago (not listed); f: settings saved, never opened (not listed);
+--   d: closed 20 days ago, not approved (still listed: it waits for approval); f: settings saved, never opened (not
+--      listed);
 --   s: no deadline; scripts s1 to s7 held in the ways the stale test describes.
 -- The pieces' states, holds, assignments and markings are written directly, as postgres. The local database may hold
 -- other exams, so the figures that count every exam (the totals) are compared with a dashboard read before the
@@ -141,16 +142,16 @@ select is(pg_temp.counts('d', 'a'), '2 2 2',
 select is(pg_temp.counts('d', 'b'), '1 0 0', 'an exam with one open piece: 1 left');
 select is(array(select x ->> 'title' from jsonb_array_elements(pg_temp.r('d') -> 'exams') x
                 where (x ->> 'exam_id')::uuid in (select id from kv) order by x ->> 'title'),
-  array['ZZ Dash a', 'ZZ Dash b', 'ZZ Dash c', 'ZZ Dash s'],
-  'exams whose marking is open, or closed in the last 14 days, are listed; one closed 20 days ago or never opened is not');
+  array['ZZ Dash a', 'ZZ Dash b', 'ZZ Dash c', 'ZZ Dash d', 'ZZ Dash s'],
+  'exams whose marking is open, closed in the last 14 days, or not approved are listed (d closed 20 days ago and waits for approval: the final review''s issue 5); one never opened is not');
 select is(array[pg_temp.f('d', 'a', 'title'), pg_temp.f('d', 'a', 'paper'), (pg_temp.f('d', 'a', 'deadline')::timestamptz = now() + interval '1 day')::text],
   array['ZZ Dash a', 'Paper 1', 'true'], 'each row names the exam, its paper and its deadline');
 select is(array[(pg_temp.r('d') -> 'totals' ->> 'left')::int, (pg_temp.r('d') -> 'totals' ->> 'on_hold')::int],
   array[(select sum((x ->> 'left')::int)::int from jsonb_array_elements(pg_temp.r('d') -> 'exams') x),
         (select sum((x ->> 'on_hold')::int)::int from jsonb_array_elements(pg_temp.r('d') -> 'exams') x)],
   'the totals left and on hold add up the listed exams');
-select is(array[pg_temp.more('d', 'base', 'left'), pg_temp.more('d', 'base', 'on_hold')], array[2 + 1 + 1 + 7, 2 + 1],
-  'these exams add 11 pieces left (a 2, b 1, c 1, s 7) and 3 on hold (a 2, s 1)');
+select is(array[pg_temp.more('d', 'base', 'left'), pg_temp.more('d', 'base', 'on_hold')], array[2 + 1 + 1 + 1 + 7, 2 + 1],
+  'these exams add 12 pieces left (a 2, b 1, c 1, d 1, s 7) and 3 on hold (a 2, s 1)');
 
 -- ---------------------------------------------------------------------------------------------
 -- overdue_only_after_the_deadline_with_work_left

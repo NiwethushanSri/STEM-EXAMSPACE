@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(34);
+select plan(37);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -18,7 +18,7 @@ select tests.assert_no_owner();
 --   mx: mf1 (m1) and ms1 (the lead's) checked, for the maximum rule.
 --   s:  ('ZZ Appr Small') the checks were on; the admin turned all three off with a reason, then marking opened. t1
 --       marked by x1.
---   pc: g1 marked by m4; then admin2 closed marking. no: marking never opened.
+--   pc: g1 marked by m4; then admin2 closed marking. no: marking never opened. em: marking opened, no script yet.
 --   big: ('ZZ Appr Big') the timing guard's exam, at the end.
 -- A piece is kept as 'u:<script>', its first marking as 'f:<piece>' and its second as 's:<piece>'.
 -- ---------------------------------------------------------------------------------------------
@@ -161,10 +161,10 @@ insert into c values ('lead', tests.marker(pg_temp.subj('ZZ Appr'), true)), ('x1
 update public.profiles set first_name = 'Agatha', last_name = 'Approver' where id = pg_temp.uid('admin');
 update public.profiles set first_name = 'Ermengarde', last_name = 'Leadbetter' where id = pg_temp.uid('lead');
 
-insert into kv select x, tests.marking_exam(pg_temp.subj('ZZ Appr')) from unnest(array['a1', 'a2', 'b', 'c', 'mx', 'pc', 'no']) x;
+insert into kv select x, tests.marking_exam(pg_temp.subj('ZZ Appr')) from unnest(array['a1', 'a2', 'b', 'c', 'mx', 'pc', 'no', 'em']) x;
 insert into kv values ('s', tests.marking_exam(pg_temp.subj('ZZ Appr Small')));
-select tests.structure(pg_temp.k(x)) from unnest(array['a1', 'a2', 'b', 'c', 'mx', 'pc', 'no', 's']) x;
-select tests.open_marking(pg_temp.k(x)) from unnest(array['a1', 'a2', 'c', 'mx', 'pc']) x;
+select tests.structure(pg_temp.k(x)) from unnest(array['a1', 'a2', 'b', 'c', 'mx', 'pc', 'no', 's', 'em']) x;
+select tests.open_marking(pg_temp.k(x)) from unnest(array['a1', 'a2', 'c', 'mx', 'pc', 'em']) x;
 select tests.open_marking(pg_temp.k('b'),
   '{"double_marking": true, "sample_percent": 10, "tolerance_percent": 10, "seeds": true, "seed_every": 50, "practice": false}');
 update public.exam_marking set double_marking = true, seeds = true, practice = true where exam_id = pg_temp.k('s');
@@ -325,6 +325,18 @@ select is(array[pg_temp.blocks(pg_temp.r('a2')), pg_temp.r('a2') #>> '{blocks,0,
     pg_temp.r('a2') #>> '{scripts,checked}', pg_temp.code(pg_temp.r('a2_ap')), pg_temp.blocks(pg_temp.r('a2_ap'))],
   array['scripts_not_checked 3', '3', '3', '1', 'not_all_checked', 'scripts_not_checked 3'],
   'a_script_still_with_staff_blocks: a script that needs attention, a late one nobody decided and a verified one not handed out yet each block, all still with staff');
+
+-- ---------------------------------------------------------------------------------------------
+-- empty_exam_is_not_ready_to_approve (the final review's issue 1): em's marking opened before any script arrived.
+-- ---------------------------------------------------------------------------------------------
+insert into res values ('em_get', pg_temp.get('admin', 'em'));
+insert into res values ('em_ap', pg_temp.approve('admin', 'em'));
+select is(array[pg_temp.r('em_get') ->> 'opened', pg_temp.r('em_get') ->> 'can_approve', pg_temp.blocks(pg_temp.r('em_get')),
+    pg_temp.code(pg_temp.r('em_ap')), pg_temp.blocks(pg_temp.r('em_ap')),
+    (select coalesce(m.approved_at::text, 'not approved') || ', ' || coalesce(m.closed_at::text, 'open') from public.exam_marking m
+     where m.exam_id = pg_temp.k('em'))],
+  array['true', 'false', 'no_scripts 0', 'not_all_checked', 'no_scripts 0', 'not approved, open'],
+  'empty_exam_is_not_ready_to_approve: with no script yet, the page says so and cannot approve; the approval is refused and marking stays open');
 
 -- ---------------------------------------------------------------------------------------------
 -- piece_with_the_lead_or_waiting_for_a_second_blocks
@@ -695,6 +707,61 @@ select is(array[pg_temp.code(pg_temp.r('fs_mf1')),
      where q.exam_id = pg_temp.k('mx') and q.max_mark is not null)],
   array['ok', '1', 'conflict', 'conflict', 'ok', '3,1,5'],
   'maximum_cannot_drop_below_a_final_or_standard_mark: a maximum below a final mark or a standard''s mark is refused (conflict); one no mark is above is saved');
+
+-- ---------------------------------------------------------------------------------------------
+-- backfill_checks_old_pieces_and_turns_checks_off (the final review's issue 3, Ruling R27). Exam pre stands for an exam
+-- whose marking opened before Phase 3B: its three checks are on (the defaults migration 003 gave every exam), and m1's
+-- marking of pr1 was submitted before the check existed (written as postgres, as Phase 3A left it: the piece submitted
+-- with no check state, its script marked, no final marks). marking_checks_backfill, which migration 012 calls once,
+-- turns the three checks off with the reason and checks the piece on its first marks, on every exam whose marking has
+-- opened and is not approved (b too: reopened above, double marking and seeds on). An approved exam is frozen and left
+-- alone: a1's practice is written on directly to show it.
+-- ---------------------------------------------------------------------------------------------
+update public.exam_marking set practice = true where exam_id = pg_temp.k('a1');
+insert into kv values ('pre', tests.marking_exam(pg_temp.subj('ZZ Appr')));
+select tests.structure(pg_temp.k('pre'));
+select tests.open_marking(pg_temp.k('pre'), '{"double_marking": true, "seeds": true, "practice": true}');
+select pg_temp.script('pr1', 'pre');
+with k as (insert into public.markings (unit_id, kind, marker_id, status, rev, total, last_saved_at, submitted_at)
+           values (pg_temp.u('pr1'), 'live', pg_temp.uid('m1'), 'submitted', 1, 3, now(), now()) returning id)
+insert into kv select 'f:pr1', k.id from k;
+insert into public.question_marks (marking_id, question_id, mark)
+select pg_temp.k('f:pr1'), q.question_id, 1 from public.marking_unit_questions(pg_temp.u('pr1')) q where q.leaf;
+update public.marking_units set state = 'submitted', check_state = null, second_wanted = null where id = pg_temp.u('pr1');
+update public.scripts set state = 'marked' where id = pg_temp.k('pr1');
+insert into res values ('pre_before', jsonb_build_object('cs', pg_temp.cs('pr1'), 'st', pg_temp.st('pr1')));
+insert into res values ('bf1', to_jsonb(public.marking_checks_backfill()));
+insert into res values ('pre_get', pg_temp.get('admin', 'pre'));
+select is(array[pg_temp.r('pre_before') ->> 'cs', pg_temp.r('pre_before') ->> 'st', pg_temp.cs('pr1'), pg_temp.st('pr1'),
+    (select string_agg(f.source || ' ' || trim_scale(f.mark)::text, ',') from public.final_marks f where f.unit_id = pg_temp.u('pr1')),
+    (select concat_ws(' ', m.double_marking::text, m.seeds::text, m.practice::text, coalesce(m.checks_off_by::text, 'nobody'),
+                      (m.checks_off_at is not null)::text, m.checks_off_reason)
+     from public.exam_marking m where m.exam_id = pg_temp.k('pre')),
+    (select string_agg(coalesce(a.actor_id::text, 'nobody') || ': ' || a.reason, ',') from public.audit_log a
+     where a.action = 'marking_checks_set' and a.target_id = pg_temp.k('pre')),
+    pg_temp.r('pre_get') #>> '{checks,off,reason}', pg_temp.r('pre_get') ->> 'can_approve',
+    (select concat_ws(' ', m.double_marking::text, m.seeds::text, m.practice::text) from public.exam_marking m where m.exam_id = pg_temp.k('b')),
+    (select count(*)::text from public.audit_log a where a.action = 'marking_checks_set' and a.actor_id is null and a.target_id = pg_temp.k('b')),
+    (select m.practice::text from public.exam_marking m where m.exam_id = pg_temp.k('a1')),
+    (select count(*)::text from public.audit_log a where a.action = 'marking_checks_set' and a.target_id = pg_temp.k('a1'))],
+  array['-', 'marked', 'checked', 'checked', 'first 1,first 1,first 1', 'false false false nobody true Marked before the checks existed',
+    'nobody: Marked before the checks existed', 'Marked before the checks existed', 'true', 'false false false', '1', 'true', '0'],
+  'backfill_checks_old_pieces_and_turns_checks_off: pr1 is checked on its first marks and pre can be approved; its three checks are off with the reason, by nobody (the migration), in one audit row; b''s too; approved a1 is untouched');
+create function pg_temp.snapshot() returns jsonb language sql stable security definer as $$
+  select jsonb_build_object(
+    'marking', (select jsonb_agg(to_jsonb(m) order by m.exam_id) from public.exam_marking m),
+    'units', (select jsonb_agg(jsonb_build_array(u.id, u.check_state, u.second_wanted, u.final_marking_id, u.checked_at) order by u.id)
+              from public.marking_units u),
+    'audit', (select count(*) from public.audit_log),
+    'history', (select count(*) from public.final_mark_history)) $$;
+insert into res values ('bf_before', pg_temp.snapshot());
+insert into res values ('bf2', to_jsonb(public.marking_checks_backfill()));
+select is(array[pg_temp.r('bf2') #>> '{}', (pg_temp.snapshot() = pg_temp.r('bf_before'))::text,
+    has_function_privilege('anon', 'public.marking_checks_backfill()', 'execute')::text,
+    has_function_privilege('authenticated', 'public.marking_checks_backfill()', 'execute')::text,
+    has_function_privilege('service_role', 'public.marking_checks_backfill()', 'execute')::text],
+  array['0', 'true', 'false', 'false', 'false'],
+  'backfill_twice_changes_nothing: a second call changes no exam, piece or final mark and writes no audit row; nobody can call it from the API');
 
 -- ---------------------------------------------------------------------------------------------
 -- No answer names a candidate.

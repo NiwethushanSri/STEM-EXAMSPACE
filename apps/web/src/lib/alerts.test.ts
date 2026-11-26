@@ -5,6 +5,7 @@ import {
   markingAlerts,
   parseMarkingDashboard,
   parseScriptsDashboard,
+  redFirst,
   scriptsDashboardAlerts,
   type MarkingDashboard,
   type ScriptsDashboard,
@@ -286,7 +287,7 @@ describe("checkingAlerts", () => {
     // Scripts waiting for a second marker whom somebody can be are not an alert, nor are 3A's figures.
     expect(checkingAlerts({ ...NONE, waitingSecond: 6, overdueExams: 1, onHold: 2 })).toEqual([]);
     expect(checkingAlerts({ ...NONE, approvedStale: 2, stuckSecond: 3, withLead: 4, markersPaused: 5, readyToApprove: 6 })).toEqual([
-      { id: "checking-stale", tone: "red", text: "A script arrived after the marking of 2 exams was approved.", href: "/admin/marking" },
+      { id: "checking-stale", tone: "red", text: "A script arrived or changed after the marking of 2 exams was approved.", href: "/admin/marking" },
       { id: "checking-stuck", tone: "red", text: "3 scripts wait for a second marker and nobody can take them.", href: "/admin/marking" },
       { id: "checking-with-lead", tone: "amber", text: "4 scripts wait for the lead marker.", href: "/marking/review" },
       { id: "checking-paused", tone: "amber", text: "5 markers are paused.", href: "/marking/review?tab=markers" },
@@ -296,11 +297,26 @@ describe("checkingAlerts", () => {
 
   it("uses the singular for one", () => {
     expect(checkingAlerts({ ...NONE, approvedStale: 1, stuckSecond: 1, withLead: 1, markersPaused: 1, readyToApprove: 1 }).map((a) => a.text)).toEqual([
-      "A script arrived after the marking of 1 exam was approved.",
+      "A script arrived or changed after the marking of 1 exam was approved.",
       "1 script waits for a second marker and nobody can take it.",
       "1 script waits for the lead marker.",
       "1 marker is paused.",
       "1 exam is ready for its marking to be approved.",
     ]);
+  });
+});
+
+describe("redFirst", () => {
+  it("home_alerts_red_before_amber: the joined marking and checking alerts, every red one first, each tone in its own order", () => {
+    const d: MarkingDashboard = { ...NONE, overdueExams: 1, onHold: 2, picturesToCheck: 3, approvedStale: 1, stuckSecond: 2, withLead: 4 };
+    expect(redFirst([...markingAlerts(d), ...checkingAlerts(d)]).map((a) => a.id)).toEqual([
+      "marking-overdue",
+      "checking-stale",
+      "checking-stuck",
+      "marking-on-hold",
+      "marking-pictures",
+      "checking-with-lead",
+    ]);
+    expect(redFirst([])).toEqual([]);
   });
 });

@@ -84,6 +84,12 @@ describe("ApprovalPanel", () => {
     expect(text({ ...base, canApprove: true, blocks: [] })).toContain("Nothing blocks approval.");
     expect(text({ ...base, opened: false, blocks: [] })).toContain("Marking has not opened for this exam.");
   });
+  it("approval_panel_says_no_script_has_arrived", () => {
+    const t = text({ ...base, blocks: [{ code: "no_scripts", count: 0, withStaff: 0 }], scripts: { checked: 0, withdrawn: 0, void: 0, other: 0 } });
+    expect(t).toContain("What still blocks approval");
+    expect(t).toContain("No script has arrived for this exam yet.");
+    expect(t).not.toContain("Nothing blocks approval.");
+  });
   it("approval_panel_once_approved_and_stale", () => {
     const t = text({ ...base, approvedAt: "2026-12-03T10:15:00+00:00", approvedByName: "Agatha Approver", stale: true });
     expect(t).toContain("Approved by Agatha Approver on");

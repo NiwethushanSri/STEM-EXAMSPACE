@@ -35,16 +35,16 @@ Phase 3A let markers mark a script without seeing a name. Phase 3B checks that m
 
 - **Checks on the marking** (on the exam page, under Marking): "Double marking" with "Second-mark {n}% of scripts" (10% unless changed) and "Send to the lead marker when marks differ by more than {n}% of the maximum" (10%, at least one mark); "Seeded scripts" with "About one in every {n} scripts" (10); "Practice before live marking". All three are on by default. They can be turned off, with a reason, only while the subject has at most one approved marker (the lead marker counts as one). Opening marking with double marking on needs two approved markers; with seeds or practice on, it needs a lead marker. Once marking has opened, any change needs a reason.
 - **The Marking page** (/admin/marking): each script shows its check ("Waiting for a second marker", "With the lead marker", "Checked") and its second marker. New actions: "Second-mark these", "Release from second marking" (with a reason), "Assign second marking to…" and "Take back second marking". Each exam links to its review, its marker statistics and its approval.
-- **Approval** (/admin/marking/{exam}/approval): the scripts checked, withdrawn and void, candidates with no script, what still blocks approval in one sentence each, the checks in words (and, when any was turned off, "Checks turned off" with the reason, who and when), and what the checks found. "Approve this exam's marking" (with an optional note) closes marking and freezes it: marks, final marks, questions and checks stay as they are until an admin presses "Withdraw approval" with a reason. A script that arrives or changes after the approval is flagged: "A script arrived or changed after this approval. Withdraw the approval to include it." It is never added silently.
+- **Approval** (/admin/marking/{exam}/approval): the scripts checked, withdrawn and void, candidates with no script, what still blocks approval in one sentence each (an exam with no script yet says "No script has arrived for this exam yet." and cannot be approved), the checks in words (and, when any was turned off, "Checks turned off" with the reason, who and when), and what the checks found. "Approve this exam's marking" (with an optional note) closes marking and freezes it: marks, final marks, questions and checks stay as they are until an admin presses "Withdraw approval" with a reason. A script that arrives or changes after the approval is flagged: "A script arrived or changed after this approval. Withdraw the approval to include it." It is never added silently.
 - **Marker pay**: on the exam page, "Pay per script" (or one box per question group for an exam marked by question), in pounds. First and second marking are paid at the same rate. Practice and seeded scripts are never paid.
-- **Marker payments** (/admin/marking/payments): a month picker (UK months), each marker's lines and total, "Fix this month's statements" once the month has ended, and "Download CSV". A fixed statement never changes; marking it missed is carried into the next month. Paying markers happens outside the system.
-- **Admin home page**: each exam's marking row also shows "Checked", "With the lead marker", "Waiting for a second marker" and an "Approved" badge. New alerts, the most urgent first:
-  - "A script arrived after the marking of {n} exams was approved."
+- **Marker payments** (/admin/marking/payments): a month picker (UK months), each marker's lines and total, "Fix this month's statements" once the month has ended, and "Download CSV". A fixed statement never changes; marking it missed is carried into the next month. It shows the exam's current title, so a renamed exam shows its new name. Paying markers happens outside the system.
+- **Admin home page**: each exam's marking row also shows "Checked", "With the lead marker", "Waiting for a second marker" and an "Approved" badge. An exam stays on the list until its marking is approved, however long ago marking closed. New alerts, every red one first, the most urgent first:
+  - "A script arrived or changed after the marking of {n} exams was approved."
   - "{n} scripts wait for a second marker and nobody can take them."
   - "{n} scripts wait for the lead marker."
   - "{n} markers are paused."
   - "{n} exams are ready for their marking to be approved."
-  "On hold in marking" and the open alerts now count scripts, not pieces: a script marked by question with three pieces on hold counts once.
+  "On hold in marking", "Checked", "With the lead marker", "Waiting for a second marker", the stuck scripts and the open alerts count scripts, not pieces: a script marked by question with three pieces on hold counts once. The tile for open alerts is now called "Scripts with open alerts". "Left" and "Marked" still count pieces. The progress card on /marking and /admin/marking counts scripts the same way.
 - **The last demonstration pages are gone**: /examiner and /examiner/standardisation now show "page not found", and the menu entry is removed.
 - **One email**, to the lead marker and admins, when a marker is paused after three seeded scripts outside the tolerance. It names neither the marker nor any candidate.
 
@@ -62,6 +62,7 @@ Also from the plan's table:
 
 - **The sample is drawn per piece, not per script** (call 2), so a small exam may get no second marking by chance (10% of 8 is often none). The approval page shows how many were second-marked.
 - **A practice or seeded script is a copy of the lead marker's own marking** (call 5), and that piece is not itself second-marked.
+- **Seeded scripts after live work runs out** (Ruling R10): once a marker has no live or second marking left on an exam, "Next script" hands them their remaining seeded scripts (at most 10 per question group). These are not paid.
 
 ## Open questions for you
 
@@ -83,10 +84,12 @@ Do not deploy until you give the go-ahead.
 - **Gate: the browser tests must pass on the final version.** They have not been run on this part's final version (see "How it was tested"). Run `npm run e2e:local -w @stem/web` once, on a machine with port 3005 free and at least 3 GB of memory free. It builds the site, starts its own copy, the processing server and the Edge Functions, and runs every browser test, the four marking ones included (marking.spec.ts, marking-admin.spec.ts, marking-checks.spec.ts and the new marking-checks-admin.spec.ts). Do not deploy until it passes.
 - **Gate: the website build.** It was not run on this part's final version either (too little memory was free). The full browser run above builds it. Every build still stops once on Next.js's security notice; a second run then builds. Upgrading Next.js is its own, tested step, done only with your go-ahead.
 - **Gate: a real iPad with an Apple Pencil**, as in Phase 3A (owner action below), now also on a second marking and a practice script.
+- **Gate: one full database test run with at least 2 GB of memory free.** Run `npm run db:test:local` once on the final version, with 2 GB or more free. The timing checks are only trusted with that much memory: a timing check that fails with less free is run again on its own, and its limit is not loosened (Ruling R31).
 
 **Steps**
 
-1. **Migrations 20261123000001 to 20261123000011**, after Phase 3A's 20261122000001 to 20261122000015 (`npm run db:push`, by your go-ahead only). 001 is Phase 3A's carry-overs; 002 signs picture links on the server and removes the markers' own access to the picture store; 003 adds the tables and settings for the checks; 004 hands out second markings; 005 is the check itself, the "Checked" state and final marks; 006 adds practice, seeded scripts and the pause; 007 the lead's review; 008 the marker statistics; 009 approval; 010 marker pay; 011 the dashboard figures and alerts. No new scheduled job: `marking-tick` (every minute) also applies pauses now.
+1. **Migrations 20261123000001 to 20261123000012**, after Phase 3A's 20261122000001 to 20261122000015 (`npm run db:push`, by your go-ahead only). 001 is Phase 3A's carry-overs; 002 signs picture links on the server and removes the markers' own access to the picture store; 003 adds the tables and settings for the checks; 004 hands out second markings; 005 is the check itself, the "Checked" state and final marks; 006 adds practice, seeded scripts and the pause; 007 the lead's review; 008 the marker statistics; 009 approval; 010 marker pay; 011 the dashboard figures and alerts; 012 the final review's fixes. No new scheduled job: `marking-tick` (every minute) also applies pauses now.
+   **Exams already marking when Phase 3B goes in have the three checks (double marking, seeded scripts, practice) turned off by migration 012, with the reason "Marked before the checks existed" recorded, and the scripts they marked before are checked on their first marks. An admin can turn double marking back on for such an exam, with a reason.**
 2. **Edge Functions: deploy the new `marking-pictures` and redeploy `script-notify`.** The shared email code changed too (the "marker paused" email was added), so deploy every function with `npm run fn:deploy`. No new secret is needed.
 3. **The website.**
 
@@ -121,7 +124,8 @@ On the local test copy only, on 25 November 2026, one suite at a time:
 - Website tests: 582 passed; shared code tests: 219 passed; type checks clean; the linter clean (3 old warnings).
 - Browser tests: **not run on the final version**, because too little memory was free on this computer (about 0.4 to 0.7 GB; they need at least 2 GB, and the full run 3 GB). The marking browser tests last ran in Task 6 of this part (the marker's screens: 5 of 5; the Phase 3A marking tests: 11 of 11 and 8 of 8). The new staff test (marking-checks-admin.spec.ts) and the checks Task 13 added to marking-checks.spec.ts (a script sent back, a change to a settled script refused, a first look at the Review pages and the admin's check column) have never run. The new staff pages (Review, statistics, approval, payments) have not been seen in a browser.
 - The website build: not run on the final version (memory, as above).
-- Timed with large made-up exams: hand-out and the marker's list as in Phase 3A; marker statistics at 1,500 second-marked pieces about 0.1 seconds; the approval page at 1,500 second-marked scripts with 300 pictures to check about half a second; statements at 3,000 markings well under a second to read and to fix.
+- After the final review's fixes (migration 012, 26 November): the database test files 043, 049 and 053 to 063 run one at a time, 965 checks, all passing; the full database run was not repeated (about 0.8 GB free: it is the 2 GB gate under "Before you start"). Website tests: 585 passed; shared code tests: 219 passed; type checks clean; the linter clean (3 old warnings). The review screen's phone layout has not been seen in a browser.
+- Timed with large made-up exams: the admin home page with 50 more exams listed about 0.07 seconds; hand-out and the marker's list as in Phase 3A; marker statistics at 1,500 second-marked pieces about 0.1 seconds; the approval page at 1,500 second-marked scripts with 300 pictures to check about half a second; statements at 3,000 markings well under a second to read and to fix.
 
 ## Known limits
 
@@ -130,20 +134,14 @@ On the local test copy only, on 25 November 2026, one suite at a time:
 - **Markers have no payments page.** Statements and the CSV are for admins.
 - **No email for a difference or a sample review.** The lead's Review page and the admin home page show them. The only new email is the one when a marker is paused.
 - **Statistics are per piece, never per script,** and they include each marker in their own comparison (see the open questions).
-- **A script withdrawn and then brought back after the exam's marking was approved is not flagged** when it comes back checked with its old final marks: the approval does not show as changed.
 - **A seeded script whose hold ran out comes back to the same marker** through "Next script". It is a weak tell; nothing on the screen says so.
+- **An approved exam whose marking closed more than 14 days ago leaves the admin home page**, and is no longer tested there for a script that arrived or changed after the approval (Ruling R28). Its approval page still says so, and Phase 4 must still refuse to prepare its results.
 - **The timing tests are sensitive to memory on this computer.** Two of them (the hand-out test from Phase 3A and the check test from this part) failed in some full runs during this part while very little memory was free, and passed when run alone. None failed in the final full run, and no limit was loosened for this.
 - **The full browser run, the website build and a real iPad check still gate the deploy** (see "Before you start").
 
-### For the final review
+### Settled by the final review
 
-These were found during this part and left for the review of the whole branch:
-
-- How the timing tests should run here: with more memory free, in a separate pass, or with limits loosened as earlier rulings did.
-- The "stuck" count can include a reviewed script whose second marking the lead already holds and can still submit.
-- A lead marker replaced later could still be offered the second marking of a script they reviewed.
-- A submitted seeded attempt on a script whose pages later changed is not flagged.
-- The Review page's list and the review screen can show a different second marking for an open sample review.
+The final review of the whole branch decided the items left for it. The timing tests keep their limits and gate the deploy (see "Before you start"; Ruling R31). Migration 012 fixes the "stuck" count (a script whose second marking someone holds is not stuck), stops a former lead marker being offered the second marking of a script whose review they closed, and makes the Review page's list show the same second marking as the review screen. A submitted seeded attempt on a script whose pages later changed stays unflagged: flagging it would tell the marker it was seeded. The same wave also made these changes: an exam with no script cannot be approved; a lead marker never sees a first marker's total in the list of scripts; open samples of an approved exam leave the lead's list until the approval is withdrawn; the review screen is one column on a phone.
 
 ## Where Phase 4 plugs in
 

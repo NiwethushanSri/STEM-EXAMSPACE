@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(32);
+select plan(38);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -17,7 +17,10 @@ select tests.assert_no_owner();
 --   ap: checks off; ap1 marked by m1, then the admin approves the exam's marking; then a late script arrives.
 --   q:  marked by question (two groups, so two pieces a script); q1's two pieces and one of q2's are on hold; q1 has two
 --       open alerts, q2 one.
---   mw: checks off; m1 marks mw1 and mw2 and holds mw4; m2 marks mw5; then mw2 is withdrawn and mw5 made void.
+--   mw: checks off; m1 marks mw1 and mw2 and holds mw4; m2 marks mw5; then mw2 is withdrawn and mw5 made void. The
+--       lead pauses m3 here too (so m3 is paused on two listed exams).
+--   em: checks off; marking opened before any script arrived.
+--   Later: m1 paused on approved ap (written as postgres); qc, marked by question, its checks written as postgres.
 -- The local database may hold other exams, so the totals are compared with a dashboard read before the fixtures (as
 -- 049): now() stays the same through the transaction.
 -- ---------------------------------------------------------------------------------------------
@@ -96,9 +99,9 @@ insert into c values ('teacher', tests.create_user('teacher', 'active')), ('corr
   ('gone', tests.marker(pg_temp.subj('ZZ Chk3 Gone'), true));
 update public.profiles set status = 'suspended' where id = pg_temp.uid('gone');
 
-insert into kv select x, tests.marking_exam(pg_temp.subj('ZZ Chk3')) from unnest(array['e', 'r', 'r2', 'ap', 'q', 'mw']) x;
+insert into kv select x, tests.marking_exam(pg_temp.subj('ZZ Chk3')) from unnest(array['e', 'r', 'r2', 'ap', 'q', 'mw', 'em']) x;
 insert into kv values ('g', tests.marking_exam(pg_temp.subj('ZZ Chk3 Two')));
-select tests.structure(pg_temp.k(x)) from unnest(array['e', 'g', 'r', 'r2', 'ap', 'mw']) x;
+select tests.structure(pg_temp.k(x)) from unnest(array['e', 'g', 'r', 'r2', 'ap', 'mw', 'em']) x;
 
 -- Exam e.
 select tests.open_marking(pg_temp.k('e'), '{"double_marking": true, "sample_percent": 100, "tolerance_percent": 10}');
@@ -116,8 +119,8 @@ select pg_temp.first('gst1', 'x1', array[1, 1, 1]);
 insert into res values ('x1_before', pg_temp.progress('x1', 'g'));
 insert into public.marker_conflicts (marker_id, student_id, recorded_at) values (pg_temp.uid('x2'), pg_temp.student('gst1'), now());
 
--- Exams r, r2 and ap.
-select tests.open_marking(pg_temp.k(x)) from unnest(array['r', 'r2', 'ap', 'mw']) x;
+-- Exams r, r2 and ap (and mw and em opened).
+select tests.open_marking(pg_temp.k(x)) from unnest(array['r', 'r2', 'ap', 'mw', 'em']) x;
 select pg_temp.scripts('r', array['r1']);
 select pg_temp.scripts('r2', array['r2a', 'r2b']);
 select pg_temp.scripts('ap', array['ap1']);
@@ -144,6 +147,11 @@ select pg_temp.first('mw5', 'm2', array[1, 1, 1]);
 select public.marking_unit_take(pg_temp.u('mw4'), pg_temp.uid('m1'), 'next', null, now() + interval '2 hours');
 update public.scripts set state = 'withdrawn' where id = pg_temp.k('mw2');
 update public.scripts set state = 'void' where id = pg_temp.k('mw5');
+insert into res values ('pause_m3_mw', pg_temp.as('lead', format($q$ select public.marking_marker_pause(%L, %L, 'Marks to look at together.') $q$,
+  pg_temp.k('mw'), pg_temp.uid('m3'))));
+-- m1 paused on ap after its approval, the pause applied (written as postgres: nothing a user can call pauses there).
+insert into public.exam_markers (exam_id, marker_id, paused_at, pause_applied_at) values (pg_temp.k('ap'), pg_temp.uid('m1'), now(), now())
+on conflict (exam_id, marker_id) do update set paused_at = excluded.paused_at, pause_applied_at = excluded.pause_applied_at;
 
 select is(array[(select string_agg(coalesce(u.check_state, '-'), ' ' order by s.number)
                  from public.marking_units u join public.scripts s on s.id = u.script_id where u.exam_id = pg_temp.k('e')),
@@ -168,6 +176,12 @@ select is(array[pg_temp.f('d', 'g', 'checked'), pg_temp.f('d', 'g', 'with_lead')
   array['0', '0', '1', '1', '1'], 'g has its one piece waiting; r and r2 one checked each');
 select is(array[pg_temp.more('d', 'with_lead'), pg_temp.more('d', 'waiting_second'), pg_temp.more('d', 'markers_paused')],
   array[1, 2, 1], 'the totals add 1 with the lead marker, 2 waiting for a second marker (e and g) and 1 paused marker (m3)');
+select is(array[pg_temp.code(pg_temp.r('pause_m3_mw')),
+                (select count(*)::text from public.exam_markers x where x.marker_id = pg_temp.uid('m3') and x.paused_at is not null
+                   and x.exam_id in (pg_temp.k('e'), pg_temp.k('mw'))),
+                pg_temp.f('d', 'ap', 'approved'), pg_temp.more('d', 'markers_paused')::text],
+  array['ok', '2', 'true', '1'],
+  'paused_markers_count_each_marker_once_and_not_on_approved_exams: m3, paused on e and on mw, counts once; m1, paused on approved ap, not at all');
 select is(array[(pg_temp.r('d') -> 'totals' ->> 'with_lead')::int, (pg_temp.r('d') -> 'totals' ->> 'waiting_second')::int],
   array[(select sum((x ->> 'with_lead')::int)::int from jsonb_array_elements(pg_temp.r('d') -> 'exams') x),
         (select sum((x ->> 'waiting_second')::int)::int from jsonb_array_elements(pg_temp.r('d') -> 'exams') x)],
@@ -179,6 +193,34 @@ select is(array[pg_temp.pe('lead', 'e') #>> '{scripts,checked}', pg_temp.pe('lea
   array['2', '4', '1', '1', '0', '1', 'none'],
   'the lead''s progress of e: 2 scripts checked (of the 4 marked or checked), 1 piece waiting, 1 with the lead, none stuck, 1 marker paused, not approved');
 select is(pg_temp.pe('lead', 'r') #>> '{scripts,checked}', '1', 'r: its one script is checked');
+
+-- ---------------------------------------------------------------------------------------------
+-- checks_count_scripts_not_pieces (the final review's issues 4 and 8, Ruling R30): exam qc is marked by question (two
+-- groups, so two pieces a script). Both pieces of qc1 are checked, and so is the script; both of qc2's are with the
+-- lead marker; both of qc3's wait for a second marker whom nobody can be (its script is not being marked). Written as
+-- postgres.
+-- ---------------------------------------------------------------------------------------------
+insert into kv values ('qc', tests.marking_exam(pg_temp.subj('ZZ Chk3')));
+with g as (insert into public.question_groups (exam_id, label, position) values (pg_temp.k('qc'), 'G1', 1), (pg_temp.k('qc'), 'G2', 2) returning id)
+select count(*) from g;
+update public.exam_marking set mode = 'by_question' where exam_id = pg_temp.k('qc');
+select tests.open_marking(pg_temp.k('qc'));
+select pg_temp.scripts('qc', array['qc1', 'qc2', 'qc3']);
+update public.marking_units u set state = 'submitted',
+  check_state = case u.script_id when pg_temp.k('qc1') then 'checked' when pg_temp.k('qc2') then 'to_lead' else 'waiting_second' end
+where u.exam_id = pg_temp.k('qc');
+update public.scripts set state = 'checked' where id = pg_temp.k('qc1');
+insert into res values ('d_qc', pg_temp.dash()), ('p_qc', pg_temp.progress('lead', 'qc'));
+select is(array[(select count(*)::text from public.marking_units u where u.exam_id = pg_temp.k('qc')),
+                pg_temp.f('d_qc', 'qc', 'checked'), pg_temp.f('d_qc', 'qc', 'with_lead'), pg_temp.f('d_qc', 'qc', 'waiting_second'),
+                ((pg_temp.r('d_qc') -> 'totals' ->> 'with_lead')::int - (pg_temp.r('d') -> 'totals' ->> 'with_lead')::int)::text,
+                ((pg_temp.r('d_qc') -> 'totals' ->> 'waiting_second')::int - (pg_temp.r('d') -> 'totals' ->> 'waiting_second')::int)::text,
+                ((pg_temp.r('d_qc') -> 'totals' ->> 'stuck_second')::int - (pg_temp.r('d') -> 'totals' ->> 'stuck_second')::int)::text],
+  array['6', '1', '1', '1', '1', '1', '1'],
+  'checks_count_scripts_not_pieces: qc''s six pieces are 1 script checked, 1 with the lead marker and 1 waiting on its dashboard row and in the totals, and 1 stuck');
+select is(array[pg_temp.pe('p_qc', 'qc') #>> '{scripts,checked}', pg_temp.pe('p_qc', 'qc') #>> '{checks,with_lead}',
+                pg_temp.pe('p_qc', 'qc') #>> '{checks,waiting_second}', pg_temp.pe('p_qc', 'qc') #>> '{checks,stuck_second}'],
+  array['1', '1', '1', '1'], 'the progress card counts them so too: 1 checked, 1 with the lead marker, 1 waiting, 1 stuck');
 
 -- ---------------------------------------------------------------------------------------------
 -- waiting_piece_nobody_can_second_is_counted_as_stuck
@@ -193,7 +235,11 @@ select is(pg_temp.pe('lead', 'e') #>> '{checks,stuck_second}', '0', 'ws1, which 
 -- ready_to_approve_only_when_nothing_blocks
 -- ---------------------------------------------------------------------------------------------
 select is(pg_temp.more('d', 'ready_to_approve'), 1,
-  'ready_to_approve_only_when_nothing_blocks: only r (r2 has a script to mark; e, g, q and mw are blocked; ap is approved)');
+  'ready_to_approve_only_when_nothing_blocks: only r (r2 has a script to mark; e, g, q and mw are blocked; em has no script; ap is approved)');
+select is(array[pg_temp.f('d', 'em', 'left'), pg_temp.f('d', 'em', 'approved'),
+                pg_temp.as('admin', format('select public.marking_approval_get(%L)', pg_temp.k('em'))) ->> 'can_approve'],
+  array['0', 'false', 'false'],
+  'empty_exam_is_not_ready_to_approve: em is listed, with nothing to mark, and is not counted ready (its approval page agrees)');
 select is(array[pg_temp.f('d', 'ap', 'approved'), pg_temp.f('d', 'r', 'approved')], array['true', 'false'],
   'each exam row says whether its marking is approved');
 select pg_temp.first('r2b', 'm1', array[1, 1, 1]);
@@ -212,10 +258,20 @@ select is(array[pg_temp.more('d_late', 'approved_stale'), pg_temp.more('d_late',
   'a script verified after the approval makes it stale; it is not ready to approve again');
 select is(pg_temp.as('admin', format('select public.marking_approval_get(%L)', pg_temp.k('ap'))) ->> 'stale', 'true',
   'as the approval page says');
-update public.exam_marking set closed_at = now() - interval '20 days' where exam_id = pg_temp.k('ap');
+-- ---------------------------------------------------------------------------------------------
+-- exam_listed_until_approved (the final review's issues 5 and 6, Ruling R28): ap (approved) and g (not approved, a
+-- piece waiting and stuck) both closed 20 days ago.
+-- ---------------------------------------------------------------------------------------------
+update public.exam_marking set closed_at = now() - interval '20 days' where exam_id in (pg_temp.k('ap'), pg_temp.k('g'));
 insert into res values ('d_old', pg_temp.dash());
+select is(array[coalesce(pg_temp.f('d_old', 'g', 'title'), 'not listed'), pg_temp.f('d_old', 'g', 'waiting_second'),
+                ((pg_temp.r('d_old') -> 'totals' ->> 'waiting_second')::int - (pg_temp.r('d_late') -> 'totals' ->> 'waiting_second')::int)::text,
+                ((pg_temp.r('d_old') -> 'totals' ->> 'stuck_second')::int - (pg_temp.r('d_late') -> 'totals' ->> 'stuck_second')::int)::text],
+  array['ZZ Marking exam', '1', '0', '0'],
+  'exam_listed_until_approved: g, closed 20 days ago and not approved, is still listed, its waiting and stuck script still counted');
 select is(array[coalesce(pg_temp.f('d_old', 'ap', 'title'), 'not listed'), pg_temp.more('d_old', 'approved_stale')::text],
-  array['not listed', '1'], 'a stale approval is counted even once the exam is no longer listed (closed more than 14 days ago)');
+  array['not listed', '0'],
+  'an approved exam closed more than 14 days ago leaves the list, and its approval is no longer tested for stale here (Ruling R28; its approval page still says it)');
 
 -- ---------------------------------------------------------------------------------------------
 -- on_hold_counts_scripts_not_pieces
@@ -271,6 +327,46 @@ from unnest(array['lead', 'm1']) x;
 select is(array[has_function_privilege('anon', 'public.marking_is_lead()', 'execute'),
                 has_function_privilege('authenticated', 'public.marking_is_lead()', 'execute')],
   array[false, true], 'signed-out visitors cannot ask it');
+
+-- ---------------------------------------------------------------------------------------------
+-- dashboard_in_time_at_50_listed_exams (a timing guard, the final review's issue 6; as 061, Phase 3A Ruling R25: the
+-- fixture tables are analysed first). Subject 'ZZ Chk3 Big' (marker bm, lead bl): 50 more exams, each opened with 3
+-- scripts ready to mark, so the dashboard asks what blocks each listed exam (marking_approval_blocks) and which of its
+-- pieces nobody can second-mark (marking_second_stuck). As an admin it must answer within 4 s, under the 8-second
+-- statement timeout of a signed-in call (the branch's timing decision, Ruling R31: authoritative with 2 GB free).
+-- ---------------------------------------------------------------------------------------------
+create function pg_temp.timed(p_name text, p_sql text) returns jsonb language plpgsql as $$
+declare
+  v_t0 timestamptz := clock_timestamp();
+  v jsonb;
+begin
+  execute p_sql into v;
+  insert into res values (p_name, jsonb_build_object('ms', round(extract(epoch from clock_timestamp() - v_t0) * 1000)));
+  return v;
+end $$;
+grant execute on function pg_temp.timed(text, text) to public;
+insert into public.subjects (name, kind) values ('ZZ Chk3 Big', 'school');
+insert into c values ('bm', tests.marker(pg_temp.subj('ZZ Chk3 Big'))), ('bl', tests.marker(pg_temp.subj('ZZ Chk3 Big'), true));
+insert into kv select 'big' || i, tests.marking_exam(pg_temp.subj('ZZ Chk3 Big')) from generate_series(1, 50) i;
+select tests.structure(pg_temp.k('big' || i)) from generate_series(1, 50) i;
+select tests.open_marking(pg_temp.k('big' || i)) from generate_series(1, 50) i;
+do $$ begin for i in 1..50 loop perform pg_temp.scripts('big' || i, array['big' || i || 'a', 'big' || i || 'b', 'big' || i || 'c']); end loop; end $$;
+analyze public.scripts, public.script_pages, public.script_page_links, public.script_uploads, public.home_submissions, public.bookings,
+        public.script_exceptions, public.marking_units, public.marking_assignments, public.markings, public.marking_alerts,
+        public.exam_marking, public.exam_markers, public.exams, public.marker_approvals, public.marker_conflicts,
+        public.tutor_students, public.marking_unit_exclusions, public.marking_reviews, public.profiles;
+select tests.as_user(pg_temp.uid('admin'));
+set local statement_timeout = '4s';
+insert into res values ('d_big', pg_temp.timed('ms_dash', 'select public.marking_dashboard()'));
+reset statement_timeout;
+select tests.as_postgres();
+select is(array[pg_temp.code(pg_temp.r('d_big')),
+                (select count(*)::text from jsonb_array_elements(pg_temp.r('d_big') -> 'exams') x
+                 where (x ->> 'exam_id')::uuid in (select id from kv where name ~ '^big[0-9]+$')),
+                ((pg_temp.r('ms_dash') ->> 'ms')::int <= 4000)::text],
+  array['ok', '50', 'true'],
+  'dashboard_in_time_at_50_listed_exams: the admin home''s marking figures with 50 more listed exams within 4 s');
+select diag('marking_dashboard with 50 more listed exams: ' || (pg_temp.r('ms_dash') ->> 'ms') || ' ms');
 
 select * from finish();
 rollback;

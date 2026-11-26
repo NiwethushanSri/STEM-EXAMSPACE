@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(80);
+select plan(84);
 select tests.assert_no_owner();
 
 -- ---------------------------------------------------------------------------------------------
@@ -749,6 +749,16 @@ insert into res values ('add_f4', pg_temp.as('lead', format($q$ select public.ma
 select is(array[pg_temp.r('add_f4') ->> 'added', pg_temp.cs('f4'), pg_temp.blocked('f4', 'lead', 'second'), pg_temp.blocked('f4', 'm2', 'second')],
   array['1', 'waiting_second', 'not_eligible', 'null'],
   'R14: a piece the lead sampled and then asked to be second-marked goes to another marker, never to the lead');
+-- review_list_shows_the_current_second_marking (the final review's issue 14): f4's sample review was opened before f4
+-- was second-marked; m2 now second-marks it within tolerance, and the lead's list and screen show the same second marking.
+select pg_temp.second('f4', 'm2', array[1, 1, 1]);
+insert into res values ('f4_list', pg_temp.list('lead', pg_temp.k('f'), 'sample'));
+insert into res values ('f4_open', pg_temp.open('lead', pg_temp.rv('f4', 'sample')));
+select is(array[pg_temp.cs('f4'), pg_temp.reviews('f4'),
+    pg_temp.item(pg_temp.r('f4_list'), 'f4') #>> '{second,name}', pg_temp.r('f4_open') #>> '{second,marker_name}',
+    pg_temp.n(pg_temp.item(pg_temp.r('f4_list'), 'f4') -> 'second', 'total'), pg_temp.n(pg_temp.r('f4_open') -> 'second', 'total')],
+  array['checked', 'sample open', 'Bartholomew Secondo', 'Bartholomew Secondo', '3', '3'],
+  'review_list_shows_the_current_second_marking: once a second marking is submitted on a piece with an open sample review, its list row shows it, as its screen does');
 
 -- ---------------------------------------------------------------------------------------------
 -- Ruling R16: the sample skips a piece taken back, and rule 1 withdraws an open sample review (m2's f8 and f9 on f).
@@ -796,6 +806,17 @@ select is(array[pg_temp.r('w_before') #>> '{counts,stuck_second}', pg_temp.list(
     pg_temp.list('tl', pg_temp.k('w')) #>> '{counts,stuck_second}'],
   array['0', '1', '1'],
   'stuck_second_counts_a_piece_nobody_can_take: w1 waits; once t2 has a conflict and the lead is paused, nobody can second-mark it');
+-- second_stuck_leaves_out_a_held_piece (the final review's issue 13): t2 took w1's second pass before their conflict was
+-- recorded (written as postgres, as the conflict was), and then gives it back.
+insert into public.marking_assignments (unit_id, kind, marker_id, how) values (pg_temp.u('w1'), 'second', pg_temp.uid('t2'), 'next');
+insert into res values ('w_held', pg_temp.list('admin', pg_temp.k('w')));
+insert into res values ('w_held_stuck', to_jsonb(array(select x.unit_id from public.marking_second_stuck(pg_temp.k('w')) x)));
+update public.marking_assignments set ended_at = now(), end_reason = 'given_back'
+where unit_id = pg_temp.u('w1') and kind = 'second' and ended_at is null;
+select is(array[pg_temp.r('w_held') #>> '{counts,stuck_second}', jsonb_array_length(pg_temp.r('w_held_stuck'))::text,
+    pg_temp.list('admin', pg_temp.k('w')) #>> '{counts,stuck_second}'],
+  array['0', '0', '1'],
+  'second_stuck_leaves_out_a_held_piece: while t2 holds w1''s second pass it is not stuck; given back, with nobody allowed, it is stuck again');
 insert into res values ('g_next', pg_temp.next('m7', 'g'));
 select pg_temp.mark('m7', (pg_temp.r('g_next') ->> 'unit_id')::uuid, array[1, 1, 1], 'g:m7');
 insert into res values ('g_list', pg_temp.list('lead', pg_temp.k('g')));
@@ -874,6 +895,49 @@ select is(array[
     (pg_temp.keys(pg_temp.piece(pg_temp.r('work_x1'), pg_temp.a('seedS'))) = pg_temp.keys(pg_temp.piece(pg_temp.r('work_m1'), pg_temp.u('f1'))))::text],
   array['0', 'false', 'false', 'false', 'true', 'true'],
   'marking_my_work: every piece says sent_back, live, second, seeded and practice alike; a seeded piece has a live piece''s keys');
+
+-- ---------------------------------------------------------------------------------------------
+-- open_sample_review_leaves_the_list_once_approved (the final review's issue 15, Ruling R29): exam sa (subject 'ZZ
+-- Rev', the checks off); m1 marks sa1 and the lead samples it; an admin approves the exam's marking, then withdraws the
+-- approval.
+-- ---------------------------------------------------------------------------------------------
+insert into kv values ('sa', tests.marking_exam(pg_temp.subj('ZZ Rev')));
+select tests.structure(pg_temp.k('sa'));
+select tests.open_marking(pg_temp.k('sa'));
+select pg_temp.script('sa1', 'sa');
+select pg_temp.first('sa1', 'm1', array[1, 1, 1]);
+insert into res values ('sa_smp', pg_temp.sample('lead', 'sa', 'm1'));
+insert into res values ('sa_l1', pg_temp.list('lead', pg_temp.k('sa')));
+insert into res values ('sa_ap', pg_temp.as('admin', format('select public.marking_approve(%L)', pg_temp.k('sa'))));
+insert into res values ('sa_l2', pg_temp.list('lead', pg_temp.k('sa')));
+insert into res values ('sa_a2', pg_temp.list('admin', pg_temp.k('sa')));
+insert into res values ('sa_rv2', to_jsonb(pg_temp.reviews('sa1')));
+insert into res values ('sa_wd', pg_temp.as('admin', format($q$ select public.marking_approval_withdraw(%L, 'Approved too early.') $q$, pg_temp.k('sa'))));
+insert into res values ('sa_l3', pg_temp.list('lead', pg_temp.k('sa')));
+select is(array[pg_temp.r('sa_smp') ->> 'added', pg_temp.itemset(pg_temp.r('sa_l1')), pg_temp.r('sa_l1') #>> '{counts,sample}',
+    pg_temp.code(pg_temp.r('sa_ap')), pg_temp.itemset(pg_temp.r('sa_l2')), pg_temp.r('sa_l2') #>> '{counts,sample}',
+    pg_temp.itemset(pg_temp.r('sa_a2')), pg_temp.r('sa_rv2') #>> '{}',
+    pg_temp.code(pg_temp.r('sa_wd')), pg_temp.itemset(pg_temp.r('sa_l3')), pg_temp.r('sa_l3') #>> '{counts,sample}'],
+  array['1', 'sa1', '1', 'ok', '', '0', '', 'sample open', 'ok', 'sa1', '1'],
+  'open_sample_review_leaves_the_list_once_approved: listed before the approval; left out of the lead''s and the admin''s list once approved, still open; listed again once the approval is withdrawn');
+
+-- ---------------------------------------------------------------------------------------------
+-- former_lead_is_not_offered_a_piece_they_reviewed (the final review's issue 12): the lead accepted f2's sample review
+-- (above). They stop leading the subject but stay an approved marker, and an admin asks for f2 to be second-marked.
+-- Afterwards they lead it again.
+-- ---------------------------------------------------------------------------------------------
+update public.marker_approvals set lead = false where marker_id = pg_temp.uid('lead') and subject_id = pg_temp.subj('ZZ Rev');
+insert into res values ('add_f2', pg_temp.as('admin', format($q$ select public.marking_second_add(array[%L]::uuid[], 'A second look is due.') $q$,
+  pg_temp.u('f2'))));
+select is(array[pg_temp.r('add_f2') ->> 'added', pg_temp.cs('f2'),
+    (select string_agg(r.kind || ' ' || r.outcome || ' ' || (r.closed_by = pg_temp.uid('lead'))::text, ',') from public.marking_reviews r
+     where r.unit_id = pg_temp.u('f2')),
+    pg_temp.blocked('f2', 'lead', 'second'),
+    (pg_temp.u('f2') in (select a.unit_id from public.marking_units_allowed(pg_temp.k('f'), pg_temp.uid('lead'), 'second', false) a))::text,
+    pg_temp.blocked('f2', 'm2', 'second')],
+  array['1', 'waiting_second', 'sample accepted true', 'not_eligible', 'false', 'null'],
+  'former_lead_is_not_offered_a_piece_they_reviewed: no longer the lead, the marker who closed f2''s review may not be given its second pass, by Next script or by an admin; another marker may');
+update public.marker_approvals set lead = true where marker_id = pg_temp.uid('lead') and subject_id = pg_temp.subj('ZZ Rev');
 
 -- ---------------------------------------------------------------------------------------------
 -- Ruling R16: the lead's list in time at 500 open reviews (a timing guard, as 043). Subject 'ZZ Rev Big' (its lead bl,

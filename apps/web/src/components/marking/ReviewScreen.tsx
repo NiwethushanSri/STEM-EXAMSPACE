@@ -316,7 +316,9 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
         )}
       </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_320px] grid-rows-[minmax(0,1fr)] min-[1200px]:grid-cols-[340px_minmax(0,1fr)_320px]">
+      {/* Narrower than 768 px (md, written in px so it sorts before the 1,200 px classes), one column that scrolls as a
+          whole: the page, then the table, then the actions. From 768 px the page beside a 320 px panel. */}
+      <div className="min-h-0 flex-1 overflow-y-auto min-[768px]:grid min-[768px]:grid-cols-[minmax(0,1fr)_320px] min-[768px]:grid-rows-[minmax(0,1fr)] min-[768px]:overflow-visible min-[1200px]:grid-cols-[340px_minmax(0,1fr)_320px]">
         <main className="col-start-1 row-start-1 min-h-0 overflow-y-auto p-4 min-[1200px]:col-start-2">
           <fieldset className="mb-3 flex flex-wrap items-center gap-2">
             <legend className="sr-only">Marks on the page</legend>
@@ -326,8 +328,9 @@ export function ReviewScreen({ data, back }: { data: OpenedReview; back: string 
           </fieldset>
           <PagesViewer unitId={unit.id} pages={data.pages} overlay={overlay} />
         </main>
-        {/* Narrower than 1,200 px, one column: the table above the actions. From 1,200 px each is its own area. */}
-        <div className="col-start-2 row-start-1 min-h-0 overflow-y-auto border-l border-slate-200 bg-white min-[1200px]:contents">
+        {/* Narrower than 1,200 px, one column: the table above the actions (below the page under 768 px). From 1,200 px
+            each is its own area. */}
+        <div className="col-start-2 row-start-1 min-h-0 overflow-y-auto border-t border-slate-200 bg-white min-[768px]:border-l min-[768px]:border-t-0 min-[1200px]:contents">
           <aside className="min-[1200px]:col-start-1 min-[1200px]:row-start-1 min-[1200px]:min-h-0 min-[1200px]:overflow-y-auto min-[1200px]:border-r min-[1200px]:border-slate-200 min-[1200px]:bg-white">
             {table}
           </aside>
