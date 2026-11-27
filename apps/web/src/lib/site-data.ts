@@ -1,14 +1,3 @@
-import type { TestResult } from "@stem/shared";
-
-export type { TestResult };
-
-export const results: TestResult[] = [
-  { subject: "Physics", test: "Mock 2 · Mechanics", mark: 71, classAverage: 62, highest: 94, lowest: 38, date: "12 Oct 2026", weakAreas: ["Circular motion", "Energy transfer"] },
-  { subject: "Maths", test: "Mock 2 · Calculus", mark: 84, classAverage: 68, highest: 98, lowest: 41, date: "13 Oct 2026", weakAreas: ["Integration by parts"] },
-  { subject: "Chemistry", test: "Mock 1 · Organic", mark: 58, classAverage: 65, highest: 91, lowest: 33, date: "20 Sep 2026", weakAreas: ["Reaction mechanisms", "Isomerism"] },
-  { subject: "Biology", test: "Mock 1 · Cells", mark: 77, classAverage: 64, highest: 89, lowest: 40, date: "22 Sep 2026", weakAreas: [] },
-];
-
 // Children linked to parents. The sheet label (son or daughter) comes from gender.
 export type Child = {
   id: string;
@@ -18,7 +7,6 @@ export type Child = {
   grade: string;
   parent: string;
   parentEmail: string;
-  results: TestResult[];
 };
 
 export const children: Child[] = [
@@ -30,7 +18,6 @@ export const children: Child[] = [
     grade: "Year 13",
     parent: "Nimal Perera",
     parentEmail: "nimal.perera@example.com",
-    results: [],
   },
   {
     id: "kasun-silva",
@@ -40,10 +27,6 @@ export const children: Child[] = [
     grade: "Year 12",
     parent: "Dinesh Silva",
     parentEmail: "dinesh.silva@example.com",
-    results: [
-      { subject: "Maths", test: "Mock 2 · Algebra", mark: 66, classAverage: 68, highest: 98, lowest: 41, date: "13 Oct 2026", weakAreas: ["Quadratic inequalities"] },
-      { subject: "Biology", test: "Mock 1 · Cells", mark: 52, classAverage: 64, highest: 89, lowest: 40, date: "22 Sep 2026", weakAreas: ["Enzymes", "Genetics"] },
-    ],
   },
   {
     id: "lena-fernando",
@@ -53,15 +36,8 @@ export const children: Child[] = [
     grade: "Year 13",
     parent: "Shalini Fernando",
     parentEmail: "shalini.fernando@example.com",
-    results: [
-      { subject: "Chemistry", test: "Mock 1 · Organic", mark: 81, classAverage: 65, highest: 91, lowest: 33, date: "20 Sep 2026", weakAreas: [] },
-      { subject: "Physics", test: "Mock 2 · Mechanics", mark: 74, classAverage: 62, highest: 94, lowest: 38, date: "12 Oct 2026", weakAreas: ["Waves"] },
-    ],
   },
 ];
-
-// Amara's results come from the shared results list.
-children[0].results = results;
 
 export const notices = [
   { id: 1, title: "Mock exam timetable published", date: "1 Nov 2026", type: "Latest notice", body: "The June 2027 mock timetable is now live. Check your subject and exam slot in the timetable." },

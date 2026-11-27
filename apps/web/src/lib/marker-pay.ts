@@ -4,6 +4,7 @@
  * marking, counts, pence and the markers' names, never a script number or anything about a candidate. The database
  * checks every rule again. */
 
+import { CSV_BOM, csvCell } from "@/lib/csv";
 import { utcToLondonParts } from "@/lib/london-time";
 import { formatMoney } from "@/lib/money";
 
@@ -302,18 +303,10 @@ export function groupText(label: string | null): string {
 // The CSV.
 // ---------------------------------------------------------------------------------------------
 
-/** One CSV cell. A number as it is. A text in double quotes with its quotes doubled; a text that starts with =, +, -, @,
- * a tab or a carriage return gets a leading ' first, so a spreadsheet does not read it as a formula. */
-export function csvCell(value: string | number): string {
-  if (typeof value === "number") return Number.isFinite(value) ? String(value) : '""';
-  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return `"${safe.replace(/"/g, '""')}"`;
-}
+/** Kept here so marker-pay callers and tests still import it from this file. */
+export { csvCell };
 
 const CSV_HEADER = "Month,Marker,Exam,Paper,Question group,Kind,Scripts,Rate (£),Amount (£),Fixed";
-
-/** The UTF-8 byte-order mark, so a spreadsheet reads the £ signs right. */
-const BOM = "\uFEFF";
 
 /** A month's statements as a CSV: a UTF-8 byte-order mark, CRLF lines, the header, one row per line and one "Total" row
  * per marker. Amounts are plain pounds ("12.50"); a line with no rate says "Rate not set" and has no amount, and so has
@@ -340,5 +333,5 @@ export function statementCsv(s: Statements): string {
     }
     rows.push([month, name, "Total", "", "", "", m.pieces, "", m.totalPence === null ? "" : poundsNumber(m.totalPence), fixed]);
   }
-  return `${BOM}${[CSV_HEADER, ...rows.map((r) => r.map(csvCell).join(","))].join("\r\n")}\r\n`;
+  return `${CSV_BOM}${[CSV_HEADER, ...rows.map((r) => r.map(csvCell).join(","))].join("\r\n")}\r\n`;
 }

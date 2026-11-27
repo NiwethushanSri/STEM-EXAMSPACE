@@ -45,6 +45,13 @@ async function Body({ params }: { params: Params }) {
           </h2>
         )}
       </div>
+      {r && r.ok && r.approval.approvedAt && (
+        <p className="text-sm">
+          <Link href={`/admin/results/${examId}`} className="text-blue-700 underline">
+            Results
+          </Link>
+        </p>
+      )}
       {!r ? (
         <Card>
           <p role="alert" className="text-sm text-red-700">
