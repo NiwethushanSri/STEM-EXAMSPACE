@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(28);
+select plan(30);
 select tests.assert_no_owner();
 -- Notices left in a local database by other work are not part of this test: parked inside its transaction, which is
 -- rolled back.
@@ -19,6 +19,9 @@ delete from public.script_notices;
 --   w: results_exam(1, 0): the 30-day window.   x: results_exam(1, 0): a scheduled publication cancelled.
 --   f1, f2, f3: results_exam(1, 1) each: scheduled, then the approval withdrawn, stale, or a booking cancelled.
 --   d: results_exam(2, 1): a publication at the hour UK clocks go back (2027-10-31 01:00 UTC).
+--   g: results_exam(2, 0) and g_none (a paid home booking with no script): a correction refused while the approval is
+--      withdrawn or stale (a script for g_none arriving after publication).
+--   v: results_exam(2, 0): withdrawn, v:1 set incomplete and a boundary set, published again (Ruling R10's reasons).
 --   big: the timing guard's exam, at the end.
 -- People: an admin, the subject's lead marker, a teacher, a corrector, p:1's student, their parent (linked before the
 -- publication, suspended after it) and a second parent (linked after it).
@@ -147,6 +150,11 @@ insert into kv values ('f3', tests.results_exam(1, 1));
 select pg_temp.cands('f3');
 insert into kv values ('d', tests.results_exam(2, 1));
 select pg_temp.cands('d');
+insert into kv values ('g', tests.results_exam(2, 0));
+select pg_temp.cands('g');
+select pg_temp.booking('g_none', 'g');
+insert into kv values ('v', tests.results_exam(2, 0));
+select pg_temp.cands('v');
 
 -- ---------------------------------------------------------------------------------------------
 -- publish_now_shows_results_and_queues_one_email_per_candidate
@@ -279,6 +287,53 @@ select is(array[pg_temp.notices('p')::text,
   'one_results_email_per_candidate: published, withdrawn and published again: still one notice per booking');
 
 -- ---------------------------------------------------------------------------------------------
+-- correction_refused_while_approval_withdrawn_or_stale (the review's Important 1): a correction publishes, so it needs
+-- the approval in place and not stale, as a publication does.
+-- ---------------------------------------------------------------------------------------------
+insert into res values ('g_prep', pg_temp.prep('admin', 'g'));
+insert into res values ('g_pub', pg_temp.pubv('admin', 'g'));
+create temp table g_appr as select approved_at, approved_by from public.exam_marking where exam_id = pg_temp.k('g');
+-- (The approval cannot be withdrawn while results are published; the correction checks anyway.)
+update public.exam_marking set approved_at = null, approved_by = null where exam_id = pg_temp.k('g');
+insert into res values ('g_st_unapproved', pg_temp.st('admin', 'g:1', 'disqualified', 'Notes found after publication.'));
+update public.exam_marking m set approved_at = x.approved_at, approved_by = x.approved_by from g_appr x where m.exam_id = pg_temp.k('g');
+-- g_none was absent at publication; their pages arrive afterwards and are only verified, never marked or checked.
+insert into public.scripts (booking_id, exam_id, source, number, state, received_at)
+values (pg_temp.k('g_none'), pg_temp.k('g'), 'home', public.script_number_next(pg_temp.k('g')), 'verified', now());
+insert into res values ('g_stale', to_jsonb(pg_temp.stale('g')));
+insert into res values ('g_st_auto', pg_temp.st('admin', 'g_none', 'auto', 'Their pages arrived late.'));
+insert into res values ('g_st_dq', pg_temp.st('admin', 'g:1', 'disqualified', 'Notes found after publication.'));
+select is(array[pg_temp.code(pg_temp.r('g_pub')), pg_temp.code(pg_temp.r('g_st_unapproved')), pg_temp.r('g_stale') #>> '{}',
+    pg_temp.code(pg_temp.r('g_st_auto')), pg_temp.code(pg_temp.r('g_st_dq')),
+    pg_temp.f('g_none', 'status'), pg_temp.f('g_none', 'total'), pg_temp.f('g_none', 'version'), pg_temp.vers('g_none'),
+    pg_temp.f('g:1', 'status'), pg_temp.f('g:1', 'version'), pg_temp.exam_vers('g')::text, pg_temp.notices('g')::text,
+    (select count(*)::text from public.audit_log a where a.action = 'result_status_set'
+       and a.target_id in (pg_temp.k('g:1'), pg_temp.k('g_none')))],
+  array['ok', 'marking_not_approved', 'true', 'approval_stale', 'approval_stale', 'absent', 'null', '1', '1 null',
+    'present', '1', '3', '3', '0'],
+  'correction_refused_while_approval_withdrawn_or_stale: after publication a status is refused without the approval, and '
+  || 'while a script that arrived since makes it stale (auto would publish an unchecked total); nothing is written');
+
+-- ---------------------------------------------------------------------------------------------
+-- republished_rows_keep_their_status_reason (Ruling R10): published again, a row whose admin-set status changed since its
+-- last version records that status's reason; another changed row records the withdrawal.
+-- ---------------------------------------------------------------------------------------------
+insert into res values ('v_prep', pg_temp.prep('admin', 'v'));
+insert into res values ('v_pub', pg_temp.pubv('admin', 'v'));
+insert into res values ('v_wd', pg_temp.wdr('admin', 'v', 'Checked again.'));
+insert into res values ('v_st', pg_temp.st('admin', 'v:1', 'incomplete', 'Pages were missing.'));
+insert into res values ('v_bset', pg_temp.bset('admin', 'v', '[{"grade": "A", "min_mark": 20}]', 'A from 20.'));
+insert into res values ('v_prep2', pg_temp.prep('admin', 'v'));
+insert into res values ('v_pub2', pg_temp.pubv('admin', 'v'));
+select is(array[pg_temp.code(pg_temp.r('v_pub')), pg_temp.code(pg_temp.r('v_wd')), pg_temp.code(pg_temp.r('v_st')),
+    pg_temp.code(pg_temp.r('v_pub2')), pg_temp.vers('v:1'), pg_temp.vers('v:2'), pg_temp.f('v:1', 'status'), pg_temp.f('v:2', 'grade'),
+    pg_temp.notices('v')::text],
+  array['ok', 'ok', 'ok', 'ok', '1 null,2 incomplete: Pages were missing.', '1 null,2 Published again: Checked again.',
+    'incomplete', 'A', '2'],
+  'republished_rows_keep_their_status_reason: the row an admin set incomplete while the results were withdrawn is kept '
+  || 'with that reason; the row changed by the new boundary with the withdrawal''s; still no second email');
+
+-- ---------------------------------------------------------------------------------------------
 -- publish_refused_when_results_changed_since_checked
 -- ---------------------------------------------------------------------------------------------
 insert into res values ('c_prep', pg_temp.prep('admin', 'c'));
@@ -344,11 +399,12 @@ insert into res values ('k_prep3', pg_temp.prep('admin', 'k'));
 insert into res values ('k_pub3', pg_temp.pubv('admin', 'k'));
 select is(array[pg_temp.code(pg_temp.r('k_pub1')), pg_temp.r('k_after') ->> 'stale', pg_temp.r('k_after') ->> 'version',
     pg_temp.r('k_after') ->> 'script', pg_temp.code(pg_temp.r('k_pub2')), pg_temp.code(pg_temp.r('k_pub3')), pg_temp.f('k:1', 'status'),
-    pg_temp.f('k_none', 'status'), pg_temp.er('k', 'state'), pg_temp.notices('k')::text],
-  array['results_changed', 'false', '1', 'withdrawn', 'results_changed', 'ok', 'withdrawn', 'no row', 'published', '4'],
+    pg_temp.f('k_none', 'status'), pg_temp.er('k', 'state'), pg_temp.notices('k')::text,
+    (select count(*)::text from public.script_notices n where n.booking_id = pg_temp.k('k:1'))],
+  array['results_changed', 'false', '1', 'withdrawn', 'results_changed', 'ok', 'withdrawn', 'no row', 'published', '3', '0'],
   'publish_refused_when_a_booking_is_cancelled_after_checking: a cancelled booking withdraws its script without making the '
   || 'approval stale or changing the version, yet nothing publishes until the results are prepared again (also when a '
-  || 'booking without a script stops being a candidate)');
+  || 'booking without a script stops being a candidate); published, the withdrawn candidate gets no email (Ruling R9)');
 
 -- withdraw -> change a final mark -> approve again -> publish refused until prepared again (Ruling R7)
 insert into res values ('m_prep', pg_temp.prep('admin', 'm'));
@@ -419,8 +475,9 @@ insert into res values ('f3_prep2', pg_temp.prep('admin', 'f3'));
 insert into res values ('f3_pub', pg_temp.pubv('admin', 'f3'));
 select is(array[pg_temp.code(pg_temp.r('f3_pub')), pg_temp.er('f3', 'state'), pg_temp.er('f3', 'publish_failed_at'),
     pg_temp.er('f3', 'publish_failed_reason'), pg_temp.notices('f3')::text],
-  array['ok', 'published', 'null', 'null', '2'],
-  'scheduled_publish_skipped_when_approval_stale_or_withdrawn: once prepared again and published, the failure is cleared');
+  array['ok', 'published', 'null', 'null', '1'],
+  'scheduled_publish_skipped_when_approval_stale_or_withdrawn: once prepared again and published, the failure is cleared '
+  || '(and the cancelled booking''s withdrawn candidate gets no email)');
 
 -- ---------------------------------------------------------------------------------------------
 -- cancel_a_scheduled_publication

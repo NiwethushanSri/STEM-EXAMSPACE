@@ -687,8 +687,8 @@ export function alertMessageFor(code: string | null | undefined, reason?: string
  * grade_boundaries_preview, grade_boundaries_set, results_export, results_publish, results_publish_cancel,
  * results_withdraw), and the reasons a scheduled publication failed (exam_results.publish_failed_reason:
  * marking_not_approved, approval_stale, results_changed). missing_scripts comes with how many candidates were marked
- * present on the register but have no script. invalid_input is short and names no field (Ruling R8): the pages check
- * the boundaries and the publication time before they ask. */
+ * present on the register but have no script. invalid_input is short and names no field (Ruling R8); the two boundary
+ * functions' refusals go through boundariesMessageFor, which says what a set of boundaries must be. */
 const resultsMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   invalid_input: "Check the details and try again.",
@@ -714,4 +714,14 @@ export function resultsMessageFor(code: string | null | undefined, count?: numbe
     return `${who} candidates were marked present but have no script. Set their status first.`;
   }
   return code && Object.hasOwn(resultsMessages, code) ? resultsMessages[code] : messages.internal;
+}
+
+/** Message for a failure code of the two boundary functions (grade_boundaries_preview, grade_boundaries_set): their
+ * invalid_input says what a set of boundaries must be (Ruling R8 keeps that guidance to them); every other code as
+ * resultsMessageFor says it. */
+export function boundariesMessageFor(code: string | null | undefined): string {
+  if (code === "invalid_input") {
+    return "Check the details. List 1 to 15 grades, top first, each with a label of 1 to 10 characters and a lowest mark below the one above and not above the paper's total. A reason can be 3 to 300 characters.";
+  }
+  return resultsMessageFor(code);
 }

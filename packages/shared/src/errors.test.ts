@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, paymentMessageFor, resultsMessageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, boundariesMessageFor, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, paymentMessageFor, resultsMessageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -528,5 +528,18 @@ describe("resultsMessageFor (4A Task 4)", () => {
   });
   it("keeps invalid_input short, naming no grade boundaries (Ruling R8)", () => {
     expect(resultsMessageFor("invalid_input")).toBe("Check the details and try again.");
+  });
+});
+
+describe("boundariesMessageFor (4A Task 4 fix, Ruling R8)", () => {
+  it("keeps the boundary guidance for the two boundary functions only", () => {
+    expect(boundariesMessageFor("invalid_input")).toBe(
+      "Check the details. List 1 to 15 grades, top first, each with a label of 1 to 10 characters and a lowest mark below the one above and not above the paper's total. A reason can be 3 to 300 characters.");
+    expect(resultsMessageFor("invalid_input")).toBe("Check the details and try again.");
+  });
+  it("says everything else as resultsMessageFor does", () => {
+    expect(boundariesMessageFor("results_published")).toBe("These results are published. Withdraw them first.");
+    expect(boundariesMessageFor("not_found")).toBe("Not found. Refresh the page.");
+    expect(boundariesMessageFor("nope")).toBe("Something went wrong. Please try again.");
   });
 });

@@ -13,10 +13,11 @@
 --
 -- Publishing (results_publish_now): every row whose values differ from its last published version (or that has none)
 -- gets a new version, kept in result_versions with what the family sees; on the first publication only, one
--- results_published email per candidate booking (the student and the parents linked when it is sent; it names the
--- exam only, never a mark, grade or rank). Published again after a withdrawal, no email is sent. A status set after
--- publication is a correction (Ruling R1, Call 18): that candidate's row changes and is recorded at once as a new
--- version; no other row, rank or cohort figure moves, and no email is sent.
+-- results_published email per candidate booking that is not withdrawn (Ruling R9; the student and the parents linked
+-- when it is sent; it names the exam only, never a mark, grade or rank). Published again after a withdrawal, no email is
+-- sent. A status set after publication is a correction (Ruling R1, Call 18): that candidate's row changes and is
+-- recorded at once as a new version; no other row, rank or cohort figure moves, and no email is sent. A correction
+-- publishes, so it needs the approval in place and not stale, as a publication does.
 --
 -- Added (admins; each refuses forbidden for anyone else):
 --   results_publish(p_exam, p_version, p_at, p_now): {ok, state, publish_at}. p_at null publishes at once (audited
@@ -42,11 +43,12 @@
 --     whose values differ from its last version (or that has none): results.version + 1 and its result_versions row
 --     (published_at p_at, the snapshot, the reason, made_by p_by). Returns how many it recorded. Used by
 --     results_publish_now (reason null on a first publication, "Published again: <withdrawal reason>" after one), by
---     the correction ("<status>: <reason>") and by Task 9's re-mark for one booking.
+--     the correction ("<status>: <reason>") and by Task 9's re-mark for one booking. Ruling R10: a row that has a
+--     published version and whose admin-set status differs from it records "<status>: <status reason>" instead.
 --   results_publish_now(p_exam, p_by, p_now): records the versions, state published, published_at p_now, published_by
 --     p_by (null when the minute job publishes: the admin who scheduled it is in the results_scheduled audit row),
 --     first_published_at the first time only, publish_at and the failure cleared; queues the emails on the first
---     publication only. Returns the number of candidates. Callers hold the locks and write the audit row.
+--     publication only, for every row but the withdrawn ones. Returns the number of candidates. Callers hold the locks and write the audit row.
 --   results_tick(p_now): the minute job (pg_cron job results-tick, every minute, as postgres): each scheduled exam whose
 --     publish_at has passed is published, or skipped with publish_failed_reason marking_not_approved, approval_stale or
 --     results_changed (audited results_publish_failed, actor null). One exam's error is its own (a warning with the exam
@@ -63,9 +65,10 @@
 --     linked to them, active, when it is sent.
 --   script_notice_content (20261123000006): a notice about a booking is about the notice's exam.
 --   results_write (20261126000002): its rows now come from results_derive (Ruling R7); what it writes is unchanged.
---   result_status_set (20261126000002): after publication it is a correction (above, Ruling R1); while scheduled it is
---     still refused results_published; none, prepared and withdrawn keep Task 3's behaviour. It also answers
---     result_version (the row's published version). Nothing else in it changed.
+--   result_status_set (20261126000002): after publication it is a correction (above, Ruling R1), refused
+--     marking_not_approved or approval_stale as a publication is; while scheduled it is still refused results_published;
+--     none, prepared and withdrawn keep Task 3's behaviour. It also answers result_version (the row's published
+--     version). Nothing else in it changed.
 --
 -- Lock order (Phase 4A): exam_marking -> exam_results -> booking advisory lock -> script rows in id order -> ... ->
 -- results in booking id order -> result_versions; the emails (script_notices) are queued last.
@@ -75,8 +78,9 @@
 --     rows for update in booking id order, then result_versions and the notices.
 --   results_publish_cancel and results_withdraw: the exam's results row only.
 --   result_status_set: the exam's marking row for share, its results row for update, the booking's advisory lock, the
---     script for share, then the results rows (all of the exam before publication; the candidate's only for a
---     correction), then result_versions.
+--     script for share (for a correction, all the exam's scripts in id order, before asking what blocks the approval),
+--     then the results rows (all of the exam before publication; the candidate's only for a correction), then
+--     result_versions.
 -- Nothing here is for families except the email, which carries the exam's title only.
 -- ---------------------------------------------------------------------------------------------
 
@@ -344,7 +348,10 @@ $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- Internal: records the new published version of each row of the exam (or of those bookings) whose values differ from
--- its last version, or that has none (see the header). The snapshot is what the family sees of the row.
+-- its last version, or that has none (see the header). The snapshot is what the family sees of the row. The reason is
+-- p_reason, except (Ruling R10) for a row that has a published version and whose status now differs from it because an
+-- admin set it: that row records "<status>: <status reason>" (so a status set while the results were withdrawn is kept
+-- with its own reason when they are published again; a correction's p_reason is the same text).
 -- ---------------------------------------------------------------------------------------------
 create function public.result_versions_record(p_exam uuid, p_bookings uuid[], p_reason text, p_by uuid, p_at timestamptz)
 returns int
@@ -356,14 +363,17 @@ declare
   v_n int;
 begin
   with snap as materialized (
-    select r.id, r.version, jsonb_build_object('sitting', r.sitting, 'status', r.status, 'total', r.total,
+    select r.id, r.version, r.status, r.status_set, r.status_reason,
+      jsonb_build_object('sitting', r.sitting, 'status', r.status, 'total', r.total,
       'max_total', r.max_total, 'percentage', r.percentage, 'grade', r.grade, 'rank', r.rank, 'rank_cohort', r.rank_cohort,
       'question_marks', r.question_marks, 'remarked', r.remarked) as snapshot
     from public.results r
     where r.exam_id = p_exam and (p_bookings is null or r.booking_id = any (p_bookings))
   ),
   due as materialized (
-    select s.id, s.version + 1 as version, s.snapshot
+    select s.id, s.version + 1 as version, s.snapshot,
+      case when v.snapshot is not null and s.status_set and s.status::text is distinct from v.snapshot ->> 'status'
+           then s.status || ': ' || s.status_reason else p_reason end as reason
     from snap s
     left join public.result_versions v on v.result_id = s.id and v.version = s.version
     where v.snapshot is distinct from s.snapshot
@@ -372,7 +382,7 @@ begin
     update public.results r set version = d.version from due d where r.id = d.id
   )
   insert into public.result_versions (result_id, version, published_at, snapshot, reason, made_by)
-  select d.id, d.version, p_at, d.snapshot, p_reason, p_by from due d;
+  select d.id, d.version, p_at, d.snapshot, d.reason, p_by from due d;
   get diagnostics v_n = row_count;
   return v_n;
 end;
@@ -401,10 +411,14 @@ begin
   set state = 'published', published_at = p_now, published_by = p_by, first_published_at = coalesce(r.first_published_at, p_now),
     publish_at = null, publish_failed_at = null, publish_failed_reason = null
   where r.exam_id = p_exam;
-  -- The emails go out on the first publication only (Call 10): one per candidate booking, never a second.
+  -- The emails go out on the first publication only (Call 10): one per candidate booking, never a second, and none for
+  -- a withdrawn candidate (Ruling R9: the booking was cancelled, refunded or expired; absent, incomplete and
+  -- disqualified candidates are told).
   if v_er.first_published_at is null then
     insert into public.script_notices (kind, booking_id, exam_id)
-    select 'results_published', r.booking_id, p_exam from public.results r where r.exam_id = p_exam order by r.booking_id
+    select 'results_published', r.booking_id, p_exam from public.results r
+    where r.exam_id = p_exam and r.status <> 'withdrawn'
+    order by r.booking_id
     on conflict do nothing;
   end if;
   select count(*)::int into v_n from public.results r where r.exam_id = p_exam;
@@ -632,8 +646,11 @@ $$;
 -- result_status_set: as 20261126000002, and (Ruling R1) after publication it is a correction: only the candidate's row
 -- is held and rewritten (status, total, marks, percentage, grade), ranked among the other present rows' current totals
 -- in its mode, and recorded at once as a new published version (reason "<status>: <reason>"); no other row's rank, no
--- cohort figure and not the exam's results version move, and no email is sent. While scheduled it is still refused
--- results_published. The answer also says result_version (the row's published version).
+-- cohort figure and not the exam's results version move, and no email is sent. A correction publishes, so it is
+-- refused, as a publication is, marking_not_approved without the approval and approval_stale while anything blocks it
+-- (a script that arrived after publication, say): asked with the exam's scripts held for share (Phase 3B's rule; the
+-- task 4 review's Important 1). While scheduled it is still refused results_published. The answer also says
+-- result_version (the row's published version).
 -- ---------------------------------------------------------------------------------------------
 create or replace function public.result_status_set(p_booking uuid, p_status text, p_reason text)
 returns jsonb
@@ -652,6 +669,7 @@ declare
   v_version int;
   v_status public.result_status;
   v_result_version int;
+  v_approved timestamptz;
   v_r public.results%rowtype;
   v_totals numeric[];
   v_rank int;
@@ -670,7 +688,7 @@ begin
     return jsonb_build_object('ok', false, 'code', 'not_found');
   end if;
 
-  perform 1 from public.exam_marking m where m.exam_id = v_b.exam_id for share;
+  select m.approved_at into v_approved from public.exam_marking m where m.exam_id = v_b.exam_id for share;
   insert into public.exam_results (exam_id) values (v_b.exam_id) on conflict (exam_id) do nothing;
   select r.state into v_state from public.exam_results r where r.exam_id = v_b.exam_id for update;
   if v_state = 'scheduled' then
@@ -678,6 +696,17 @@ begin
   end if;
   v_published := v_state = 'published';
   perform public.script_bookings_lock(array[p_booking]);
+  if v_published then
+    -- A correction publishes: only on approved marking that nothing blocks, with the exam's scripts held while that is
+    -- asked (as results_publish does).
+    if v_approved is null then
+      return jsonb_build_object('ok', false, 'code', 'marking_not_approved');
+    end if;
+    perform 1 from public.scripts s where s.exam_id = v_b.exam_id order by s.id for share;
+    if jsonb_array_length(public.marking_approval_blocks(v_b.exam_id)) > 0 then
+      return jsonb_build_object('ok', false, 'code', 'approval_stale');
+    end if;
+  end if;
   select s.id into v_script from public.scripts s where s.booking_id = p_booking for share;
   if v_published then
     -- A correction changes the candidate's row only (Call 18).
