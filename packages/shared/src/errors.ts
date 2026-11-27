@@ -344,6 +344,8 @@ export type StructureContext = "save" | "file";
 const STRUCTURE_LOCKED = "Marking has started, so this can no longer be changed.";
 /** 3B Task 10: any change to an approved exam's marking (its questions, checks, scripts, reviews and markers). */
 const MARKING_APPROVED = "This exam's marking has been approved. An admin must withdraw the approval first.";
+/** 4A Task 3: an exam's results are scheduled or published, so neither they nor the marking approval change. */
+const RESULTS_PUBLISHED = "These results are published. Withdraw them first.";
 
 const structureMessages: Record<StructureContext, Record<string, string>> = {
   save: {
@@ -408,7 +410,7 @@ const TOO_MANY = "There are already 10 of these for this exam.";
  * marking_second_drop), practice and seeded scripts (marking_standard_set, as standardMessageFor says them), a marker
  * not cleared or paused, and the codes only a marker meets (practice_wait, practice_not_ready, locked), in the words
  * the marker reads; and (Task 10) the codes of approving an exam's marking (marking_approval_get, marking_approve,
- * marking_approval_withdraw). */
+ * marking_approval_withdraw; 4A Task 3: results_published, the approval stays while results are published). */
 const markingMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
   reason_required: "Give a reason of 3 to 300 characters.",
@@ -426,6 +428,8 @@ const markingMessages: Record<string, string> = {
   marking_approved: MARKING_APPROVED,
   // 3B Task 10: approving an exam's marking while something still blocks it (marking_approve).
   not_all_checked: "Not every script is checked yet.",
+  // 4A Task 3: withdrawing the approval while the exam's results are scheduled or published.
+  results_published: RESULTS_PUBLISHED,
   // 3B Task 3: a second pass is never given to a marker who saw a name on the script.
   name_seen: NAME_SEEN,
   // 3B Task 4: the pieces "Second-mark these" (marking_second_add) or a drop (marking_second_drop) skipped.
@@ -677,4 +681,29 @@ const alertMessages: Record<string, string> = {
 export function alertMessageFor(code: string | null | undefined, reason?: string | null): string {
   if (code === "conflict") return reason === "closed" ? "This alert is already closed. Refresh the page." : releaseBlockedMessage(reason);
   return code && Object.hasOwn(alertMessages, code) ? alertMessages[code] : messages.internal;
+}
+
+/** 4A Task 3: failure codes of an exam's results, for admins (results_prepare, results_get, result_status_set,
+ * grade_boundaries_preview, grade_boundaries_set, results_export). missing_scripts comes with how many candidates were
+ * marked present on the register but have no script. */
+const resultsMessages: Record<string, string> = {
+  forbidden: FORBIDDEN,
+  invalid_input:
+    "Check the details. List 1 to 15 grades, top first, each with a label of 1 to 10 characters and a lowest mark below the one above and not above the paper's total. A reason can be 3 to 300 characters.",
+  not_found: "Not found. Refresh the page.",
+  reason_required: "Give a reason of 3 to 300 characters.",
+  marking_not_approved: "Approve this exam's marking first.",
+  approval_stale:
+    "A script arrived or changed after the marking was approved. Withdraw the approval and approve it again first.",
+  results_published: RESULTS_PUBLISHED,
+};
+
+/** Message for a results RPC failure code; unknown codes get the generic message. For missing_scripts, pass the
+ * refusal's count: "3 candidates were marked present but have no script. Set their status first." */
+export function resultsMessageFor(code: string | null | undefined, count?: number | null): string {
+  if (code === "missing_scripts") {
+    const who = typeof count === "number" && Number.isInteger(count) && count >= 0 ? String(count) : "Some";
+    return `${who} candidates were marked present but have no script. Set their status first.`;
+  }
+  return code && Object.hasOwn(resultsMessages, code) ? resultsMessages[code] : messages.internal;
 }

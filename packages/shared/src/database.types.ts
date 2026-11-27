@@ -1937,6 +1937,9 @@ isOneToOne: false
 "exam_code_generate":
 { Args: { "p_paper": string,"p_self": string,"p_starts_at": string,"p_subject": number }; Returns: string
                            },
+"exam_grades":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
 "exam_max_total":
 { Args: { "p_exam": string }; Returns: number
                            },
@@ -1963,6 +1966,15 @@ isOneToOne: false
                            },
 "family_has_booking":
 { Args: { "p_exam": string }; Returns: boolean
+                           },
+"grade_boundaries_preview":
+{ Args: { "p_exam": string,"p_grades": Json }; Returns: Json
+                           },
+"grade_boundaries_set":
+{ Args: { "p_exam": string,"p_grades": Json,"p_reason"?: string }; Returns: Json
+                           },
+"grade_boundaries_valid":
+{ Args: { "p_grades": Json,"p_max": number }; Returns: boolean
                            },
 "home_booking_lock":
 { Args: { "p_booking": string }; Returns: undefined
@@ -2659,6 +2671,52 @@ isOneToOne: false
                            },
 "request_parent_link_tx":
 { Args: { "p_dob": string,"p_index": string,"p_parent": string }; Returns: boolean
+                           },
+"result_cohort_min":
+{ Args: Record<PropertyKey, never>; Returns: number
+                           },
+"result_grade":
+{ Args: { "p_grades": Json,"p_total": number }; Returns: string
+                           },
+"result_percentage":
+{ Args: { "p_max": number,"p_total": number }; Returns: number
+                           },
+"result_rank":
+{ Args: { "p_total": number,"p_totals": (number)[] }; Returns: number
+                           },
+"result_status_set":
+{ Args: { "p_booking": string,"p_reason": string,"p_status": string }; Returns: Json
+                           },
+"results_cohort":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"results_counts":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"results_export":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"results_get":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"results_missing":
+{ Args: { "p_exam": string }; Returns: {
+              "booking_id": string,"student_id": string
+            }[]
+                           },
+"results_prepare":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"results_questions":
+{ Args: { "p_exam": string }; Returns: {
+              "label": string,"leaf": boolean,"max_mark": number,"path": (number)[],"question_id": string
+            }[]
+                           },
+"results_rank":
+{ Args: { "p_exam": string }; Returns: undefined
+                           },
+"results_write":
+{ Args: { "p_bookings"?: (string)[],"p_exam": string }; Returns: undefined
                            },
 "save_exam":
 { Args: { "p_booking_deadline": string,"p_centres": Json,"p_duration_minutes": number,"p_format": Database["public"]['Enums']["exam_format"],"p_id": string,"p_paper": string,"p_price_pence": number,"p_starts_at": string,"p_subject_id": number,"p_title": string }; Returns: Json

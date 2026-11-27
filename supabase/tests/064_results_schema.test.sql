@@ -3,7 +3,7 @@ create extension if not exists pgtap with schema extensions;
 select plan(33);
 select tests.assert_no_owner();
 
--- Phase 4A, Task 2: the results tables (a second tests.results_exam call must have no centre candidates: the venue name is unique). Fixture: tests.results_exam(2, 1) (two home candidates and a centre one, totals
+-- Phase 4A, Task 2: the results tables. Fixture: tests.results_exam(2, 1) (two home candidates and a centre one, totals
 -- 24, 22, 20); a row in each of the four tables; an admin, a student (the first candidate), a parent linked to them, an
 -- unlinked parent, a suspended linked parent, a corrector and a teacher.
 create temp table c (name text primary key, id uuid not null);

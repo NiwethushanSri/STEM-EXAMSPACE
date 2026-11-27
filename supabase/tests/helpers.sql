@@ -127,7 +127,11 @@ begin
     select ec.id into v_centre from public.exam_centres ec
     where ec.exam_id = p_exam and ec.removed_at is null order by ec.created_at, ec.id limit 1;
     if v_centre is null then
-      insert into public.venues (name, rooms) values ('ZZ Marking hall', array['R1']) returning id into v_venue;
+      -- The venue is shared by every exam of the transaction (its name is unique); each exam gets its own centre.
+      select v.id into v_venue from public.venues v where v.name = 'ZZ Marking hall';
+      if v_venue is null then
+        insert into public.venues (name, rooms) values ('ZZ Marking hall', array['R1']) returning id into v_venue;
+      end if;
       insert into public.exam_centres (exam_id, venue_id, room, seat_limit) values (p_exam, v_venue, 'R1', 1000)
       returning id into v_centre;
     end if;

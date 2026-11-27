@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, paymentMessageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
+import { adminBookingMessageFor, alertMessageFor, allocationMessageFor, releaseBlockedMessage,attendanceMessageFor, bannedMessage, collectionMessageFor, bookingMessageFor, examMessageFor, exceptionMessageFor, markerMessageFor, markingMessageFor, markingScreenMessageFor, markingWorkMessageFor, messageFor, paymentMessageFor, resultsMessageFor, reviewMessageFor, scanMessageFor, scriptMessageFor, standardMessageFor, structureMessageFor, uploadMessageFor, type ErrorCode } from "./errors";
 
 const table: Record<ErrorCode, string> = {
   email_in_use: "An account with this email already exists. Sign in or reset your password.",
@@ -488,5 +488,29 @@ describe("alertMessageFor and releaseBlockedMessage", () => {
     expect(alertMessageFor("nope")).toBe("Something went wrong. Please try again.");
     expect(alertMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
     expect(alertMessageFor(undefined)).toBe("Something went wrong. Please try again.");
+  });
+});
+
+describe("resultsMessageFor (4A Task 3)", () => {
+  it("says why results cannot be prepared or changed", () => {
+    expect(resultsMessageFor("marking_not_approved")).toBe("Approve this exam's marking first.");
+    expect(resultsMessageFor("approval_stale")).toBe(
+      "A script arrived or changed after the marking was approved. Withdraw the approval and approve it again first.");
+    expect(resultsMessageFor("results_published")).toBe("These results are published. Withdraw them first.");
+    expect(resultsMessageFor("reason_required")).toBe("Give a reason of 3 to 300 characters.");
+    expect(resultsMessageFor("forbidden")).toBe("You do not have permission to do that.");
+  });
+  it("says how many candidates have no script", () => {
+    expect(resultsMessageFor("missing_scripts", 3)).toBe("3 candidates were marked present but have no script. Set their status first.");
+    expect(resultsMessageFor("missing_scripts")).toBe("Some candidates were marked present but have no script. Set their status first.");
+    expect(resultsMessageFor("missing_scripts", -1)).toBe("Some candidates were marked present but have no script. Set their status first.");
+  });
+  it("says the marking approval stays while results are published", () => {
+    expect(markingMessageFor("results_published")).toBe("These results are published. Withdraw them first.");
+  });
+  it("falls back to the generic message", () => {
+    expect(resultsMessageFor("nope")).toBe("Something went wrong. Please try again.");
+    expect(resultsMessageFor("__proto__")).toBe("Something went wrong. Please try again.");
+    expect(resultsMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });
