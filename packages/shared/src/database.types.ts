@@ -1413,14 +1413,14 @@ isOneToOne: false
                   ]
                 },"script_notices": {
                   Row: {
-                    "alert_id": string | null,"attempts": number,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"skipped_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
+                    "alert_id": string | null,"attempts": number,"booking_id": string | null,"claimed_at": string | null,"created_at": string,"dedupe_key": string | null,"exam_id": string | null,"exception_id": string | null,"exception_kind": string | null,"group_id": string | null,"id": number,"kind": string,"script_id": string | null,"sent_at": string | null,"skipped_at": string | null,"submission_id": string | null,"script_notice_content": Json | null,"script_notice_count": number | null,"script_notice_recipients": Json | null
                   }
                   ComputedFields: "script_notice_content" | "script_notice_count" | "script_notice_recipients"
                   Insert: {
-                    "alert_id"?: string | null,"attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
+                    "alert_id"?: string | null,"attempts"?: number,"booking_id"?: string | null,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind": string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Update: {
-                    "alert_id"?: string | null,"attempts"?: number,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
+                    "alert_id"?: string | null,"attempts"?: number,"booking_id"?: string | null,"claimed_at"?: string | null,"created_at"?: string,"dedupe_key"?: string | null,"exam_id"?: string | null,"exception_id"?: string | null,"exception_kind"?: string | null,"group_id"?: string | null,"id"?: never,"kind"?: string,"script_id"?: string | null,"sent_at"?: string | null,"skipped_at"?: string | null,"submission_id"?: string | null
                   }
                   Relationships: [
                     {
@@ -1428,6 +1428,12 @@ isOneToOne: false
       columns: ["alert_id"]
 isOneToOne: false
       referencedRelation: "marking_alerts"
+      referencedColumns: ["id"]
+    },{
+      foreignKeyName: "script_notices_booking_id_fkey"
+      columns: ["booking_id"]
+isOneToOne: false
+      referencedRelation: "bookings"
       referencedColumns: ["id"]
     },{
       foreignKeyName: "script_notices_exception_id_fkey"
@@ -2687,11 +2693,19 @@ isOneToOne: false
 "result_status_set":
 { Args: { "p_booking": string,"p_reason": string,"p_status": string }; Returns: Json
                            },
+"result_versions_record":
+{ Args: { "p_at": string,"p_bookings": (string)[],"p_by": string,"p_exam": string,"p_reason": string }; Returns: number
+                           },
 "results_cohort":
 { Args: { "p_exam": string }; Returns: Json
                            },
 "results_counts":
 { Args: { "p_exam": string }; Returns: Json
+                           },
+"results_derive":
+{ Args: { "p_bookings"?: (string)[],"p_exam": string }; Returns: {
+              "booking_id": string,"grade": string,"max_total": number,"percentage": number,"question_marks": Json,"script_id": string,"sitting": Database["public"]['Enums']["sitting_mode"],"status": Database["public"]['Enums']["result_status"],"student_id": string,"total": number
+            }[]
                            },
 "results_export":
 { Args: { "p_exam": string }; Returns: Json
@@ -2707,6 +2721,15 @@ isOneToOne: false
 "results_prepare":
 { Args: { "p_exam": string }; Returns: Json
                            },
+"results_publish":
+{ Args: { "p_at"?: string,"p_exam": string,"p_now"?: string,"p_version": number }; Returns: Json
+                           },
+"results_publish_cancel":
+{ Args: { "p_exam": string }; Returns: Json
+                           },
+"results_publish_now":
+{ Args: { "p_by": string,"p_exam": string,"p_now": string }; Returns: number
+                           },
 "results_questions":
 { Args: { "p_exam": string }; Returns: {
               "label": string,"leaf": boolean,"max_mark": number,"path": (number)[],"question_id": string
@@ -2714,6 +2737,15 @@ isOneToOne: false
                            },
 "results_rank":
 { Args: { "p_exam": string }; Returns: undefined
+                           },
+"results_tick":
+{ Args: { "p_now"?: string }; Returns: undefined
+                           },
+"results_unchanged":
+{ Args: { "p_exam": string }; Returns: boolean
+                           },
+"results_withdraw":
+{ Args: { "p_exam": string,"p_reason": string }; Returns: Json
                            },
 "results_write":
 { Args: { "p_bookings"?: (string)[],"p_exam": string }; Returns: undefined

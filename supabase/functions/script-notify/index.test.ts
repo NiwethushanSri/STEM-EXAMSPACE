@@ -499,3 +499,70 @@ Deno.test("marker_paused_email_has_no_marker_or_candidate_name", () => {
   assert(mail.html.includes("GCSE Maths Paper 1") && mail.subject.includes("GCSE Maths Paper 1"), mail.subject);
   assert(mail.html.includes(MARKER_PAUSED_LINE.replace("'", "&#39;")), mail.html);
 });
+
+const resultsPublished: Notice = {
+  id: 11,
+  kind: "results_published",
+  recipients: [
+    { profile_id: "u-s", email: "student@example.test", first_name: "Zanzibar" },
+    { profile_id: "u-p", email: "parent@example.test", first_name: "Pat" },
+  ],
+  exam: "GCSE Maths Paper 1",
+  script_number: null,
+  submission_seq: null,
+  at: "2031-08-20T09:00:00Z",
+  page_count: 0,
+  pages: [],
+  exception_kind: null,
+  count: 1,
+  alert_kind: null,
+};
+
+Deno.test("results_published_email_carries_no_marks", async () => {
+  await quiet(async () => {
+    // The database lists the student and the parents linked when it is sent (4A migration 003).
+    const db = fakeDb([resultsPublished]);
+    const sent: { to: string; template: string; data: Record<string, string> }[] = [];
+    const h = makeHandler(deps({
+      svc: () => db.svc,
+      send: (to, template, data) => (sent.push({ to, template, data }), Promise.resolve(true)),
+    }));
+    const body = await (await h(req())).json();
+    assertEquals(body, { notices: 1, sent: 2, failed: 0, given_up: 0 });
+    assertEquals(sent.map((s) => [s.to, s.template]), [
+      ["student@example.test", "results_published"],
+      ["parent@example.test", "results_published"],
+    ]);
+    assertEquals(db.marks, [{ id: 11, ok: true }]);
+    // The exam's title only: no mark, grade, rank, script or name.
+    assertEquals(sent[0].data, { exam_title: "GCSE Maths Paper 1" });
+  });
+
+  const site = Deno.env.get("SITE_URL");
+  Deno.env.set("SITE_URL", "https://exams.example.test/");
+  try {
+    // Even when it is handed a result by mistake, the email shows none of it.
+    const mail = _renderForTest("results_published", {
+      exam_title: "GCSE Maths Paper 1",
+      total: "23",
+      max_total: "24",
+      percentage: "95.8",
+      grade: "B",
+      rank: "3",
+      rank_cohort: "42",
+      name: "Zanzibar",
+      script_number: "S-ABC-0001",
+    });
+    const link = "https://exams.example.test/account/results";
+    assertEquals(mail.subject, "Results are ready: GCSE Maths Paper 1");
+    assert(mail.html.includes("Results for GCSE Maths Paper 1 are ready. Sign in to see them."), mail.html);
+    assert(mail.html.includes(`href="${link}"`), mail.html);
+    // Apart from the exam's title and the link, the text carries no number at all, so none from the result.
+    const rest = mail.html.replaceAll("GCSE Maths Paper 1", "").replaceAll(link, "");
+    assert(!/\d/.test(rest), rest);
+    for (const w of ["Zanzibar", "S-ABC", "grade", "rank"]) assert(!mail.html.includes(w) && !mail.subject.includes(w), w);
+  } finally {
+    if (site === undefined) Deno.env.delete("SITE_URL");
+    else Deno.env.set("SITE_URL", site);
+  }
+});

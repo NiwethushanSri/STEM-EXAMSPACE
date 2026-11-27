@@ -457,20 +457,20 @@ select is(pg_temp.fs(pg_temp.ns('q', 1, 6), 'rank') || pg_temp.fs(pg_temp.ns('q'
 update public.exam_results set state = 'published' where exam_id = pg_temp.k('q');
 insert into res values ('q_pub_bset', pg_temp.bset('admin', 'q', '[{"grade": "A", "min_mark": 10}]', 'After publishing.'));
 insert into res values ('q_pub_prep', pg_temp.prep('admin', 'q'));
-insert into res values ('q_pub_st', pg_temp.st('admin', 'q:2', 'absent', 'After publishing.'));
+-- (A status set after publication is a correction since Task 4, Ruling R1: 066 tests it.)
 insert into res values ('q_pub_preview', pg_temp.preview('admin', 'q', '[{"grade": "A", "min_mark": 10}]'));
 update public.exam_results set state = 'scheduled' where exam_id = pg_temp.k('q');
 insert into res values ('q_sch_bset', pg_temp.bset('admin', 'q', '[{"grade": "A", "min_mark": 10}]', 'While scheduled.'));
 insert into res values ('q_sch_prep', pg_temp.prep('admin', 'q'));
 insert into res values ('q_sch_st', pg_temp.st('admin', 'q:2', 'absent', 'While scheduled.'));
-select is(array[pg_temp.code(pg_temp.r('q_pub_bset')), pg_temp.code(pg_temp.r('q_pub_prep')), pg_temp.code(pg_temp.r('q_pub_st')),
+select is(array[pg_temp.code(pg_temp.r('q_pub_bset')), pg_temp.code(pg_temp.r('q_pub_prep')),
     pg_temp.code(pg_temp.r('q_pub_preview')), pg_temp.code(pg_temp.r('q_sch_bset')), pg_temp.code(pg_temp.r('q_sch_prep')),
     pg_temp.code(pg_temp.r('q_sch_st')), (select count(*)::text from public.grade_boundaries where exam_id = pg_temp.k('q')),
     pg_temp.er('q', 'version'), pg_temp.f('q:2', 'status'), pg_temp.audits('grade_boundaries_set', pg_temp.k('q'))::text],
-  array['results_published', 'results_published', 'results_published', 'ok', 'results_published', 'results_published',
+  array['results_published', 'results_published', 'ok', 'results_published', 'results_published',
     'results_published', '0', '2', 'present', '0'],
-  'boundaries_locked_once_published: published or scheduled results refuse boundaries, preparing and statuses (a preview '
-  || 'still answers); nothing changes');
+  'boundaries_locked_once_published: published or scheduled results refuse boundaries and preparing, scheduled ones statuses '
+  || 'too (a preview still answers); nothing changes');
 
 -- ---------------------------------------------------------------------------------------------
 -- approval_withdraw_refused_once_published

@@ -8,7 +8,9 @@
 // changed) goes to the subject's lead marker and the owner and admin accounts, handed out as a staff alert is; one
 // email per exam and kind while it waits, with how many scripts it is about. A paused marker (3B migration 006: three
 // seeded scripts outside tolerance in a row) is told to the same people, handed out as a staff alert is; it names the
-// exam only.
+// exam only. An exam's results published for the first time (4A migration 003) are told once per candidate booking, to
+// the student and the parents linked when it is sent, handed out as the families' notices are; it names the exam and
+// links to the results page, never a mark, grade or rank.
 //
 // Rules:
 // - Without EMAIL_PROVIDER nothing is sent and nothing is claimed or marked, so turning email on later cannot
@@ -33,7 +35,8 @@ export type ScriptTemplate =
   | "script_rejected"
   | "script_staff_alert"
   | "script_marking_alert"
-  | "script_marker_paused";
+  | "script_marker_paused"
+  | "results_published";
 
 export interface Deps {
   env: (name: string) => string | undefined;
@@ -45,7 +48,7 @@ export interface Deps {
 
 export interface Notice {
   id: number;
-  kind: "receipt" | "needs_attention" | "rejected" | "staff_alert" | "marking_alert" | "marker_paused";
+  kind: "receipt" | "needs_attention" | "rejected" | "staff_alert" | "marking_alert" | "marker_paused" | "results_published";
   recipients: { profile_id: string; email: string; first_name: string | null }[];
   exam: string | null;
   script_number: string | null;
@@ -68,6 +71,7 @@ const TEMPLATES: Record<Notice["kind"], ScriptTemplate> = {
   staff_alert: "script_staff_alert",
   marking_alert: "script_marking_alert",
   marker_paused: "script_marker_paused",
+  results_published: "results_published",
 };
 
 /** Compares without leaking where the first difference is. */
@@ -93,6 +97,8 @@ export function londonTime(iso: string | null): string {
 export function dataFor(n: Notice, firstName: string | null): Record<string, string> {
   // A paused marker's email names the exam only: no marker, no candidate, no script.
   if (n.kind === "marker_paused") return { exam: n.exam ?? "" };
+  // A results email names the exam only: no mark, grade, rank, script or name.
+  if (n.kind === "results_published") return { exam_title: n.exam ?? "" };
   const d: Record<string, string> = { exam: n.exam ?? "", script_number: n.script_number ?? "" };
   if (n.kind === "staff_alert") return { ...d, kind: n.exception_kind ?? "", count: String(n.count && n.count > 0 ? n.count : 1) };
   if (n.kind === "marking_alert") return { ...d, kind: n.alert_kind ?? "", count: String(n.count && n.count > 0 ? n.count : 1) };

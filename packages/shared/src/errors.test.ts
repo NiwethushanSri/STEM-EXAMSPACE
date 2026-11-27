@@ -514,3 +514,19 @@ describe("resultsMessageFor (4A Task 3)", () => {
     expect(resultsMessageFor(undefined)).toBe("Something went wrong. Please try again.");
   });
 });
+
+describe("resultsMessageFor (4A Task 4)", () => {
+  it("says why results cannot be published, scheduled, cancelled or withdrawn", () => {
+    expect(resultsMessageFor("results_changed")).toBe("The results changed since you checked them. Check them again.");
+    expect(resultsMessageFor("not_prepared")).toBe("Prepare the results first.");
+    expect(resultsMessageFor("already_scheduled")).toBe("A publication is already scheduled. Cancel it first.");
+    expect(resultsMessageFor("not_published")).toBe("These results are not published.");
+  });
+  it("says one candidate in the singular (Ruling R8)", () => {
+    expect(resultsMessageFor("missing_scripts", 1)).toBe("1 candidate was marked present but has no script. Set their status first.");
+    expect(resultsMessageFor("missing_scripts", 2)).toBe("2 candidates were marked present but have no script. Set their status first.");
+  });
+  it("keeps invalid_input short, naming no grade boundaries (Ruling R8)", () => {
+    expect(resultsMessageFor("invalid_input")).toBe("Check the details and try again.");
+  });
+});

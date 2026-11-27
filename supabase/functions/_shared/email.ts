@@ -1,6 +1,6 @@
 export type EmailTemplate = "approved" | "rejected" | "invite" | "child_confirm" | "confirm_signup" | "paper_released" | "paper_corrected"
   | "script_receipt" | "script_attention" | "script_rejected" | "script_staff_alert" | "script_marking_alert"
-  | "script_marker_paused";
+  | "script_marker_paused" | "results_published";
 
 /** Templates that carry a one-time sign-in link. */
 const LINK_TEMPLATES: readonly EmailTemplate[] = ["invite", "child_confirm", "confirm_signup"];
@@ -19,6 +19,7 @@ const SUBJECTS: Record<EmailTemplate, string> = {
   script_staff_alert: "A script needs staff attention",
   script_marking_alert: "A script being marked needs attention",
   script_marker_paused: "A marker has been paused",
+  results_published: "Results are ready",
 };
 
 /** One line, no markup characters that could break a header. */
@@ -140,6 +141,20 @@ export function markerPausedEmail(data: Record<string, string>): Mail {
   };
 }
 
+/** 4A: an exam's results are published (the first time only), to the student and the parents linked to them. The
+ * exam's title and a link to the results page only: never a mark, grade, rank or name. */
+export function resultsPublishedEmail(data: Record<string, string>): Mail {
+  const exam = plain(data.exam_title) || "your exam";
+  const site = (Deno.env.get("SITE_URL") ?? "").replace(/\/+$/, "");
+  const link = site ? `${site}/account/results` : "";
+  return {
+    subject: `${SUBJECTS.results_published}: ${exam}`,
+    html: `<p>Results for ${esc(exam)} are ready. Sign in to see them.</p>${
+      link ? `<p><a href="${esc(link)}">${esc(link)}</a></p>` : ""
+    }`,
+  };
+}
+
 /** "We have received your answers": to the student and linked parents when a home submission is received. */
 export function scriptReceiptEmail(data: Record<string, string>): Mail {
   const row = (label: string, v: string | undefined) => (plain(v) ? `<li>${label}: ${esc(plain(v))}</li>` : "");
@@ -247,6 +262,8 @@ function render(template: EmailTemplate, data: Record<string, string>): { subjec
       return markingAlertEmail(data);
     case "script_marker_paused":
       return markerPausedEmail(data);
+    case "results_published":
+      return resultsPublishedEmail(data);
   }
   const exam = plain(data.exam);
   let subject = SUBJECTS[template];

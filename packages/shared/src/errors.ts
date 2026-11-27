@@ -683,25 +683,33 @@ export function alertMessageFor(code: string | null | undefined, reason?: string
   return code && Object.hasOwn(alertMessages, code) ? alertMessages[code] : messages.internal;
 }
 
-/** 4A Task 3: failure codes of an exam's results, for admins (results_prepare, results_get, result_status_set,
- * grade_boundaries_preview, grade_boundaries_set, results_export). missing_scripts comes with how many candidates were
- * marked present on the register but have no script. */
+/** 4A Tasks 3 and 4: failure codes of an exam's results, for admins (results_prepare, results_get, result_status_set,
+ * grade_boundaries_preview, grade_boundaries_set, results_export, results_publish, results_publish_cancel,
+ * results_withdraw), and the reasons a scheduled publication failed (exam_results.publish_failed_reason:
+ * marking_not_approved, approval_stale, results_changed). missing_scripts comes with how many candidates were marked
+ * present on the register but have no script. invalid_input is short and names no field (Ruling R8): the pages check
+ * the boundaries and the publication time before they ask. */
 const resultsMessages: Record<string, string> = {
   forbidden: FORBIDDEN,
-  invalid_input:
-    "Check the details. List 1 to 15 grades, top first, each with a label of 1 to 10 characters and a lowest mark below the one above and not above the paper's total. A reason can be 3 to 300 characters.",
+  invalid_input: "Check the details and try again.",
   not_found: "Not found. Refresh the page.",
   reason_required: "Give a reason of 3 to 300 characters.",
   marking_not_approved: "Approve this exam's marking first.",
   approval_stale:
     "A script arrived or changed after the marking was approved. Withdraw the approval and approve it again first.",
   results_published: RESULTS_PUBLISHED,
+  results_changed: "The results changed since you checked them. Check them again.",
+  not_prepared: "Prepare the results first.",
+  already_scheduled: "A publication is already scheduled. Cancel it first.",
+  not_published: "These results are not published.",
 };
 
 /** Message for a results RPC failure code; unknown codes get the generic message. For missing_scripts, pass the
- * refusal's count: "3 candidates were marked present but have no script. Set their status first." */
+ * refusal's count: "3 candidates were marked present but have no script. Set their status first." (one in the
+ * singular). */
 export function resultsMessageFor(code: string | null | undefined, count?: number | null): string {
   if (code === "missing_scripts") {
+    if (count === 1) return "1 candidate was marked present but has no script. Set their status first.";
     const who = typeof count === "number" && Number.isInteger(count) && count >= 0 ? String(count) : "Some";
     return `${who} candidates were marked present but have no script. Set their status first.`;
   }
